@@ -1,0 +1,5 @@
+export { isBufferBindingResource, isSamplerBindingResource, isTextureBindingResource, resolveBindingLayoutEntry, type BindGroupEntry, type BindingDisposable, type BindingResource, type BufferBinding, type BufferBindingLayout, type ExternalTextureBinding, type SamplerBinding, type SamplerBindingLayout, type SamplerBindingType, type StorageTextureAccess, type StorageTextureBinding, type StorageTextureBindingLayout, type TextureBinding, type TextureBindingLayout, type TextureSampleType, type BindGroupLayoutEntry, } from './BindingTypes.js';
+export { normalizeBindGroupLayoutEntries, type BindGroupLayout, type BindGroupLayoutDescriptor, } from './BindGroupLayout.js';
+export { type BindGroup, type BindGroupDescriptor } from './BindGroup.js';
+export { type PipelineLayout, type PipelineLayoutDescriptor } from './PipelineLayout.js';
+//# sourceMappingURL=index.d.ts.map

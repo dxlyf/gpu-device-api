@@ -1,0 +1,1 @@
+{"version":3,"file":"QueryResult.d.ts","sourceRoot":"","sources":["../../../../src/core/sync/QueryResult.ts"],"names":[],"mappings":"AAAA,wDAAwD;AAExD,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,0BAA0B,CAAC;AAE1D,MAAM,WAAW,WAAW;IAC1B,QAAQ,CAAC,IAAI,EAAE,SAAS,CAAC;IACzB,QAAQ,CAAC,KAAK,EAAE,MAAM,CAAC;IACvB,+BAA+B;IAC/B,IAAI,IAAI,OAAO,CAAC,cAAc,CAAC,CAAC;CACjC"}

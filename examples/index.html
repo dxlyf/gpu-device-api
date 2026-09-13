@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — WebGL2 / WebGPU 统一抽象示例</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: #0b0e13;
+        color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #view { flex: 1; width: 100%; display: block; min-height: 0; }
+      footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 8px 12px;
+        border-top: 1px solid #1d2530;
+        background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      #stats { color: #7f8fa4; }
+      .error { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span id="stats"></span>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
