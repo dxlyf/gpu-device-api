@@ -18,10 +18,20 @@ export interface Queue {
   /**
    * 将主机端数据写入 buffer。
    *
-   * **时序契约：** 本次写入对本次调用之后提交的**所有**命令可见，包括已经录制进当前
-   * 打开的 encoder 的命令。WebGPU 原生具备该行为；WebGL2 后端用延迟写入列表来模拟，
-   * 在 `submit()` 时统一落地。因此上层可以任意交错调用 `writeBuffer` 与 `draw`，
-   * 两个后端的结果完全一致。
+   * **时序契约（两个后端存在一处已知差异，务必读完）：**
+   *
+   * - WebGPU：写入在本次调用**之后提交**的所有命令执行前统一生效。也就是说，即使某条 draw 已经
+   *   录制进了当前打开的 encoder，只要它在这次 `writeBuffer` 之后才 `submit()`，它看到的就是
+   *   新数据。
+   * - WebGL2：立即模式，draw 在录制时就已发给 GL，因此写入只对**之后录制**的命令可见。
+   *   要让 WebGL2 与 WebGPU 完全一致，需要把整条命令流缓存到 `submit()` 再回放（一整套软件
+   *   command buffer），代价远大于收益，所以这里选择如实暴露差异。
+   *
+   * **实践结论：不要在同一帧内对同一个 buffer 的同一区间写两次再分别 draw。**
+   * 需要「改 uniform → draw → 再改 → 再 draw」时，用 **uniform arena + 动态偏移**
+   * （每次 draw 分配独立的 256 字节对齐区间，配合 `bindBufferRange` /
+   * `setBindGroup(..., [dynamicOffset])`），两个后端的结果就完全一致 —— 这也是
+   * `gfx` 便捷层的做法。
    */
   writeBuffer(
     buffer: Buffer,
