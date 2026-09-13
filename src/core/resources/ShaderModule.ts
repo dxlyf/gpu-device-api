@@ -1,23 +1,22 @@
 /**
- * 一个编译单元。
+ * 编译单元。
  *
- * WebGPU 只消费单个包含所有 entry point 的 WGSL 字符串，而 WebGL2 需要为每个 program 编译
- * 并链接一个 vertex shader 加一个 fragment shader。因此 `ShaderModule` 会保存两种语言各自的
- * 原始源码；声明注入（binding、attribute、uniform block）则推迟到创建 pipeline、
- * 布局已知时进行。
+ * WebGPU 只接受**一个**包含所有 entry point 的 WGSL 字符串，而 WebGL2 需要为每个 program
+ * 分别编译 vertex 与 fragment 着色器再链接。因此 `ShaderModule` 保存的是**原始源码**，
+ * 真正的编译推迟到创建管线时（`src/shaders` 负责选语言与补样板，各后端负责编译缓存）。
+ *
+ * 关于声明：core 采用 WebGPU 形状的模型，源码是自包含的 —— `@group/@binding`、
+ * `layout(std140)`、`layout(location = N)` 都由使用者自己写（详见 `src/shaders`）。
  */
 
 import type { Disposable } from '../../utils/Disposable.js';
-import type { ShaderStage } from '../enums/ShaderStage.js';
-
-export type ShaderLanguage = 'glsl' | 'wgsl';
 
 export interface ShaderSource {
-  /** GLSL ES 3.00 vertex shader。 */
+  /** GLSL ES 3.00 顶点着色器。 */
   vs?: string;
-  /** GLSL ES 3.00 fragment shader。 */
+  /** GLSL ES 3.00 片元着色器。 */
   fs?: string;
-  /** GLSL ES 3.10+ compute shader（WebGL2 不支持 compute）。 */
+  /** GLSL ES 3.10+ 计算着色器（WebGL2 不支持 compute）。 */
   cs?: string;
   /** 包含所有 entry point 的 WGSL 源码。 */
   wgsl?: string;
@@ -25,9 +24,9 @@ export interface ShaderSource {
 
 export interface ShaderModuleDescriptor {
   label?: string;
-  /** 单个 WGSL 字符串，或按语言组织的一组源码。 */
+  /** 一个 WGSL 字符串，或一份按语言/阶段给出的源码包。 */
   code: string | ShaderSource;
-  /** 类似预处理器的 define（GLSL 用 `#define`，WGSL 用 `const`）。 */
+  /** 编译期常量（GLSL 生成 `#define`，WGSL 生成顶层 `const`）。 */
   defines?: Record<string, string | number | boolean>;
 }
 
@@ -38,34 +37,8 @@ export interface ShaderModule extends Disposable {
   dispose(): void;
 }
 
-/** 归一化可接受的 `code` 写法。 */
+/** 归一化 `code` 的两种写法：字符串按 WGSL 处理。 */
 export function resolveShaderSource(code: string | ShaderSource): ShaderSource {
   if (typeof code === 'string') return { wgsl: code };
   return { ...code };
-}
-
-/** 指定语言下某个 stage 的源码；不存在时返回 `undefined`。 */
-export function shaderSourceFor(
-  source: ShaderSource,
-  language: ShaderLanguage,
-  stage: ShaderStage,
-): string | undefined {
-  if (language === 'wgsl') return source.wgsl;
-  const vertex = 0x0001;
-  const fragment = 0x0002;
-  const compute = 0x0004;
-  if (stage === vertex) return source.vs;
-  if (stage === fragment) return source.fs;
-  if (stage === compute) return source.cs;
-  return undefined;
-}
-
-/** 便于阅读地列出该组源码提供了哪些内容，用于错误消息。 */
-export function describeShaderSource(source: ShaderSource): string {
-  const parts: string[] = [];
-  if (source.vs) parts.push('glsl.vs');
-  if (source.fs) parts.push('glsl.fs');
-  if (source.cs) parts.push('glsl.cs');
-  if (source.wgsl) parts.push('wgsl');
-  return parts.length ? parts.join(', ') : 'empty';
 }

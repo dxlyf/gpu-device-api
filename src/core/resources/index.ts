@@ -26,10 +26,7 @@ export {
   type SamplerDescriptor,
 } from './Sampler.js';
 export {
-  describeShaderSource,
   resolveShaderSource,
-  shaderSourceFor,
-  type ShaderLanguage,
   type ShaderModule,
   type ShaderModuleDescriptor,
   type ShaderSource,
