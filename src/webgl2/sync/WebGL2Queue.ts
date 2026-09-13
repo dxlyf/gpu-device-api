@@ -174,20 +174,30 @@ export class WebGL2Queue implements Queue {
     size: number,
   ): void {
     const gl = this.gl;
+    const sourceBuffer = source as WebGL2Buffer;
+    const destinationBuffer = destination as WebGL2Buffer;
     const bytes = new Uint8Array(size);
-    this.state.bindCopyReadBuffer((source as WebGL2Buffer).native);
+
+    if (sourceBuffer.isIndexBuffer || destinationBuffer.isIndexBuffer) {
+      // 索引缓冲被永久固定在 ELEMENT_ARRAY_BUFFER 上（见 WebGL2Buffer），而两个 buffer
+      // 不能同时绑在同一个目标上，所以这里各自走自己的目标、用 CPU 中转一次。
+      sourceBuffer.download(sourceOffset, bytes);
+      destinationBuffer.upload(destinationOffset, bytes);
+      return;
+    }
+
+    this.state.bindCopyReadBuffer(sourceBuffer.native);
     gl.getBufferSubData(gl.COPY_READ_BUFFER, sourceOffset, bytes);
-    this.state.bindCopyWriteBuffer((destination as WebGL2Buffer).native);
+    this.state.bindCopyWriteBuffer(destinationBuffer.native);
     gl.bufferSubData(gl.COPY_WRITE_BUFFER, destinationOffset, bytes);
   }
 
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void {
-    const gl = this.gl;
     const info = glFormat((destination.texture as WebGL2Texture).format);
     const bytesPerRow = source.bytesPerRow ?? copySize.width * info.bytesPerPixel;
     const bytes = new Uint8Array(bytesPerRow * copySize.height);
-    this.state.bindCopyReadBuffer((source.buffer as WebGL2Buffer).native);
-    gl.getBufferSubData(gl.COPY_READ_BUFFER, source.offset ?? 0, bytes);
+    // 走 buffer 自己的目标读回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
+    (source.buffer as WebGL2Buffer).download(source.offset ?? 0, bytes);
     this.writeTexture(destination, bytes, { offset: 0, bytesPerRow }, copySize);
   }
 

@@ -367,20 +367,39 @@ export class Material {
 
   /** 按需创建 bind group layout（group 0 的 uniform 部分）；没有 uniform 块时返回 `null`。 */
   createUniformBindGroupLayout(device: Device): BindGroupLayout | null {
-    return this.uniforms ? this.createGroupLayout(device, 0) : null;
+    return this.cachedGroupLayout(device, 0);
   }
 
   /** 按需创建纹理所在的 bind group layout；材质没有纹理时返回 `null`。 */
   createTextureGroupLayout(device: Device): BindGroupLayout | null {
     if (this.textures.length === 0) return null;
-    return this.createGroupLayout(device, this.textureGroup);
+    return this.cachedGroupLayout(device, this.textureGroup);
   }
+
+  /**
+   * 按 (device, group) 记忆化 bind group layout。
+   *
+   * 为什么必须缓存：`UniformArena.bindGroup(layout)` 是按 layout **对象身份**判断要不要重建
+   * bind group 的 —— 如果每次 draw 都新建一个 layout 对象，缓存永不命中，
+   * 于是每帧每个物体都会新建一个 bind group，白白产生大量对象。
+   */
+  private cachedGroupLayout(device: Device, group: number): BindGroupLayout | null {
+    let perDevice = this.groupLayoutCache.get(device);
+    if (!perDevice) {
+      perDevice = new Map();
+      this.groupLayoutCache.set(device, perDevice);
+    }
+    if (!perDevice.has(group)) perDevice.set(group, this.createGroupLayout(device, group));
+    return perDevice.get(group) ?? null;
+  }
+
+  private readonly groupLayoutCache = new WeakMap<Device, Map<number, BindGroupLayout | null>>();
 
   /** 创建 pipeline layout（必要时带上纹理 group）。 */
   createPipelineLayout(device: Device): PipelineLayout | 'auto' {
-    const uniformLayout = this.uniforms ? this.createGroupLayout(device, 0) : null;
+    const uniformLayout = this.uniforms ? this.cachedGroupLayout(device, 0) : null;
     const textureLayout =
-      this.textures.length > 0 ? this.createGroupLayout(device, this.uniforms ? 1 : 0) : null;
+      this.textures.length > 0 ? this.cachedGroupLayout(device, this.textureGroup) : null;
     if (!uniformLayout && !textureLayout) return 'auto';
     const layouts: BindGroupLayout[] = [];
     if (uniformLayout) layouts.push(uniformLayout);

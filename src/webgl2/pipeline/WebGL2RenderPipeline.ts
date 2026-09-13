@@ -205,7 +205,9 @@ export class WebGL2RenderPipeline implements RenderPipeline {
       throw new ValidationError('[gpu-device-api] gl.createVertexArray() 返回 null，无法创建 VAO。');
     }
 
-    gl.bindVertexArray(vertexArray);
+    // 通过状态缓存绑定，而不是直接调 GL：VAO 记录着「当前索引缓冲是谁」，
+    // 而 `GlStateCache.withDefaultVertexArray()` 依赖缓存里的这个值来判断该恢复哪个 VAO。
+    this.state.bindVertexArray(vertexArray);
     for (let slot = 0; slot < layouts.length; slot++) {
       const layout = layouts[slot];
       const binding = bindings[slot];

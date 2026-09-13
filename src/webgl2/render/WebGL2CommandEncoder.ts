@@ -88,22 +88,28 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     size: number,
   ): void {
     this.assertOpen('copyBufferToBuffer');
-    const gl = this.gl;
-    const sourceBuffer = (source as WebGL2Buffer).native;
-    const destinationBuffer = (destination as WebGL2Buffer).native;
+    const sourceBuffer = source as WebGL2Buffer;
+    const destinationBuffer = destination as WebGL2Buffer;
 
     // WebGL2 没有 copyBufferSubData，只能借一段 CPU 内存中转。
     const bytes = new Uint8Array(size);
-    this.state.bindCopyReadBuffer(sourceBuffer);
-    gl.getBufferSubData(gl.COPY_READ_BUFFER, sourceOffset, bytes);
-    this.state.bindCopyWriteBuffer(destinationBuffer);
-    gl.bufferSubData(gl.COPY_WRITE_BUFFER, destinationOffset, bytes);
+    if (sourceBuffer.isIndexBuffer || destinationBuffer.isIndexBuffer) {
+      // 索引缓冲固定在 ELEMENT_ARRAY_BUFFER 上、且两个 buffer 不能同时占同一个目标
+      // （见 WebGL2Buffer），所以各自走自己的目标。
+      sourceBuffer.download(sourceOffset, bytes);
+      destinationBuffer.upload(destinationOffset, bytes);
+      return;
+    }
+    this.state.bindCopyReadBuffer(sourceBuffer.native);
+    this.gl.getBufferSubData(this.gl.COPY_READ_BUFFER, sourceOffset, bytes);
+    this.state.bindCopyWriteBuffer(destinationBuffer.native);
+    this.gl.bufferSubData(this.gl.COPY_WRITE_BUFFER, destinationOffset, bytes);
   }
 
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void {
     this.assertOpen('copyBufferToTexture');
     const gl = this.gl;
-    const buffer = (source.buffer as WebGL2Buffer).native;
+    const sourceBuffer = source.buffer as WebGL2Buffer;
     const texture = (destination.texture as WebGL2Texture).native;
     const format = (destination.texture as WebGL2Texture).format;
     const info = glFormat(format);
@@ -114,8 +120,8 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     // 必须把数据放到 CPU 内存里。像素解包参数用来处理行距与对齐。
     const rows = copySize.height;
     const data = new Uint8Array(bytesPerRow * rows);
-    this.state.bindCopyReadBuffer(buffer);
-    gl.getBufferSubData(gl.COPY_READ_BUFFER, source.offset ?? 0, data);
+    // 走 buffer 自己的目标读回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
+    sourceBuffer.download(source.offset ?? 0, data);
 
     gl.bindTexture((destination.texture as WebGL2Texture).target, texture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -194,9 +200,9 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     gl.deleteFramebuffer(framebuffer);
     this.state.invalidate();
 
-    const buffer = (destination.buffer as WebGL2Buffer).native;
-    this.state.bindCopyWriteBuffer(buffer);
-    gl.bufferSubData(gl.COPY_WRITE_BUFFER, destination.offset ?? 0, data);
+    const buffer = destination.buffer as WebGL2Buffer;
+    // 走 buffer 自己的目标写回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
+    buffer.upload(destination.offset ?? 0, data);
   }
 
   copyTextureToTexture(source: TextureCopyView, destination: TextureCopyView, copySize: Extent3D): void {
@@ -259,12 +265,11 @@ export class WebGL2CommandEncoder implements CommandEncoder {
 
   clearBuffer(buffer: { readonly size: number }, offset = 0, size?: number): void {
     this.assertOpen('clearBuffer');
-    const gl = this.gl;
-    const target = (buffer as WebGL2Buffer).native;
+    const target = buffer as WebGL2Buffer;
     const length = size ?? (buffer.size - offset);
     const zeros = new Uint8Array(length);
-    this.state.bindCopyWriteBuffer(target);
-    gl.bufferSubData(gl.COPY_WRITE_BUFFER, offset, zeros);
+    // 走 buffer 自己的目标：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
+    target.upload(offset, zeros);
   }
 
   finish(): WebGL2CommandBuffer {

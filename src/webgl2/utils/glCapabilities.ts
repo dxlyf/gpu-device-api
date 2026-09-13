@@ -57,6 +57,16 @@ function param(gl: WebGL2RenderingContext, name: number, fallback: number): numb
   return typeof value === 'number' && value > 0 ? value : fallback;
 }
 
+/**
+ * `MAX_ELEMENT_INDEX` 的保守下限。
+ *
+ * GLES 3.0 要求它至少是 2^24 - 1，但 WebGL2 没有把它放进 `getParameter` 的可查询表里：
+ * Chrome / ANGLE 上查它只会得到一个 INVALID_ENUM（`invalid parameter name`）。
+ * 这个错误标志会一直留在上下文里，把**后面真正的绘制错误**（例如本可以立刻发现的
+ * INVALID_OPERATION）顶掉，让调试变成猜谜 —— 所以这里干脆不查，直接用规范下限。
+ */
+const MAX_ELEMENT_INDEX_FLOOR = 0xffffff;
+
 /** 查询 WebGL2 上限。fallback 用的是 GLES 3.0 规范下限，保证不会高估。 */
 export function queryGlLimits(gl: WebGL2RenderingContext): GlLimits {
   return {
@@ -75,7 +85,7 @@ export function queryGlLimits(gl: WebGL2RenderingContext): GlLimits {
     maxCombinedTextureImageUnits: param(gl, 0x8b4d /* MAX_COMBINED_TEXTURE_IMAGE_UNITS */, 32),
     maxCubeMapTextureSize: param(gl, 0x851c /* MAX_CUBE_MAP_TEXTURE_SIZE */, 2048),
     maxRenderbufferSize: param(gl, 0x84e8 /* MAX_RENDERBUFFER_SIZE */, 2048),
-    maxElementIndex: param(gl, 0x8dff /* MAX_ELEMENT_INDEX */, 0xffffffff),
+    maxElementIndex: MAX_ELEMENT_INDEX_FLOOR,
     maxElementsVertices: param(gl, 0x80e9 /* MAX_ELEMENTS_VERTICES */, 0x7fffffff),
     maxElementsIndices: param(gl, 0x80e8 /* MAX_ELEMENTS_INDICES */, 0x7fffffff),
   };
@@ -83,11 +93,13 @@ export function queryGlLimits(gl: WebGL2RenderingContext): GlLimits {
 
 /**
  * 把 GL 上限与保守默认值合成一份完整的 {@link DeviceLimits}。
- * `MAX_ELEMENT_INDEX` 会限制 32 位索引实际能寻址的顶点数，所以 `maxBufferSize` 也据此收敛。
+ *
+ * `maxBufferSize` 没有跟着 `MAX_ELEMENT_INDEX` 收敛：后者限制的是**索引值**能寻址的顶点序号，
+ * 不是 buffer 的字节数，混用会让上限凭空变小（而且 WebGL2 反正也查不到它）。
  */
 export function buildDeviceLimits(gl: WebGL2RenderingContext): DeviceLimits {
   const gl2 = queryGlLimits(gl);
-  const maxBufferSize = Math.min(gl2.maxElementIndex, 0x7fffffff);
+  const maxBufferSize = 0x7fffffff;
 
   return {
     // WebGL2 没有 1D 纹理，用 2D 上限代替，上层代码读到的是一个安全的正数。

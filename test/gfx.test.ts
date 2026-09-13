@@ -181,6 +181,34 @@ describe('UniformLayout 代码生成', () => {
     expect(wgsl).toContain('@group(0) @binding(0) var<uniform> u: Uniforms;');
   });
 
+  it('数组字段的方括号跟在名字后面（GLSL 与 WGSL 的写法不能串）', () => {
+    // 曾经这里生成过 `mat4[64] bones;` —— 那是把 WGSL 的 `array<T, N>` 顺序套进了 GLSL，
+    // 编译会直接报语法错。这条用例把两种语言各自的正确写法都锁住。
+    const arrays = defineUniforms({
+      bones: 'mat4x4f[64]',
+      colors: 'vec4f[8]',
+      offsets: 'vec3f[4]',
+      flags: 'f32[4]',
+    });
+
+    const glsl = arrays.glslDeclaration();
+    expect(glsl).toContain('  mat4 bones[64];');
+    expect(glsl).toContain('  vec4 colors[8];');
+    expect(glsl).toContain('  vec3 offsets[4];');
+    expect(glsl).toContain('  float flags[4];');
+    // 逐条排除错误写法：类型名后面绝不能跟 `[N]`。
+    expect(glsl).not.toMatch(/mat4\s*\[\s*64\s*\]\s*bones/);
+    expect(glsl).not.toMatch(/vec4\s*\[\s*8\s*\]\s*colors/);
+    expect(glsl).not.toMatch(/vec3\s*\[\s*4\s*\]\s*offsets/);
+    expect(glsl).not.toMatch(/float\s*\[\s*4\s*\]\s*flags/);
+
+    const wgsl = arrays.wgslDeclaration();
+    expect(wgsl).toContain('  bones: array<mat4x4f, 64>,');
+    expect(wgsl).toContain('  colors: array<vec4f, 8>,');
+    expect(wgsl).toContain('  offsets: array<vec3f, 4>,');
+    expect(wgsl).toContain('  flags: array<f32, 4>,');
+  });
+
   it('可以通过 options 指定结构体名、group 与 binding', () => {
     const custom = defineUniforms({ value: 'f32' }, { structName: 'MyBlock', group: 2, binding: 3 });
     expect(custom.glslDeclaration()).toContain('uniform MyBlock {');

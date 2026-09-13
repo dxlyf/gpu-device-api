@@ -177,11 +177,25 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
     if (slot < 0 || slot >= 16) {
       throw new ValidationError(`[gpu-device-api] setVertexBuffer 的 slot 必须在 0..15 之间，实际是 ${slot}。`);
     }
+    if (buffer && buffer.isIndexBuffer) {
+      throw new ValidationError(
+        `[gpu-device-api] buffer「${buffer.label}」是以 \`BufferUsage.Index\` 创建的索引缓冲，` +
+          'WebGL2 里一个 buffer 的绑定目标在创建时就永久固定（索引缓冲只能用 ELEMENT_ARRAY_BUFFER），' +
+          '所以它不能再当顶点缓冲使用。请为顶点数据单独创建一个 buffer。',
+      );
+    }
     this.vertexBuffers[slot] = buffer ? { buffer, offset, size } : null;
   }
 
   setIndexBuffer(buffer: WebGL2Buffer, format: IndexFormat, offset = 0, size = -1): void {
     this.assertOpen('setIndexBuffer');
+    if (!buffer.isIndexBuffer) {
+      throw new ValidationError(
+        `[gpu-device-api] buffer「${buffer.label}」的 usage 里没有 \`BufferUsage.Index\`，` +
+          '而 WebGL2 的绑定目标在创建时就永久固定（索引缓冲必须一开始就按 Index 用途创建），' +
+          '它无法再绑到 ELEMENT_ARRAY_BUFFER。请在 createBuffer() 时加上 `BufferUsage.Index`。',
+      );
+    }
     this.indexBuffer = { buffer, format, offset, size };
   }
 
