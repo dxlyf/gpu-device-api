@@ -18,8 +18,13 @@ export interface VertexState {
   /** WGSL 入口点名；默认为 `'vsMain'`。 */
   entryPoint?: string;
   /**
-   * 可选的显式 vertex layout。省略时，后端在第一次 draw 时从 geometry 推导，
-   * 这样一个 pipeline 就能服务 interleaving 不同的 geometry。
+   * 顶点缓冲布局。**必须提供**：两个后端都要靠它建立属性指针
+   * （WebGL2 用它建 VAO，WebGPU 用它建 `GPUVertexBufferLayout`），
+   * 而 `setVertexBuffer(slot, buffer, offset, size)` 本身不携带属性布局，无从推导。
+   *
+   * 便捷层（`src/gfx`）会从几何体的属性描述自动生成这份布局；直接用 core 时请自己写。
+   * 这与 WebGPU 的 `GPUVertexState.buffers` 是可选字段不同 —— 那是原生 API 才能在 draw 时
+   * 靠 `GPURenderPipeline` 内部状态补齐，我们的抽象层没有这份信息。
    */
   buffers?: readonly VertexBufferLayout[];
 }

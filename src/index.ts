@@ -16,3 +16,4 @@
 export * from './core/index.js';
 export * from './utils/index.js';
 export * from './shaders/index.js';
+export * from './factories/index.js';

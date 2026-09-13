@@ -43,8 +43,10 @@ export interface RenderTargetDescriptor {
   height?: number;
   /** 可以是一个格式，也可以为每个 color attachment 各指定一个。默认为 `'rgba8unorm'`。 */
   color?: TextureFormat | readonly TextureFormat[];
-  /** depth/stencil 格式；传 `false`/`null` 表示只要颜色的 target。 */
-  depth?: TextureFormat | false | null;
+  /**
+   * 深度/模板格式。`true` 等价于 `'depth24plus'`；`false`/`null` 表示不要深度附件。
+   */
+  depth?: TextureFormat | boolean | null;
   /** MSAA 采样数；默认为 1。 */
   sampleCount?: number;
   mipLevelCount?: number;

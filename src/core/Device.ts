@@ -7,6 +7,7 @@
  */
 
 import type { BackendKind } from './Adapter.js';
+import type { CanvasConfig, CanvasContext } from './CanvasContext.js';
 import type { BindGroup, BindGroupDescriptor } from './binding/BindGroup.js';
 import type { BindGroupLayout, BindGroupLayoutDescriptor } from './binding/BindGroupLayout.js';
 import type { PipelineLayout, PipelineLayoutDescriptor } from './binding/PipelineLayout.js';
@@ -129,6 +130,19 @@ export interface Device {
   /* ---------------------------------------------------------------- 渲染 */
   createRenderTarget(descriptor: RenderTargetDescriptor): RenderTarget;
   createCommandEncoder(descriptor?: CommandEncoderDescriptor): CommandEncoder;
+
+  /**
+   * 为一个 canvas 建立（或取回）本设备的 swap chain 表面。
+   *
+   * WebGPU：在 canvas 上取 `webgpu` context 并用本设备 `configure` 它，
+   * 因此同一个 canvas 只会有一个 context，重复调用返回同一个对象。
+   * WebGL2：GL context 本身就来自某个 canvas，一个 device 只能服务它自己的那个 canvas，
+   * 传入其它 canvas 会抛 `ValidationError`。
+   */
+  createCanvasContext(
+    canvas: HTMLCanvasElement | OffscreenCanvas,
+    config?: Omit<CanvasConfig, 'device'>,
+  ): CanvasContext;
 
   /**
    * 注册错误回调。WebGPU 把 `onuncapturederror` 路由到这里，WebGL2 把它轮询到的
