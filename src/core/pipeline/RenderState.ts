@@ -50,8 +50,9 @@ export interface DepthStencilState {
   /**
    * 可选：省略时，后端采用该 pipeline 首次使用时所用 render target 的 depth 格式，
    * 因此一个 pipeline 可以服务多个 target。
+   * 传 `null` 表示这条管线**明确不要深度测试**（例如纯 2D 叠加）。
    */
-  format?: TextureFormat;
+  format?: TextureFormat | null;
   depthWriteEnabled?: boolean;
   depthCompare?: CompareFunction;
   depthBias?: number;

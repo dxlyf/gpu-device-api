@@ -258,18 +258,29 @@ export class WebGL2Device implements Device {
     const compiled = this.programs.acquire(label, vertexCode, fragmentCode);
 
     // 解析布局：显式布局直接用；'auto' 需要先链接出 program 才能反射接口。
-    let layout: PipelineLayout;
+    let layout: PipelineLayout | 'auto';
     if (descriptor.layout === undefined || descriptor.layout === 'auto') {
       const entries = inferBindGroupLayoutEntries(compiled.reflection, ShaderStage.Vertex | ShaderStage.Fragment);
-      const inferredLayout = new WebGL2BindGroupLayout({
-        label: `${label}:autoLayout`,
-        entries,
-      });
-      this.track(inferredLayout);
-      layout = this.track(
-        new WebGL2PipelineLayout({ label: `${label}:autoPipelineLayout`, bindGroupLayouts: [inferredLayout] }, true, this),
-      );
-      this.programs.bindPlan(compiled, (layout as WebGL2PipelineLayout).bindingPlan);
+      if (entries.length === 0) {
+        // 着色器没有用到任何 binding（例如画一个纯色三角形）：此时没有布局可推断，
+        // 保留 'auto' 即可 —— 绑定计划为 null，渲染通道也不会尝试绑定任何 bind group。
+        layout = 'auto';
+        this.programs.bindPlan(compiled, null);
+      } else {
+        const inferredLayout = new WebGL2BindGroupLayout({
+          label: `${label}:autoLayout`,
+          entries,
+        });
+        this.track(inferredLayout);
+        layout = this.track(
+          new WebGL2PipelineLayout(
+            { label: `${label}:autoPipelineLayout`, bindGroupLayouts: [inferredLayout] },
+            true,
+            this,
+          ),
+        );
+        this.programs.bindPlan(compiled, (layout as WebGL2PipelineLayout).bindingPlan);
+      }
     } else {
       layout = descriptor.layout;
       this.programs.bindPlan(compiled, (layout as WebGL2PipelineLayout).bindingPlan);
