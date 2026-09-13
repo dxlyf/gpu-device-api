@@ -91,7 +91,7 @@ function normalize(source) {
 }
 
 const CODE_EXTENSIONS = new Set(['.ts', '.mjs', '.js', '.json']);
-const changed = execFileSync('git', ['diff', '--name-only', 'HEAD'], { cwd: root, encoding: 'utf8' })
+const changed = execFileSync('git', ['diff', '--name-only', base], { cwd: root, encoding: 'utf8' })
   .split('\n')
   .map((line) => line.trim())
   .filter(Boolean);
@@ -106,7 +106,12 @@ for (const file of changed) {
   }
   let head;
   try {
-    head = execFileSync('git', ['show', `HEAD:${file}`], { cwd: root, encoding: 'utf8' });
+    // 新增文件在基线里不存在，git 会写 stderr，这里把它静默掉。
+    head = execFileSync('git', ['show', `${base}:${file}`], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
   } catch {
     console.log(`新增文件（无 HEAD 版本）: ${file}`);
     continue;
