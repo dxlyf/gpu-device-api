@@ -1,9 +1,9 @@
 /**
- * The logical device: the entry point for every resource and pipeline.
+ * 逻辑设备：访问所有资源与管线的入口。
  *
- * The interface is deliberately shaped like WebGPU's `GPUDevice`, because that is the model both
- * backends can honour. The WebGL2 backend emulates the parts GL has no concept of (bind groups,
- * pipeline layouts, immutable pipelines) instead of leaking those differences upward.
+ * 这个接口刻意设计成 WebGPU `GPUDevice` 的形状，因为那是两个后端都能遵循的模型。
+ * WebGL2 后端会模拟 GL 中不存在的部分（bind group、pipeline layout、不可变管线），
+ * 而不是把这些差异泄漏到上层。
  */
 
 import type { BackendKind } from './Adapter.js';
@@ -25,9 +25,9 @@ import type { Texture, TextureDescriptor } from './resources/Texture.js';
 import type { Queue } from './sync/Queue.js';
 
 /**
- * Device limits, named exactly like WebGPU's `GPUSupportedLimits`. The WebGL2 backend fills in the
- * values it can query and uses conservative defaults for the rest, so shared code can always read
- * a limit without checking the backend first.
+ * 设备 limits，命名与 WebGPU 的 `GPUSupportedLimits` 完全一致。WebGL2 后端会填入
+ * 它能查询到的值，其余使用保守的默认值，因此共享代码总能在不先判断后端的情况下
+ * 读取某个 limit。
  */
 export interface DeviceLimits {
   maxTextureDimension1D: number;
@@ -63,7 +63,7 @@ export interface DeviceLimits {
   maxComputeWorkgroupsPerDimension: number;
 }
 
-/** Queryable capability set of a {@link Device}. */
+/** {@link Device} 可查询的能力集合。 */
 export interface DeviceFeatures {
   has(feature: string): boolean;
   readonly names: readonly string[];
@@ -76,16 +76,16 @@ export interface DeviceLostInfo {
 
 export interface DeviceDescriptor {
   label?: string;
-  /** Feature names that must be available, e.g. `'texture-compression-bc'`. */
+  /** 必须可用的特性名称，例如 `'texture-compression-bc'`。 */
   requiredFeatures?: readonly string[];
-  /** Limits the device must support; values above the adapter's are rejected. */
+  /** 设备必须支持的 limits；高于 adapter 的取值会被拒绝。 */
   requiredLimits?: Partial<DeviceLimits>;
   /**
-   * Enables expensive validation such as polling `gl.getError()` after every command and checking
-   * every descriptor twice. Off by default because it forces GPU/CPU synchronisation.
+   * 开启开销较大的校验，例如在每条命令后轮询 `gl.getError()`、对每个 descriptor 检查两次。
+   * 默认关闭，因为它会强制 GPU/CPU 同步。
    */
   debug?: boolean;
-  /** Default MSAA sample count used by `CanvasContext` and render targets. */
+  /** `CanvasContext` 与 render target 使用的默认 MSAA 采样数。 */
   defaultSampleCount?: number;
 }
 
@@ -95,58 +95,58 @@ export interface Device {
   readonly features: DeviceFeatures;
   readonly limits: DeviceLimits;
   readonly queue: Queue;
-  /** True when `debug` was requested; backends add extra checks while it holds. */
+  /** 请求了 `debug` 时为 true；在此期间后端会加入额外检查。 */
   readonly debug: boolean;
 
   /**
-   * Escape hatch to the native object: `GPUDevice` on WebGPU, `WebGL2RenderingContext` on WebGL2.
-   * Anything done through it is outside the abstraction's guarantees.
+   * 通往原生对象的 escape hatch：WebGPU 上是 `GPUDevice`，WebGL2 上是
+   * `WebGL2RenderingContext`。通过它做的一切都不在本抽象层的保证范围内。
    */
   readonly native: GPUDevice | WebGL2RenderingContext;
 
-  /** Resolves once the device is lost (or disposed). Never rejects. */
+  /** 设备丢失（或被销毁）后 resolve。永远不会 reject。 */
   readonly lost: Promise<DeviceLostInfo>;
 
-  /** True after {@link Device.dispose}. */
+  /** 调用 {@link Device.dispose} 之后为 true。 */
   readonly disposed: boolean;
 
-  /* ---------------------------------------------------------------- resources */
+  /* ---------------------------------------------------------------- 资源 */
   createBuffer(descriptor: BufferDescriptor): Buffer;
   createTexture(descriptor: TextureDescriptor): Texture;
   createSampler(descriptor?: SamplerDescriptor): Sampler;
   createShaderModule(descriptor: ShaderModuleDescriptor): ShaderModule;
   createQuerySet(descriptor: QuerySetDescriptor): QuerySet;
 
-  /* ---------------------------------------------------------------- bindings */
+  /* ---------------------------------------------------------------- 绑定 */
   createBindGroupLayout(descriptor: BindGroupLayoutDescriptor): BindGroupLayout;
   createBindGroup(descriptor: BindGroupDescriptor): BindGroup;
   createPipelineLayout(descriptor: PipelineLayoutDescriptor): PipelineLayout;
 
-  /* ---------------------------------------------------------------- pipelines */
+  /* ---------------------------------------------------------------- 管线 */
   createRenderPipeline(descriptor: RenderPipelineDescriptor): RenderPipeline;
   createComputePipeline(descriptor: ComputePipelineDescriptor): ComputePipeline;
 
-  /* ---------------------------------------------------------------- rendering */
+  /* ---------------------------------------------------------------- 渲染 */
   createRenderTarget(descriptor: RenderTargetDescriptor): RenderTarget;
   createCommandEncoder(descriptor?: CommandEncoderDescriptor): CommandEncoder;
 
   /**
-   * Registers an error callback. WebGPU routes `onuncapturederror` here, WebGL2 routes its
-   * polled `getError()` results (debug mode) and both route internal validation failures.
-   * Returns an unsubscribe function.
+   * 注册错误回调。WebGPU 把 `onuncapturederror` 路由到这里，WebGL2 把它轮询到的
+   * `getError()` 结果（debug 模式）路由到这里，两者的内部校验失败也都走这里。
+   * 返回一个取消订阅的函数。
    */
   onError(callback: (error: GpuError) => void): () => void;
 
-  /** Reports an error through the registered callbacks without throwing. */
+  /** 通过已注册的回调上报错误，不抛异常。 */
   reportError(error: GpuError): void;
 
-  /** Releases every resource owned by the device. Idempotent. */
+  /** 释放设备拥有的全部资源。幂等。 */
   dispose(): void;
 }
 
 /**
- * Applies `requiredLimits` on top of an adapter's limits. Every limit is an upper bound except the
- * `min*` alignment limits, so only requests above the adapter's value are rejected.
+ * 在 adapter 的 limits 之上应用 `requiredLimits`。除 `min*` 对齐类 limits 之外，
+ * 每个 limit 都是上界，因此只有高于 adapter 取值的请求才会被拒绝。
  */
 export function resolveLimits(
   adapterLimits: DeviceLimits,

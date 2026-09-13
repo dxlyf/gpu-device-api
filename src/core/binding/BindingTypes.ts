@@ -1,10 +1,10 @@
 /**
- * Binding resources.
+ * 绑定资源（Binding resources）。
  *
- * WebGL2 has no bind groups: uniforms are set per program and textures occupy global texture units.
- * {@link BindGroupLayout} + {@link PipelineLayout} give the WebGL2 backend the static information it
- * needs to assign uniform block indices and texture units up front, so both backends expose the
- * same binding model to upper layers.
+ * WebGL2 没有 bind group：uniform 逐个 program 设置，texture 占用全局 texture unit。
+ * {@link BindGroupLayout} + {@link PipelineLayout} 为 WebGL2 后端提供所需的静态信息，
+ * 让它能够预先分配 uniform block 索引和 texture unit，因此两个后端向上层暴露相同的
+ * 绑定模型。
  */
 
 import type { Disposable } from '../../utils/Disposable.js';
@@ -15,7 +15,7 @@ import type { Buffer } from '../resources/Buffer.js';
 import type { Sampler } from '../resources/Sampler.js';
 import type { TextureView, TextureViewDimension } from '../resources/TextureView.js';
 
-/** Combined sampler/texture data type a shader sees. */
+/** shader 看到的 sampler/texture 组合数据类型。 */
 export type TextureSampleType = 'float' | 'unfilterable-float' | 'depth' | 'sint' | 'uint';
 
 export type SamplerBindingType = 'filtering' | 'comparison' | 'non-filtering';
@@ -24,9 +24,9 @@ export type StorageTextureAccess = 'write-only' | 'read-only' | 'read-write';
 
 export interface BufferBindingLayout {
   type?: 'uniform' | 'storage' | 'read-only-storage';
-  /** Layout requires a dynamic offset (uniform buffers bound from a ring allocation). */
+  /** 该 layout 需要 dynamic offset（uniform buffer 从 ring 分配中绑定）。 */
   hasDynamicOffset?: boolean;
-  /** Minimum size the bound range must cover. */
+  /** 绑定范围必须覆盖的最小尺寸。 */
   minBindingSize?: number;
 }
 
@@ -48,7 +48,7 @@ export interface SamplerBindingLayout {
 
 export interface BindGroupLayoutEntry {
   binding: number;
-  /** Which shader stages may use this binding. */
+  /** 哪些 shader stage 可以使用该 binding。 */
   visibility: ShaderStage;
   type: BindingType;
   buffer?: BufferBindingLayout;
@@ -56,18 +56,18 @@ export interface BindGroupLayoutEntry {
   storageTexture?: StorageTextureBindingLayout;
   sampler?: SamplerBindingLayout;
   /**
-   * Name used by shader code generation. Required for textures/samplers so the compiler can emit
-   * `uniform sampler2D name;` / `@group(g) @binding(b) var name: texture_2d<f32>;`.
+   * 供 shader 代码生成使用的名称。texture/sampler 必须提供，以便编译器生成
+   * `uniform sampler2D name;` / `@group(g) @binding(b) var name: texture_2d<f32>;`。
    */
   name?: string;
 }
 
-/* ------------------------------------------------------------------ bound resources -------------- */
+/* ------------------------------------------------------------------ 已绑定的资源 -------------- */
 
 export interface BufferBinding {
   buffer: Buffer;
   offset?: number;
-  /** Size of the bound range; defaults to `buffer.size - offset`. */
+  /** 绑定范围的尺寸；默认为 `buffer.size - offset`。 */
   size?: number;
 }
 
@@ -113,7 +113,7 @@ export function isTextureBindingResource(
   return (resource as TextureBinding).view !== undefined;
 }
 
-/** Defaults for a bind group layout entry, matching WebGPU. */
+/** bind group layout entry 的默认值，与 WebGPU 一致。 */
 export function resolveBindingLayoutEntry(entry: BindGroupLayoutEntry): Required<Pick<BindGroupLayoutEntry, 'binding' | 'visibility' | 'type'>> & BindGroupLayoutEntry {
   return {
     ...entry,
@@ -123,5 +123,5 @@ export function resolveBindingLayoutEntry(entry: BindGroupLayoutEntry): Required
   };
 }
 
-/** Marks the disposal contract for layout objects. */
+/** 标记 layout 对象的释放契约。 */
 export type BindingDisposable = Disposable;

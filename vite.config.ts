@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite';
 
 /**
- * Library build: emits `dist/gpu-device-api.js` (ESM) + type declarations
- * (declarations are produced by `tsc -p tsconfig.build.json`).
+ * 库构建：产出 `dist/gpu-device-api.js`（ESM）以及类型声明
+ * （声明由 `tsc -p tsconfig.build.json` 生成）。
  */
 export default defineConfig({
   build: {

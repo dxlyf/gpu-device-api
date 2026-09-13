@@ -1,4 +1,4 @@
-/** Source/destination factor of a blend equation. */
+/** 混合方程中的源/目标因子。 */
 export const BlendFactor = {
   Zero: 'zero',
   One: 'one',

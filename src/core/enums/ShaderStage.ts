@@ -1,4 +1,4 @@
-/** Shader stages a {@link ShaderModule} can be compiled for. Bit flags mirroring WebGPU. */
+/** {@link ShaderModule} 可编译到的 shader 阶段。位标志与 WebGPU 保持一致。 */
 export const ShaderStage = {
   None: 0x0000,
   Vertex: 0x0001,
@@ -6,7 +6,7 @@ export const ShaderStage = {
   Compute: 0x0004,
 } as const;
 
-/** Bitwise OR of {@link ShaderStage} values. */
+/** {@link ShaderStage} 取值的按位或。 */
 export type ShaderStage = number;
 
 export const SHADER_STAGE_NAMES: Readonly<Record<number, string>> = {

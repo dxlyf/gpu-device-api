@@ -39,3 +39,4 @@ export {
   type Logger,
 } from './logger.js';
 export { DisposalScope, disposeAll, isDisposable, type Disposable } from './Disposable.js';
+export * from './math/index.js';

@@ -1,9 +1,9 @@
-/** Uniform release protocol for anything that owns GPU memory. */
+/** 面向一切持有 GPU 内存的对象的统一释放协议。 */
 
 export interface Disposable {
-  /** Releases the underlying GPU resources. Safe to call more than once. */
+  /** 释放底层 GPU 资源。可重复调用。 */
   dispose(): void;
-  /** True once {@link Disposable.dispose} has run. */
+  /** 一旦执行过 {@link Disposable.dispose} 便为 true。 */
   readonly disposed: boolean;
 }
 
@@ -15,7 +15,7 @@ export function isDisposable(value: unknown): value is Disposable {
   );
 }
 
-/** Disposes every resource, collecting (and re-throwing) the first failure afterwards. */
+/** 释放全部资源，并在最后收集（重新抛出）第一个失败。 */
 export function disposeAll(resources: Iterable<unknown>): void {
   let firstError: unknown;
   for (const resource of resources) {
@@ -30,8 +30,8 @@ export function disposeAll(resources: Iterable<unknown>): void {
 }
 
 /**
- * Tracks disposable helpers for a class: `this.track(resource)` in the constructor and
- * `this.disposeTracked()` from `dispose()`.
+ * 为类跟踪可释放的辅助对象：在构造函数中调用 `this.track(resource)`，
+ * 在 `dispose()` 中调用 `this.disposeTracked()`。
  */
 export class DisposalScope implements Disposable {
   private readonly resources = new Set<Disposable>();

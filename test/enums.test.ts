@@ -136,7 +136,7 @@ describe('vertex formats', () => {
     expect(vertexFormatGlslType('float32x3')).toBe('vec3');
     expect(vertexFormatGlslType('uint32x2')).toBe('uvec2');
     expect(vertexFormatGlslType('sint32')).toBe('int');
-    // Normalized integer formats are read as floats in both languages.
+    // 归一化整数格式在两种语言中都按浮点数读取。
     expect(vertexFormatGlslType('unorm8x4')).toBe('vec4');
     expect(vertexFormatWgslType('float32x3')).toBe('vec3f');
     expect(vertexFormatWgslType('uint32x2')).toBe('vec2u');
@@ -149,7 +149,7 @@ describe('vertex formats', () => {
     expect(entries.length).toBeGreaterThanOrEqual(30);
     for (const [format, info] of entries) {
       expect(info.byteSize, format).toBeGreaterThan(0);
-      // Every component is 1, 2 or 4 bytes wide (float16 components are 2 bytes).
+      // 每个分量宽 1、2 或 4 字节（float16 分量为 2 字节）。
       expect(info.byteSize % info.components, format).toBe(0);
       expect([1, 2, 4], format).toContain(info.byteSize / info.components);
       expect(() => vertexFormatGlslType(format as never)).not.toThrow();

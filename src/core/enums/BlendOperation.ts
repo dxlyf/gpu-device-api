@@ -1,4 +1,4 @@
-/** Blend equation. */
+/** 混合方程。 */
 export const BlendOperation = {
   Add: 'add',
   Subtract: 'subtract',

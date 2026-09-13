@@ -1,4 +1,4 @@
-/** Minimal leveled logger so the library never writes to the console unconditionally. */
+/** 极简的分级 logger，确保库不会无条件地向 console 输出。 */
 
 export const LogLevel = {
   Silent: 0,
@@ -68,7 +68,7 @@ export function createLogger(prefix = 'gpu-device-api', level?: LogLevel): Logge
   };
 }
 
-/** Logger that discards everything; handy in tests and headless runs. */
+/** 丢弃一切输出的 logger；便于测试和无头运行场景使用。 */
 export const nullLogger: Logger = {
   level: LogLevel.Silent,
   error: () => {},

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 
-/** Demo/example build. `pnpm dev` serves the same entry point. */
+/** Demo/示例构建。`pnpm dev` 启动的也是同一个入口。 */
 export default defineConfig({
   build: {
     target: 'es2022',

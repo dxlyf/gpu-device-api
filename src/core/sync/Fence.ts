@@ -1,14 +1,14 @@
 /**
- * A CPU/GPU synchronisation point.
+ * CPU/GPU 同步点。
  *
- * WebGPU uses `onSubmittedWorkDone`; WebGL2 has no fence object, so the backend uses the
- * `WebGL2RenderingContext.fenceSync` path when available and falls back to a resolved promise.
+ * WebGPU 使用 `onSubmittedWorkDone`；WebGL2 没有 fence 对象，因此后端在可用时走
+ * `WebGL2RenderingContext.fenceSync` 路径，否则回退为已 resolve 的 promise。
  */
 
 export interface Fence {
   readonly signaled: boolean;
-  /** Resolves once the associated work has completed. */
+  /** 关联的工作完成后 resolve。 */
   wait(): Promise<void>;
-  /** Non-blocking check; flips {@link Fence.signaled} when the work is done. */
+  /** 非阻塞检查；工作完成时翻转 {@link Fence.signaled}。 */
   poll(): boolean;
 }

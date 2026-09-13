@@ -1,10 +1,10 @@
-/** Results of a {@link QuerySet} readback (occlusion / timestamp queries). */
+/** {@link QuerySet} 回读的结果（occlusion / timestamp 查询）。 */
 
 import type { QueryType } from '../resources/QuerySet.js';
 
 export interface QueryResult {
   readonly type: QueryType;
   readonly count: number;
-  /** Resolves with the raw query values: sample counts or nanoseconds. */
+  /** resolve 为原始查询值：采样计数或纳秒数。 */
   read(): Promise<BigUint64Array>;
 }

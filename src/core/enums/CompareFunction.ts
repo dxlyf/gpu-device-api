@@ -1,6 +1,6 @@
 /**
- * Depth/stencil comparison function.
- * `less` is the usual depth test; `less-equal` is common for shadow maps.
+ * depth/stencil 比较函数。
+ * `less` 是常用的 depth 测试；`less-equal` 常用于 shadow map。
  */
 export const CompareFunction = {
   Never: 'never',

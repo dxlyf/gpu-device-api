@@ -1,10 +1,10 @@
-/** Draw and dispatch command descriptors. */
+/** draw 与 dispatch 命令的 descriptor。 */
 
 import type { BufferLike } from './CommandEncoder.js';
 
 export interface DrawDescriptor {
   vertexCount: number;
-  /** Defaults to 1. */
+  /** 默认为 1。 */
   instanceCount?: number;
   firstVertex?: number;
   firstInstance?: number;
@@ -14,7 +14,7 @@ export interface DrawIndexedDescriptor {
   indexCount: number;
   instanceCount?: number;
   firstIndex?: number;
-  /** Offset added to every index before fetching vertex data. */
+  /** 在获取 vertex 数据之前，加到每个索引上的偏移。 */
   baseVertex?: number;
   firstInstance?: number;
 }

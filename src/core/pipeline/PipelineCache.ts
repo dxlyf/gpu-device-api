@@ -1,4 +1,4 @@
-/** A generic least-recently-used cache used by both backends for pipeline/program objects. */
+/** 两个后端共用的通用 LRU（least-recently-used）cache，用于缓存 pipeline/program 对象。 */
 
 export interface PipelineCache<T> {
   get(key: string): T | undefined;
@@ -7,13 +7,13 @@ export interface PipelineCache<T> {
   delete(key: string): boolean;
   clear(): void;
   readonly size: number;
-  /** Values currently cached, oldest first. */
+  /** 当前已缓存的值，最旧的在前。 */
   values(): T[];
 }
 
 /**
- * Creates an LRU cache. `onEvict` receives values displaced by the size limit so backends can
- * release the corresponding GPU objects.
+ * 创建 LRU cache。`onEvict` 会收到因容量上限而被淘汰的值，
+ * 以便后端释放对应的 GPU 对象。
  */
 export function createPipelineCache<T>(limit = 128, onEvict?: (value: T, key: string) => void): PipelineCache<T> {
   const map = new Map<string, T>();
@@ -33,7 +33,7 @@ export function createPipelineCache<T>(limit = 128, onEvict?: (value: T, key: st
     get(key) {
       const value = map.get(key);
       if (value === undefined) return undefined;
-      // Refresh recency.
+      // 刷新最近使用顺序。
       map.delete(key);
       map.set(key, value);
       return value;
@@ -63,7 +63,7 @@ export function createPipelineCache<T>(limit = 128, onEvict?: (value: T, key: st
   };
 }
 
-/** Builds a stable cache key from strings and numbers, skipping empty parts. */
+/** 由字符串和数字拼出稳定的 cache key，跳过空片段。 */
 export function cacheKey(...parts: (string | number | boolean | undefined | null)[]): string {
   return parts.filter((part) => part !== undefined && part !== null && part !== '').join('|');
 }

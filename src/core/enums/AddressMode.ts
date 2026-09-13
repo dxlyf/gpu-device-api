@@ -1,4 +1,4 @@
-/** Texture coordinate wrapping mode. */
+/** texture 坐标的环绕模式。 */
 export const AddressMode = {
   ClampToEdge: 'clamp-to-edge',
   Repeat: 'repeat',

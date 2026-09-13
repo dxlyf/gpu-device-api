@@ -1,14 +1,14 @@
 /**
- * Base class for every error raised by the library. Backends translate their native failures
- * (GL error codes, WebGPU validation/out-of-memory/device-lost) into this hierarchy so that user
- * code never has to branch on the backend.
+ * 库中所有错误的基类。后端会把各自的原生失败
+ * （GL 错误码、WebGPU validation/out-of-memory/device-lost）转换到这套层级中，
+ * 这样用户代码无需按后端分支处理。
  */
 export interface GpuErrorOptions {
-  /** Stable machine readable identifier, e.g. `VALIDATION_ERROR`. */
+  /** 稳定的机器可读标识符，例如 `VALIDATION_ERROR`。 */
   code?: string;
-  /** Free-form details attached for debugging (never used for control flow). */
+  /** 为调试附加的自由格式详细信息（绝不用于控制流）。 */
   details?: Record<string, unknown>;
-  /** The underlying error, if any. */
+  /** 底层错误（如果有）。 */
   cause?: unknown;
 }
 
@@ -23,7 +23,7 @@ export class GpuError extends Error {
     if (options.details) this.details = options.details;
   }
 
-  /** Single-line description including the error code, useful for logs. */
+  /** 包含错误码的单行描述，便于日志输出。 */
   override toString(): string {
     return `${this.name} [${this.code}]: ${this.message}`;
   }

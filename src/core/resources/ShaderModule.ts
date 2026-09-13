@@ -1,10 +1,10 @@
 /**
- * A compilation unit.
+ * 一个编译单元。
  *
- * WebGPU consumes a single WGSL string containing every entry point, while WebGL2 compiles and
- * links one vertex + one fragment shader per program. A `ShaderModule` therefore stores the *raw*
- * source for both languages; declaration injection (bindings, attributes, uniform blocks) happens
- * later, when the pipeline is created and its layout is known.
+ * WebGPU 只消费单个包含所有 entry point 的 WGSL 字符串，而 WebGL2 需要为每个 program 编译
+ * 并链接一个 vertex shader 加一个 fragment shader。因此 `ShaderModule` 会保存两种语言各自的
+ * 原始源码；声明注入（binding、attribute、uniform block）则推迟到创建 pipeline、
+ * 布局已知时进行。
  */
 
 import type { Disposable } from '../../utils/Disposable.js';
@@ -13,21 +13,21 @@ import type { ShaderStage } from '../enums/ShaderStage.js';
 export type ShaderLanguage = 'glsl' | 'wgsl';
 
 export interface ShaderSource {
-  /** GLSL ES 3.00 vertex shader. */
+  /** GLSL ES 3.00 vertex shader。 */
   vs?: string;
-  /** GLSL ES 3.00 fragment shader. */
+  /** GLSL ES 3.00 fragment shader。 */
   fs?: string;
-  /** GLSL ES 3.10+ compute shader (WebGL2 does not support compute). */
+  /** GLSL ES 3.10+ compute shader（WebGL2 不支持 compute）。 */
   cs?: string;
-  /** WGSL source containing every entry point. */
+  /** 包含所有 entry point 的 WGSL 源码。 */
   wgsl?: string;
 }
 
 export interface ShaderModuleDescriptor {
   label?: string;
-  /** A plain WGSL string, or a per-language source bag. */
+  /** 单个 WGSL 字符串，或按语言组织的一组源码。 */
   code: string | ShaderSource;
-  /** Preprocessor-style defines (`#define` for GLSL, `const` for WGSL). */
+  /** 类似预处理器的 define（GLSL 用 `#define`，WGSL 用 `const`）。 */
   defines?: Record<string, string | number | boolean>;
 }
 
@@ -38,13 +38,13 @@ export interface ShaderModule extends Disposable {
   dispose(): void;
 }
 
-/** Normalizes the accepted `code` forms. */
+/** 归一化可接受的 `code` 写法。 */
 export function resolveShaderSource(code: string | ShaderSource): ShaderSource {
   if (typeof code === 'string') return { wgsl: code };
   return { ...code };
 }
 
-/** Source for one stage in the requested language, or `undefined` when absent. */
+/** 指定语言下某个 stage 的源码；不存在时返回 `undefined`。 */
 export function shaderSourceFor(
   source: ShaderSource,
   language: ShaderLanguage,
@@ -60,7 +60,7 @@ export function shaderSourceFor(
   return undefined;
 }
 
-/** Human readable list of what a source bag provides, used in error messages. */
+/** 便于阅读地列出该组源码提供了哪些内容，用于错误消息。 */
 export function describeShaderSource(source: ShaderSource): string {
   const parts: string[] = [];
   if (source.vs) parts.push('glsl.vs');

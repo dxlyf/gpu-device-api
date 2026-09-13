@@ -1,15 +1,15 @@
 /// <reference types="@webgpu/types" />
 
 /**
- * gpu-device-api — a unified WebGL2 / WebGPU abstraction.
+ * gpu-device-api —— 统一的 WebGL2 / WebGPU 抽象。
  *
- * The public surface has two layers:
+ * 公开接口分为两层：
  *
- * - **core** — a WebGPU shaped interface (`Adapter`, `Device`, `Queue`, `BindGroup`, pipelines,
- *   command encoders) implemented by both backends, for people who want direct control.
- * - **factories** — backend detection and selection (`createDevice`, `detectBackend`).
+ * - **core** —— 一个 WebGPU 风格的接口（`Adapter`、`Device`、`Queue`、`BindGroup`、pipelines、
+ *   command encoder），由两个后端共同实现，面向希望直接控制的用户。
+ * - **factories** —— 后端探测与选择（`createDevice`、`detectBackend`）。
  *
- * A convenience layer for every-day drawing ships on top of both; see `src/gfx`.
+ * 日常绘图的便捷层构建在两者之上；参见 `src/gfx`。
  */
 
 export * from './core/index.js';

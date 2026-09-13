@@ -1,4 +1,4 @@
-/** Fixed-function render state: blend, depth/stencil, primitive assembly, multisampling. */
+/** 固定功能渲染状态：blend、depth/stencil、图元装配、多重采样。 */
 
 import type { BlendFactor } from '../enums/BlendFactor.js';
 import type { BlendOperation } from '../enums/BlendOperation.js';
@@ -10,7 +10,7 @@ import type { PrimitiveTopology } from '../enums/PrimitiveTopology.js';
 import type { StencilOperation } from '../enums/StencilOperation.js';
 import type { TextureFormat } from '../enums/TextureFormat.js';
 
-/** Per-channel write mask of a color attachment. Bit flags mirroring WebGPU's `GPUColorWrite`. */
+/** color attachment 的逐通道写掩码。位标志与 WebGPU 的 `GPUColorWrite` 一致。 */
 export const ColorWriteMask = {
   None: 0x0,
   Red: 0x1,
@@ -48,8 +48,8 @@ export interface StencilFaceState {
 
 export interface DepthStencilState {
   /**
-   * Optional: when omitted the backend uses the depth format of the render target the pipeline is
-   * first used with, so a single pipeline can serve several targets.
+   * 可选：省略时，后端采用该 pipeline 首次使用时所用 render target 的 depth 格式，
+   * 因此一个 pipeline 可以服务多个 target。
    */
   format?: TextureFormat;
   depthWriteEnabled?: boolean;
@@ -65,11 +65,11 @@ export interface DepthStencilState {
 
 export interface PrimitiveState {
   topology?: PrimitiveTopology;
-  /** Required by WebGPU for indexed strip topologies. */
+  /** WebGPU 对索引化的 strip 拓扑要求必须提供。 */
   stripIndexFormat?: IndexFormat;
   frontFace?: FrontFace;
   cullMode?: CullMode;
-  /** Disables near-plane clipping when the `depth-clip-control` feature is available. */
+  /** 在 `depth-clip-control` feature 可用时关闭近平面裁剪。 */
   unclippedDepth?: boolean;
 }
 
@@ -79,7 +79,7 @@ export interface MultisampleState {
   alphaToCoverageEnabled?: boolean;
 }
 
-/** Bundle of the states above, useful for sharing state between pipelines. */
+/** 上述各状态的组合，便于在多个 pipeline 之间共享状态。 */
 export interface RenderState {
   primitive?: PrimitiveState;
   depthStencil?: DepthStencilState;
@@ -89,7 +89,7 @@ export interface RenderState {
   colorFormats?: readonly TextureFormat[];
 }
 
-/* ------------------------------------------------------------------ defaults & presets --------- */
+/* ------------------------------------------------------------------ 默认值与预设 --------- */
 
 export const DEFAULT_PRIMITIVE_STATE: Required<Pick<PrimitiveState, 'topology' | 'frontFace' | 'cullMode'>> = {
   topology: 'triangle-list',
@@ -115,14 +115,14 @@ export const STENCIL_FACE_DEFAULT: Required<StencilFaceState> = {
   passOp: 'keep',
 };
 
-/** Ready-made blend states keyed by preset name. */
+/** 按预设名索引的现成 blend 状态。 */
 export const BLEND_PRESETS: Readonly<Record<string, BlendState>> = Object.freeze({
-  /** Straight alpha: `rgb * a + dst * (1 - a)`. */
+  /** 直通 alpha：`rgb * a + dst * (1 - a)`。 */
   alpha: {
     color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
   },
-  /** Premultiplied alpha: `src + dst * (1 - a)`. */
+  /** 预乘 alpha：`src + dst * (1 - a)`。 */
   premultiplied: {
     color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
     alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -141,7 +141,7 @@ export const BLEND_PRESETS: Readonly<Record<string, BlendState>> = Object.freeze
   },
 });
 
-/** Resolves a preset name or a full state into a {@link BlendState}. */
+/** 将预设名或完整状态解析为 {@link BlendState}。 */
 export function resolveBlendState(blend: BlendState | keyof typeof BLEND_PRESETS | false | undefined): BlendState | null {
   if (blend === false || blend === undefined) return null;
   if (typeof blend === 'string') {

@@ -1,4 +1,4 @@
-/** Helpers for the numeric bit-flag enums (`BufferUsage`, `TextureUsage`, `ShaderStage`, ...). */
+/** 用于数值型 bit flag 枚举（`BufferUsage`、`TextureUsage`、`ShaderStage` 等）的辅助函数。 */
 
 export type Flags = number;
 
@@ -21,8 +21,8 @@ export function combineFlags(...flags: Flags[]): number {
 }
 
 /**
- * Renders a bit mask using the named entries of `table` (`{ 0x0020: 'Vertex' }`).
- * Unknown bits are emitted as hex so values are never silently lost.
+ * 使用 `table` 中已命名的条目渲染位掩码（如 `{ 0x0020: 'Vertex' }`）。
+ * 未知位以十六进制输出，确保数值不会被静默丢弃。
  */
 export function formatFlags(value: Flags, table: Readonly<Record<number, string>>): string {
   if (value === 0) return 'None';

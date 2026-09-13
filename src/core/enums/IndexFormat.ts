@@ -1,4 +1,4 @@
-/** Index buffer element type. */
+/** index buffer 的元素类型。 */
 export const IndexFormat = {
   Uint16: 'uint16',
   Uint32: 'uint32',
@@ -10,7 +10,7 @@ export function indexFormatByteSize(format: IndexFormat): number {
   return format === 'uint16' ? 2 : 4;
 }
 
-/** Picks the smallest index format that can address `vertexCount` vertices. */
+/** 选择能够寻址 `vertexCount` 个 vertex 的最小 index 格式。 */
 export function smallestIndexFormat(vertexCount: number): IndexFormat {
   return vertexCount > 65535 ? 'uint32' : 'uint16';
 }

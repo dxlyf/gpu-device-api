@@ -1,34 +1,34 @@
-/** What kind of resource a bind group layout entry describes. */
+/** bind group layout 条目描述的资源类型。 */
 export const BindingType = {
-  /** Uniform buffer (read-only, 16-byte aligned layout). */
+  /** uniform buffer（只读，16 字节对齐布局）。 */
   Uniform: 'uniform',
-  /** Read-write storage buffer (WebGPU only). */
+  /** 读写 storage buffer（仅 WebGPU）。 */
   Storage: 'storage',
-  /** Read-only storage buffer. */
+  /** 只读 storage buffer。 */
   ReadOnlyStorage: 'read-only-storage',
-  /** Filtering sampler. */
+  /** 过滤 sampler。 */
   Sampler: 'sampler',
-  /** Comparison sampler used by `textureSampleCompare` / shadow lookups. */
+  /** 用于 `textureSampleCompare` / 阴影查找的比较 sampler。 */
   ComparisonSampler: 'comparison-sampler',
-  /** Sampled texture. */
+  /** 采样的 texture。 */
   Texture: 'texture',
-  /** Write-only storage texture (WebGPU only). */
+  /** 只写 storage texture（仅 WebGPU）。 */
   StorageTexture: 'storage-texture',
 } as const;
 
 export type BindingType = (typeof BindingType)[keyof typeof BindingType];
 
-/** True when the binding describes a buffer resource. */
+/** 当绑定描述 buffer 资源时返回 true。 */
 export function isBufferBinding(type: BindingType): boolean {
   return type === 'uniform' || type === 'storage' || type === 'read-only-storage';
 }
 
-/** True when the binding describes a texture resource. */
+/** 当绑定描述 texture 资源时返回 true。 */
 export function isTextureBinding(type: BindingType): boolean {
   return type === 'texture' || type === 'storage-texture';
 }
 
-/** True when the binding describes a sampler resource. */
+/** 当绑定描述 sampler 资源时返回 true。 */
 export function isSamplerBinding(type: BindingType): boolean {
   return type === 'sampler' || type === 'comparison-sampler';
 }

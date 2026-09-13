@@ -96,7 +96,7 @@ describe('typed array helpers', () => {
     expect(copy[0]).toBe(1);
     expect(copy[1]).toBe(0);
     expect(copy[4]).toBe(3);
-    // Already aligned payloads reuse the same memory (no copy).
+    // 已经对齐的数据会复用同一块内存（不做拷贝）。
     const aligned = new Float32Array([1, 2]);
     expect(paddedCopy(aligned).buffer).toBe(aligned.buffer);
   });

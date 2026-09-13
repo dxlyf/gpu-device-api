@@ -1,4 +1,4 @@
-/** GPU query set (occlusion / timestamp queries). Phase 2; typed now so pipelines can reference it. */
+/** GPU query set（occlusion / timestamp 查询）。属于第二阶段；现在先给出类型，便于 pipeline 引用。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
 

@@ -1,19 +1,19 @@
-/** Monotonic identifiers used to label resources and build cache keys. */
+/** 单调递增的标识符，用于标记资源和构建缓存键。 */
 
 let counter = 0;
 
-/** Returns the next unique id, e.g. `buffer#12`. */
+/** 返回下一个唯一 id，例如 `buffer#12`。 */
 export function nextId(prefix: string): string {
   counter += 1;
   return `${prefix}#${counter}`;
 }
 
-/** Current counter value (mainly for tests and diagnostics). */
+/** 当前计数器值（主要用于测试和诊断）。 */
 export function currentId(): number {
   return counter;
 }
 
-/** Resets the counter. Only intended for deterministic tests. */
+/** 重置计数器。仅用于需要确定性结果的测试。 */
 export function resetIdCounter(): void {
   counter = 0;
 }

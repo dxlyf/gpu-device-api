@@ -1,6 +1,6 @@
 /**
- * Vertex attribute formats. Names match WebGPU exactly; the WebGL2 backend translates each one
- * into a `vertexAttribPointer`/`vertexAttribIPointer` call.
+ * vertex attribute 格式。名称与 WebGPU 完全一致；WebGL2 后端会将每一种
+ * 转换为 `vertexAttribPointer`/`vertexAttribIPointer` 调用。
  */
 export type VertexFormat =
   | 'uint8x2'
@@ -35,13 +35,13 @@ export type VertexFormat =
   | 'sint32x4';
 
 export interface VertexFormatInfo {
-  /** Number of components read per vertex. */
+  /** 每个 vertex 读取的分量数量。 */
   readonly components: 1 | 2 | 3 | 4;
-  /** Bytes occupied by one element. */
+  /** 单个元素占用的字节数。 */
   readonly byteSize: number;
-  /** Component domain. */
+  /** 分量类型。 */
   readonly kind: 'float' | 'uint' | 'sint';
-  /** Fractional formats are normalized into [0,1] / [-1,1] when read. */
+  /** 小数格式在读取时会被归一化到 [0,1] / [-1,1]。 */
   readonly normalized: boolean;
 }
 
@@ -49,7 +49,7 @@ function info(components: 1 | 2 | 3 | 4, byteSize: number, kind: VertexFormatInf
   return { components, byteSize, kind, normalized };
 }
 
-/** Shared, backend-independent description of every {@link VertexFormat}. */
+/** 所有 {@link VertexFormat} 的共享描述，与后端无关。 */
 export const VERTEX_FORMAT_INFO: Readonly<Record<VertexFormat, VertexFormatInfo>> = Object.freeze({
   uint8x2: info(2, 2, 'uint'),
   uint8x4: info(4, 4, 'uint'),
@@ -89,7 +89,7 @@ export function vertexFormatInfo(format: VertexFormat): VertexFormatInfo {
   return value;
 }
 
-/** GLSL ES 3.00 type used to declare an attribute of this format. */
+/** 用于声明该格式 attribute 的 GLSL ES 3.00 类型。 */
 export function vertexFormatGlslType(format: VertexFormat): string {
   const value = vertexFormatInfo(format);
   const table =
@@ -101,7 +101,7 @@ export function vertexFormatGlslType(format: VertexFormat): string {
   return table[value.components - 1]!;
 }
 
-/** WGSL type used to declare an attribute of this format. */
+/** 用于声明该格式 attribute 的 WGSL 类型。 */
 export function vertexFormatWgslType(format: VertexFormat): string {
   const value = vertexFormatInfo(format);
   const table =

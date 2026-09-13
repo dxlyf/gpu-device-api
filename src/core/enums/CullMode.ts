@@ -1,4 +1,4 @@
-/** Which face(s) are discarded by the rasterizer. */
+/** 光栅化阶段剔除哪些面。 */
 export const CullMode = {
   None: 'none',
   Front: 'front',

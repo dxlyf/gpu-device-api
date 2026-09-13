@@ -1,12 +1,12 @@
-/** Command recording. Mirrors WebGPU's `GPUCommandEncoder` / `GPUCommandBuffer`. */
+/** 命令录制。对应 WebGPU 的 `GPUCommandEncoder` / `GPUCommandBuffer`。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
 import type { TextureAspect } from '../resources/TextureView.js';
 import type { Extent3D, Origin3D, TexelCopyBufferLayout } from '../../types/internal.js';
 
 /**
- * Structural subset of {@link Buffer} used by the command layer. Kept minimal so the command
- * interfaces stay free of the resource class hierarchy.
+ * 命令层用到的 {@link Buffer} 结构子集。刻意保持最小，
+ * 使命令接口不依赖资源类的继承体系。
  */
 export interface BufferLike {
   readonly size: number;
@@ -45,9 +45,9 @@ export interface BufferCopyView {
 
 export interface CommandEncoder {
   readonly label: string;
-  /** Begins a render pass. Only one pass may be open at a time. */
+  /** 开始一个 render pass。同一时间只能有一个 pass 处于打开状态。 */
   beginRenderPass(descriptor: import('./RenderPassEncoder.js').RenderPassDescriptor): import('./RenderPassEncoder.js').RenderPassEncoder;
-  /** Begins a compute pass (WebGPU only; the WebGL2 backend throws). */
+  /** 开始一个 compute pass（仅 WebGPU；WebGL2 后端会抛错）。 */
   beginComputePass(descriptor?: import('./ComputePassEncoder.js').ComputePassDescriptor): import('./ComputePassEncoder.js').ComputePassEncoder;
 
   copyBufferToBuffer(
@@ -60,7 +60,7 @@ export interface CommandEncoder {
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void;
   copyTextureToBuffer(source: TextureCopyView, destination: BufferCopyView, copySize: Extent3D): void;
   copyTextureToTexture(source: TextureCopyView, destination: TextureCopyView, copySize: Extent3D): void;
-  /** Zero-fills a buffer range. */
+  /** 将 buffer 的一段范围清零。 */
   clearBuffer(buffer: BufferLike, offset?: number, size?: number): void;
 
   finish(): CommandBuffer;

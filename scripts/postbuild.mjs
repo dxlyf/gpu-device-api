@@ -1,9 +1,9 @@
 /**
- * Post-build fixups for the emitted type declarations.
+ * 针对生成的类型声明的构建后修补。
  *
- * `tsc` drops `/// <reference types="@webgpu/types" />` from the generated `.d.ts` files, but the
- * public API mentions `GPUDevice` (the `Device.native` escape hatch). The directive is re-added to
- * the package entry so consumers get the WebGPU globals without configuring anything.
+ * `tsc` 会从生成的 `.d.ts` 文件中丢弃 `/// <reference types="@webgpu/types" />`，但公开 API
+ * 提及了 `GPUDevice`（即 `Device.native` 这个逃生口）。该指令会被重新添加到包入口，
+ * 使使用方无需任何配置即可获得 WebGPU 全局类型。
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

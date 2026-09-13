@@ -2,7 +2,7 @@ import { GpuError, type GpuErrorOptions } from './GpuError.js';
 
 export type DeviceLostReason = 'destroyed' | 'unknown';
 
-/** Raised (or emitted through `device.lost`) when the device can no longer be used. */
+/** 当 device 不再可用时抛出（或通过 `device.lost` 发出）。 */
 export class DeviceLostError extends GpuError {
   readonly reason: DeviceLostReason;
 
@@ -12,7 +12,7 @@ export class DeviceLostError extends GpuError {
     this.reason = options.reason ?? 'unknown';
   }
 
-  /** A destroyed device is expected; an `unknown` loss usually means a driver reset. */
+  /** device 被主动销毁属于预期情况；`unknown` 的丢失通常意味着驱动重置。 */
   get isExpected(): boolean {
     return this.reason === 'destroyed';
   }

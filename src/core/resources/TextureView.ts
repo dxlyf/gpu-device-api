@@ -1,4 +1,4 @@
-/** A view onto a sub-range of a texture. Mirrors WebGPU's `GPUTextureView`. */
+/** texture 某个子范围上的 view。对应 WebGPU 的 `GPUTextureView`。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
 import type { TextureFormat } from '../enums/TextureFormat.js';
@@ -16,9 +16,9 @@ export type TextureAspect = 'all' | 'depth-only' | 'stencil-only';
 
 export interface TextureViewDescriptor {
   label?: string;
-  /** Reinterpretation format; must be listed in the texture's `viewFormats`. */
+  /** 重解释格式；必须列在该 texture 的 `viewFormats` 中。 */
   format?: TextureFormat;
-  /** Defaults to the texture's dimension. */
+  /** 默认为该 texture 的 dimension。 */
   dimension?: TextureViewDimension;
   baseMipLevel?: number;
   mipLevelCount?: number;
@@ -31,11 +31,11 @@ export interface TextureView extends Disposable {
   readonly label: string;
   readonly texture: Texture;
   readonly descriptor: Required<Omit<TextureViewDescriptor, 'label' | 'format'>> & { format?: TextureFormat };
-  /** Native handle: `GPUTextureView` on WebGPU; on WebGL2 the texture itself. */
+  /** 原生句柄：WebGPU 上是 `GPUTextureView`；WebGL2 上就是 texture 本身。 */
   readonly native: unknown;
 }
 
-/** Fills in WebGPU's defaults for a view descriptor. */
+/** 为 view descriptor 填入 WebGPU 的默认值。 */
 export function resolveTextureViewDescriptor(
   texture: Texture,
   descriptor: TextureViewDescriptor = {},

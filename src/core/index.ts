@@ -1,8 +1,8 @@
 /**
- * Core layer: backend independent interfaces and vocabulary.
+ * 核心层：与后端无关的接口与词汇表。
  *
- * Upper layers depend on this module only. The concrete backends (`../webgl2`, `../webgpu`)
- * implement it, and `../factories` selects between them.
+ * 上层只依赖这个模块。具体后端（`../webgl2`、`../webgpu`）
+ * 实现它，并由 `../factories` 在两者之间选择。
  */
 
 export * from './enums/index.js';

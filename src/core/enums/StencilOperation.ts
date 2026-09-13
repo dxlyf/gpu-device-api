@@ -1,4 +1,4 @@
-/** Stencil operation applied when the stencil test passes/fails. */
+/** stencil 测试通过/失败时应用的 stencil 操作。 */
 export const StencilOperation = {
   Keep: 'keep',
   Zero: 'zero',

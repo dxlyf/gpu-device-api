@@ -1,4 +1,4 @@
-/** A set of resources bound together. Mirrors WebGPU's `GPUBindGroup`. */
+/** 一组共同绑定的资源。对应 WebGPU 的 `GPUBindGroup`。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
 import type { BindGroupLayout } from './BindGroupLayout.js';
@@ -14,7 +14,7 @@ export interface BindGroup extends Disposable {
   readonly label: string;
   readonly layout: BindGroupLayout;
   readonly entries: readonly BindGroupEntry[];
-  /** Native handle: `GPUBindGroup` on WebGPU; on WebGL2 the resolved binding plan. */
+  /** 原生句柄：WebGPU 上为 `GPUBindGroup`；WebGL2 上为解析后的绑定方案。 */
   readonly native: unknown;
   entry(binding: number): BindGroupEntry | undefined;
 }

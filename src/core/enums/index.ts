@@ -1,4 +1,4 @@
-/** Aggregated enum exports, so upper layers can import from a single place. */
+/** 汇总的 enum 导出，便于上层从单一位置导入。 */
 
 export { BufferUsage } from './BufferUsage.js';
 export { TextureUsage } from './TextureUsage.js';

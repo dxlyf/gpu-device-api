@@ -1,8 +1,8 @@
 import { ValidationError } from '../core/errors/index.js';
 
 /**
- * Throws a {@link ValidationError} when `condition` is falsy.
- * Use it for cheap contract checks on public API boundaries.
+ * 当 `condition` 为假值时抛出 {@link ValidationError}。
+ * 适合在公开 API 边界做低开销的契约检查。
  */
 export function assert(
   condition: unknown,
@@ -12,7 +12,7 @@ export function assert(
   if (!condition) throw new ValidationError(message, details ? { details } : {});
 }
 
-/** Narrows away `null`/`undefined`, throwing a {@link ValidationError} otherwise. */
+/** 排除 `null`/`undefined`，否则抛出 {@link ValidationError}。 */
 export function assertDefined<T>(
   value: T | null | undefined,
   message: string,
@@ -24,12 +24,12 @@ export function assertDefined<T>(
   return value;
 }
 
-/** Exhaustiveness helper for `switch` statements over union types. */
+/** 针对联合类型 `switch` 语句的穷尽性检查辅助函数。 */
 export function assertNever(value: never, message?: string): never {
   throw new ValidationError(message ?? `[gpu-device-api] Unexpected value: ${String(value)}`);
 }
 
-/** Validates that `value` is a positive safe integer (sizes, counts, strides...). */
+/** 校验 `value` 为正的安全整数（尺寸、数量、stride 等）。 */
 export function assertPositiveInteger(value: number, name: string): void {
   assert(
     Number.isSafeInteger(value) && value > 0,
@@ -37,7 +37,7 @@ export function assertPositiveInteger(value: number, name: string): void {
   );
 }
 
-/** Validates that `value` is a non-negative safe integer (offsets, indices...). */
+/** 校验 `value` 为非负的安全整数（offset、index 等）。 */
 export function assertNonNegativeInteger(value: number, name: string): void {
   assert(
     Number.isSafeInteger(value) && value >= 0,
@@ -45,7 +45,7 @@ export function assertNonNegativeInteger(value: number, name: string): void {
   );
 }
 
-/** Validates that `value` is a power of two (sample counts, alignments...). */
+/** 校验 `value` 为 2 的幂（采样数、对齐等）。 */
 export function assertPowerOfTwo(value: number, name: string): void {
   assert(
     Number.isSafeInteger(value) && value > 0 && (value & (value - 1)) === 0,

@@ -1,4 +1,4 @@
-/** How vertices are assembled into primitives. */
+/** vertex 如何组装为图元。 */
 export const PrimitiveTopology = {
   PointList: 'point-list',
   LineList: 'line-list',
@@ -9,12 +9,12 @@ export const PrimitiveTopology = {
 
 export type PrimitiveTopology = (typeof PrimitiveTopology)[keyof typeof PrimitiveTopology];
 
-/** True when the topology assembles triangles. */
+/** 当该拓扑组装三角形时返回 true。 */
 export function isTriangleTopology(topology: PrimitiveTopology): boolean {
   return topology === 'triangle-list' || topology === 'triangle-strip';
 }
 
-/** Primitives produced by `count` vertices/indices for a topology. */
+/** 给定拓扑下，由 `count` 个 vertex/index 生成的图元数量。 */
 export function primitiveCount(topology: PrimitiveTopology, count: number): number {
   switch (topology) {
     case 'point-list':

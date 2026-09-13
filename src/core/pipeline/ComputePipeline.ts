@@ -1,4 +1,4 @@
-/** A compute pipeline. WebGPU supports it natively; the WebGL2 backend throws on creation. */
+/** compute pipeline。WebGPU 原生支持；WebGL2 后端在创建时抛出错误。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
 import type { PipelineLayout } from '../binding/PipelineLayout.js';
@@ -6,7 +6,7 @@ import type { ShaderModule } from '../resources/ShaderModule.js';
 
 export interface ComputeState {
   module: ShaderModule;
-  /** WGSL entry point name; defaults to `'csMain'`. */
+  /** WGSL 入口点名；默认为 `'csMain'`。 */
   entryPoint?: string;
 }
 

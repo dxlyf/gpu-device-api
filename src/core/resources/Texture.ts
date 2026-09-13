@@ -1,4 +1,4 @@
-/** GPU texture resource. Mirrors WebGPU's `GPUTexture`. */
+/** GPU texture 资源。对应 WebGPU 的 `GPUTexture`。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
 import type { TextureFormat } from '../enums/TextureFormat.js';
@@ -14,21 +14,21 @@ export const TextureDimension = {
 
 export type TextureDimension = (typeof TextureDimension)[keyof typeof TextureDimension];
 
-/** Texture size: a single number means a square 2D texture. */
+/** texture 尺寸：单个数字表示正方形的 2D texture。 */
 export type TextureSize = number | { width: number; height?: number; depthOrArrayLayers?: number };
 
 export interface TextureDescriptor {
   label?: string;
   size: TextureSize;
-  /** Defaults to 1. */
+  /** 默认为 1。 */
   mipLevelCount?: number;
-  /** MSAA sample count; textures with `sampleCount > 1` cannot be sampled. Defaults to 1. */
+  /** MSAA 采样数；`sampleCount > 1` 的 texture 不能被采样。默认为 1。 */
   sampleCount?: number;
-  /** Defaults to `'2d'`. */
+  /** 默认为 `'2d'`。 */
   dimension?: TextureDimension;
   format: TextureFormat;
   usage: TextureUsage;
-  /** Additional view formats (e.g. `srgb` views of a non-srgb texture). */
+  /** 额外的 view 格式（例如为非 srgb texture 创建 `srgb` view）。 */
   viewFormats?: readonly TextureFormat[];
 }
 
@@ -42,20 +42,20 @@ export interface Texture extends Disposable {
   readonly depthOrArrayLayers: number;
   readonly mipLevelCount: number;
   readonly sampleCount: number;
-  /** Native handle: `GPUTexture` on WebGPU, `WebGLTexture` on WebGL2. */
+  /** 原生句柄：WebGPU 上是 `GPUTexture`，WebGL2 上是 `WebGLTexture`。 */
   readonly native: unknown;
-  /** The size as an {@link Extent3D}. */
+  /** 以 {@link Extent3D} 表示的尺寸。 */
   readonly size: Extent3D;
 
-  /** Creates (and caches) a view with the given subresource selection. */
+  /** 按给定的 subresource 选择创建（并缓存）一个 view。 */
   createView(descriptor?: TextureViewDescriptor): TextureView;
-  /** Views created so far; released together with the texture. */
+  /** 目前已创建的 view；随 texture 一同释放。 */
   readonly views: readonly TextureView[];
 
   destroy(): void;
 }
 
-/** Normalizes the accepted size forms. */
+/** 归一化可接受的尺寸写法。 */
 export function resolveTextureSize(size: TextureSize): Extent3D {
   if (typeof size === 'number') {
     return { width: size, height: size, depthOrArrayLayers: 1 };
@@ -67,13 +67,13 @@ export function resolveTextureSize(size: TextureSize): Extent3D {
   };
 }
 
-/** Number of mip levels needed to cover the largest dimension. */
+/** 覆盖最大维度所需的 mip 层级数。 */
 export function fullMipLevelCount(size: TextureSize): number {
   const extent = resolveTextureSize(size);
   return Math.floor(Math.log2(Math.max(extent.width, extent.height, extent.depthOrArrayLayers))) + 1;
 }
 
-/** Default usage for a texture that is uploaded once and sampled. */
+/** 只上传一次并被采样的 texture 的默认 usage。 */
 export function defaultTextureUsage(extra: TextureUsage = 0): TextureUsage {
   return TextureUsage.CopyDst | TextureUsage.TextureBinding | extra;
 }

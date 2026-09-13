@@ -1,4 +1,4 @@
-/** Compute pass recording. WebGPU only; the WebGL2 backend throws on `beginComputePass`. */
+/** compute pass 录制。仅 WebGPU；WebGL2 后端在 `beginComputePass` 时抛错。 */
 
 import type { BindGroup } from '../binding/BindGroup.js';
 import type { ComputePipeline } from '../pipeline/ComputePipeline.js';

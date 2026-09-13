@@ -1,28 +1,28 @@
 /**
- * Internal types shared between the core layer and the backends. These are not part of the public
- * API surface and may change without notice.
+ * core 层与各后端之间共享的内部类型。它们不属于公开 API，
+ * 可能随时变更。
  *
- * (Kept as a real module rather than a `.d.ts` so that declaration emit copies it into `dist/types`.)
+ * （保留为真实模块而非 `.d.ts`，以便声明生成时能将其拷贝到 `dist/types`。）
  */
 
-/** Explicitly nullable. */
+/** 显式可空。 */
 export type Nullable<T> = T | null;
 
-/** Dimensions of a texture, render target or canvas frame. */
+/** texture、render target 或 canvas 帧的尺寸。 */
 export interface Extent3D {
   width: number;
   height: number;
   depthOrArrayLayers: number;
 }
 
-/** Offset inside a texture for copy operations. */
+/** 拷贝操作在 texture 内的偏移。 */
 export interface Origin3D {
   x: number;
   y: number;
   z: number;
 }
 
-/** Mip level / array layer selection for a texture subresource. */
+/** texture 子资源的 mip level / array layer 选择。 */
 export interface SubresourceRange {
   baseMipLevel: number;
   mipLevelCount: number;
@@ -30,23 +30,23 @@ export interface SubresourceRange {
   arrayLayerCount: number;
 }
 
-/** Memory layout of host pixel data for a texture upload. */
+/** texture 上传时宿主像素数据的内存布局。 */
 export interface TexelCopyBufferLayout {
   offset: number;
   bytesPerRow?: number;
   rowsPerImage?: number;
 }
 
-/** One entry of a pipeline's bind group layout, after validation and defaults. */
+/** pipeline 的 bind group layout 经过校验和默认值填充后的一项。 */
 export interface ResolvedBinding {
   group: number;
   binding: number;
   type: string;
-  /** Resource name used by shader code generation (textures/samplers). */
+  /** shader 代码生成使用的资源名（texture/sampler）。 */
   name?: string;
 }
 
-/** A `(group, binding)` pair. */
+/** 一个 `(group, binding)` 组合。 */
 export interface BindingLocation {
   group: number;
   binding: number;

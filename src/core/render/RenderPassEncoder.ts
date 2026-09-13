@@ -1,4 +1,4 @@
-/** Render pass recording. Mirrors WebGPU's `GPURenderPassEncoder`. */
+/** render pass 录制。对应 WebGPU 的 `GPURenderPassEncoder`。 */
 
 import type { IndexFormat } from '../enums/IndexFormat.js';
 import type { BindGroup } from '../binding/BindGroup.js';
@@ -17,10 +17,10 @@ export interface RenderPassDescriptor {
   label?: string;
   colorAttachments: readonly (ColorAttachment | null)[];
   depthStencilAttachment?: DepthStencilAttachment | null;
-  /** Convenience: build both attachment lists from a render target. */
+  /** 便捷方式：直接由一个 render target 生成两份 attachment 列表。 */
   target?: RenderTarget;
   occlusionQuerySet?: QuerySet;
-  /** Clear values applied when `target` is used. */
+  /** 使用 `target` 时应用的清除值。 */
   clearValue?: Color;
   depthClearValue?: number;
 }
@@ -31,8 +31,8 @@ export interface RenderPassEncoder {
 
   setPipeline(pipeline: RenderPipeline): void;
   /**
-   * Binds a bind group. `dynamicOffsets` are required for entries declared with
-   * `hasDynamicOffset` (uniform ring allocations).
+   * 绑定 bind group。对声明了 `hasDynamicOffset` 的条目（uniform 环形分配），
+   * 必须提供 `dynamicOffsets`。
    */
   setBindGroup(index: number, bindGroup: BindGroup | null, dynamicOffsets?: readonly number[]): void;
   setVertexBuffer(slot: number, buffer: Buffer | null, offset?: number, size?: number): void;
@@ -48,6 +48,6 @@ export interface RenderPassEncoder {
   drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
   drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
 
-  /** Ends the pass. Further commands throw. */
+  /** 结束该 pass。此后再提交命令会抛错。 */
   end(): void;
 }
