@@ -81,31 +81,64 @@ export async function createDeviceWithAdapter(options: CreateDeviceOptions = {})
     );
   }
 
-  const factory = registry.get(detection.backend);
-  if (!factory) {
-    throw new ValidationError(`[gpu-device-api] 后端 ${detection.backend} 未注册。`);
+  /**
+   * 依次尝试「探测通过」的后端。
+   *
+   * 为什么要重试而不是一次定生死：探测阶段与真正初始化之间还有可能失败 ——
+   * 最典型的是 canvas 已经被别的 context 占用（浏览器硬限制：一个 canvas 只能绑定一种 context），
+   * 此时 `getContext('webgpu')` 会返回 null。既然还有其它可用后端，就不该整个启动失败。
+   * 指定了具体后端、或显式 `strictBackend` 时不做回退，让错误直接暴露出来。
+   */
+  const allowFallback = !options.strictBackend;
+  const candidates: BackendKind[] = [
+    detection.backend,
+    ...detection.probes.filter((probe) => probe.ok && probe.backend !== detection.backend).map((probe) => probe.backend),
+  ];
+  const failures: string[] = [];
+
+  for (const backend of candidates) {
+    const factory = registry.get(backend);
+    if (!factory) continue;
+    try {
+      const adapter = await factory.createAdapter({
+        canvas: options.canvas,
+        contextAttributes: options.contextAttributes,
+        powerPreference: options.powerPreference,
+        forceFallbackAdapter: options.forceFallbackAdapter,
+      });
+
+      const device = await adapter.requestDevice({
+        label: options.label,
+        requiredFeatures: options.requiredFeatures,
+        requiredLimits: options.requiredLimits,
+        debug: options.debug,
+      });
+
+      const context = options.canvas ? device.createCanvasContext(options.canvas) : null;
+
+      if (backend !== detection.backend) {
+        logger.warn(
+          `后端 ${detection.backend} 初始化失败，已改用 ${backend}。失败原因：${failures[failures.length - 1] ?? '未知'}`,
+        );
+      } else if (backend === 'webgl2' && options.backend !== 'webgl2') {
+        // 回退到 WebGL2 时明确提示一次，避免使用者以为自己在用 WebGPU 的某些能力。
+        logger.info(`已回退到 WebGL2 后端：${detection.reason}`);
+      }
+
+      return { device, adapter, backend, probes: detection.probes, context };
+    } catch (error) {
+      const message = (error as Error).message;
+      failures.push(`${backend} — ${message}`);
+      if (!allowFallback) throw error;
+      logger.warn(`后端 ${backend} 初始化失败：${message}`);
+    }
   }
 
-  const adapter = await factory.createAdapter({
-    canvas: options.canvas,
-    contextAttributes: options.contextAttributes,
-    powerPreference: options.powerPreference,
-    forceFallbackAdapter: options.forceFallbackAdapter,
-  });
-
-  const device = await adapter.requestDevice({
-    label: options.label,
-    requiredFeatures: options.requiredFeatures,
-    requiredLimits: options.requiredLimits,
-    debug: options.debug,
-  });
-
-  // 回退到 WebGL2 时明确提示一次，避免使用者以为自己在用 WebGPU 的某些能力。
-  if (detection.backend === 'webgl2' && options.backend !== 'webgl2') {
-    logger.info(`已回退到 WebGL2 后端：${detection.reason}`);
-  }
-
-  const context = options.canvas ? device.createCanvasContext(options.canvas) : null;
-
-  return { device, adapter, backend: detection.backend, probes: detection.probes, context };
+  throw new ValidationError(
+    `[gpu-device-api] 没有可用的渲染后端。逐个初始化的结果：\n  ${failures.join('\n  ')}\n` +
+      '排查建议：确认在 https 或 localhost 下运行（WebGPU 需要安全上下文）、' +
+      '浏览器版本支持 WebGPU/WebGL2、显卡未被禁用。\n' +
+      '另一个常见原因：这张 canvas 已经被别的代码用 getContext() 绑定成了其它类型，' +
+      '一个 canvas 只能绑定一种 context —— 请为它新建一张 canvas，或换一个未被占用的 canvas。',
+  );
 }

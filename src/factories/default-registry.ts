@@ -10,9 +10,26 @@ import { WebGL2Adapter } from '../webgl2/WebGL2Adapter.js';
 import { WebGPUAdapter } from '../webgpu/WebGPUAdapter.js';
 import type { Adapter, BackendKind } from '../core/Adapter.js';
 
-/** 探测用 canvas：优先用调用方给的，否则临时建一个（用完即弃，不插入 DOM）。 */
-function probeCanvas(options: BackendCreateOptions): HTMLCanvasElement | OffscreenCanvas | null {
+/** 创建 adapter 时用的 canvas：优先调用方给的（那个 canvas 就是要渲染的目标）。 */
+function targetCanvas(options: BackendCreateOptions): HTMLCanvasElement | OffscreenCanvas | null {
   if (options.canvas) return options.canvas;
+  return freshCanvas();
+}
+
+/**
+ * 探测用的 canvas：**永远新建一个，绝不复用调用方的 canvas**。
+ *
+ * 原因是硬性的浏览器约束：一个 canvas 只能绑定一种 context，一旦在某张 canvas 上调过
+ * `getContext('webgl2')`，之后再调 `getContext('webgpu')` 就永远返回 null。
+ * `detectBackend` 为了给出「为什么回退」的诊断会**探测所有候选后端**，
+ * 如果在真实 canvas 上探测 WebGL2，就会把 canvas 占掉 —— 于是明明选中的是 WebGPU，
+ * 到了 `configure()` 却拿不到 webgpu context。
+ */
+function detectionCanvas(): HTMLCanvasElement | OffscreenCanvas | null {
+  return freshCanvas();
+}
+
+function freshCanvas(): HTMLCanvasElement | OffscreenCanvas | null {
   if (typeof document !== 'undefined') {
     const canvas = document.createElement('canvas');
     canvas.width = 1;
@@ -23,6 +40,34 @@ function probeCanvas(options: BackendCreateOptions): HTMLCanvasElement | Offscre
   return null;
 }
 
+/** 超时哨兵值，用来把「超时」与「返回 null」区分开。 */
+const TIMED_OUT = Symbol('timeout');
+
+/** 给一个 promise 加超时；超时时返回哨兵值而不是抛错。 */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * 探测 `requestAdapter()` 的超时时间（毫秒）。
+ *
+ * 为什么要超时：在部分环境里（无头模式、GPU 进程未就绪、驱动初始化很慢）
+ * `requestAdapter()` 既不 resolve 也不 reject，而是**一直挂着**。
+ * 那样整个 `createDevice` 就永远不返回，页面表现为「一直卡在启动中」——
+ * 比明确回退到 WebGL2 糟糕得多。超过这个时间就当作不可用。
+ */
+export const WEBGPU_ADAPTER_PROBE_TIMEOUT_MS = 3000;
+
 class WebGPUFactory implements BackendFactory {
   readonly kind: BackendKind = 'webgpu';
 
@@ -30,14 +75,20 @@ class WebGPUFactory implements BackendFactory {
     if (typeof navigator === 'undefined' || !('gpu' in navigator) || !navigator.gpu) {
       return { ok: false, reason: '当前环境没有 navigator.gpu（浏览器不支持 WebGPU，或不在安全上下文里）' };
     }
-    if (options.forceFallbackAdapter && !('fallbackAdapter' in (navigator.gpu as object))) {
-      // 只是提示，不阻断：不同实现的字段名略有差异。
-    }
     try {
-      const adapter = await navigator.gpu.requestAdapter({
-        powerPreference: options.powerPreference ?? 'high-performance',
-        forceFallbackAdapter: options.forceFallbackAdapter ?? false,
-      });
+      const adapter = await withTimeout(
+        navigator.gpu.requestAdapter({
+          powerPreference: options.powerPreference ?? 'high-performance',
+          forceFallbackAdapter: options.forceFallbackAdapter ?? false,
+        }),
+        WEBGPU_ADAPTER_PROBE_TIMEOUT_MS,
+      );
+      if (adapter === TIMED_OUT) {
+        return {
+          ok: false,
+          reason: `requestAdapter() 超过 ${WEBGPU_ADAPTER_PROBE_TIMEOUT_MS}ms 没有返回（GPU 进程未就绪或驱动初始化卡住）`,
+        };
+      }
       if (!adapter) {
         return {
           ok: false,
@@ -63,16 +114,16 @@ class WebGL2Factory implements BackendFactory {
   readonly kind: BackendKind = 'webgl2';
 
   async isAvailable(options: BackendCreateOptions): Promise<BackendAvailability> {
-    const canvas = probeCanvas(options);
+    // 关键：用**临时 canvas** 探测。见 `detectionCanvas()` 的注释 ——
+    // 在真实 canvas 上探测 WebGL2 会让它之后再也拿不到 webgpu context。
+    const canvas = detectionCanvas();
     if (!canvas) {
-      return { ok: false, reason: '没有可用的 canvas（既没有传入 canvas，也不在浏览器环境里）' };
+      return { ok: false, reason: '没有可用的 canvas（不在浏览器环境里，也没有 OffscreenCanvas）' };
     }
     try {
-      // 直接用真实 canvas 探测：如果它已经被别的 context 占用，这里就会失败，
-      // 这正是我们希望尽早发现的情况。
       const context = canvas.getContext('webgl2', options.contextAttributes) as WebGL2RenderingContext | null;
       if (!context) {
-        return { ok: false, reason: 'canvas.getContext(\'webgl2\') 返回 null（不支持 WebGL2 或 canvas 已被占用）' };
+        return { ok: false, reason: 'canvas.getContext(\'webgl2\') 返回 null（浏览器不支持 WebGL2）' };
       }
       return { ok: true };
     } catch (error) {
@@ -81,7 +132,8 @@ class WebGL2Factory implements BackendFactory {
   }
 
   async createAdapter(options: BackendCreateOptions): Promise<Adapter> {
-    const canvas = probeCanvas(options);
+    // 走到这里说明已经确定要用 WebGL2，此时才在真实 canvas 上真正建立 context。
+    const canvas = targetCanvas(options);
     if (!canvas) {
       throw new Error('[gpu-device-api] 创建 WebGL2 adapter 需要 canvas。');
     }
