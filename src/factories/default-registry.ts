@@ -6,6 +6,7 @@
  */
 
 import { BackendRegistry, type BackendAvailability, type BackendCreateOptions, type BackendFactory } from './BackendRegistry.js';
+import { ValidationError } from '../core/errors/ValidationError.js';
 import { WebGL2Adapter } from '../webgl2/WebGL2Adapter.js';
 import { WebGPUAdapter } from '../webgpu/WebGPUAdapter.js';
 import type { Adapter, BackendKind } from '../core/Adapter.js';
@@ -103,10 +104,23 @@ class WebGPUFactory implements BackendFactory {
 
   async createAdapter(options: BackendCreateOptions): Promise<Adapter> {
     // `create` 在拿不到 adapter 时抛错（`request` 返回 null，适合「探测」语义）。
-    return WebGPUAdapter.create({
-      powerPreference: options.powerPreference,
-      forceFallbackAdapter: options.forceFallbackAdapter,
-    });
+    // 这里同样要加超时：某些环境下 `requestAdapter()` 会一直挂着不返回，
+    // 探测阶段有超时兜底，但「真正创建 adapter」这一步如果不管，页面就会永远卡在启动中。
+    const created = await withTimeout(
+      WebGPUAdapter.create({
+        powerPreference: options.powerPreference,
+        forceFallbackAdapter: options.forceFallbackAdapter,
+      }),
+      WEBGPU_ADAPTER_PROBE_TIMEOUT_MS,
+    );
+    if (created === TIMED_OUT) {
+      throw new ValidationError(
+        `[gpu-device-api] WebGPU 的 requestAdapter() 超过 ${WEBGPU_ADAPTER_PROBE_TIMEOUT_MS}ms 没有返回。` +
+          '这通常意味着 GPU 进程未就绪或驱动初始化卡住（无头/虚拟化环境里很常见）。\n' +
+          '可以稍后重试，或改用 WebGL2 后端。',
+      );
+    }
+    return created;
   }
 }
 

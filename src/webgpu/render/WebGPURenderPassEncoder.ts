@@ -228,7 +228,15 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
     this.assertOpen('setBindGroup');
     if (bindGroup) {
       validateDynamicOffsets(bindGroup, dynamicOffsets, this.device, `RenderPass "${this.label}".setBindGroup`);
-      this.native.setBindGroup(index, asGPUBindGroup(bindGroup, `RenderPass "${this.label}".setBindGroup`));
+      // 必须把 dynamicOffsets 传给原生调用：布局里声明了 `hasDynamicOffset` 的 entry 要求
+      // 这里恰好给出对应数量的偏移，漏传会让 WebGPU 判定「动态偏移数量 0 ≠ 动态 buffer 数量 1」，
+      // 整条 command buffer 随之失效（`Invalid CommandBuffer ... due to a previous error`），
+      // 于是画面只剩清屏色 —— 而且报错出现在 submit 上，非常难定位。
+      this.native.setBindGroup(
+        index,
+        asGPUBindGroup(bindGroup, `RenderPass "${this.label}".setBindGroup`),
+        dynamicOffsets ?? [],
+      );
       return;
     }
     if (dynamicOffsets && dynamicOffsets.length > 0) {

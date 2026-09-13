@@ -17,6 +17,8 @@ import {
   shapes,
 } from '../src/gfx/index.js';
 import { mat4, vec3, degToRad } from '../src/utils/math/index.js';
+import { BufferUsage } from '../src/core/enums/BufferUsage.js';
+import { TextureUsage } from '../src/core/enums/TextureUsage.js';
 import type { Geometry } from '../src/gfx/Geometry.js';
 import type { Material } from '../src/gfx/Material.js';
 
@@ -318,12 +320,20 @@ async function verifyOffscreenPixel(active: Renderer): Promise<void> {
     width: 64,
     height: 64,
     color: 'rgba8unorm',
-    depth: 'depth24plus',
+    // 深度用 depth32float 而不是 depth24plus：`usage` 会同时作用到颜色与深度附件上，
+    // 而 WebGPU 里 depth24plus 的内存布局是实现定义的、不能参与拷贝
+    //（depth32float 可以）。WebGL2 两个格式都支持。
+    depth: 'depth32float',
+    // 要让 `copyTextureToBuffer` 把它当拷贝源读回，必须显式声明 CopySrc：
+    // WebGL2 后端不看 usage，但 WebGPU 会校验（缺了就是 ValidationError）。
+    usage: TextureUsage.CopySrc,
   });
   const readback = device.createBuffer({
     label: 'demo-verify-readback',
     size: 64 * 64 * 4,
-    usage: 0x0001 | 0x0004 | 0x0008, // MapRead | CopySrc | CopyDst
+    // WebGPU 规定 MapRead 只能和 CopyDst 组合（`MapRead|CopySrc|CopyDst` 是非法组合）。
+    // 读回目标只需要「能被拷入 + 能映射读取」，所以是 MapRead | CopyDst。
+    usage: BufferUsage.MapRead | BufferUsage.CopyDst,
   });
 
   // 复用 Renderer 的通道与绑定逻辑（arena、bind group、顶点缓冲都在里面）。

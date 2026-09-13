@@ -183,8 +183,10 @@ async function run(): Promise<void> {
 
   const readback = device.createBuffer({
     label: 'smoke-readback',
+    // WebGPU 规定 MapRead 只能与 CopyDst 组合（`MapRead | CopySrc` 是非法 usage）。
+    // 这个页面只跑 WebGL2，但写法保持两个后端都合法。
     size: 64 * 64 * 4,
-    usage: 0x0001 | 0x0004 | 0x0008, // MapRead | CopySrc | CopyDst
+    usage: 0x0001 | 0x0008, // MapRead | CopyDst
   });
   encoder2.copyTextureToBuffer(
     { texture: target.colors[0]!, origin: { x: 0, y: 0 } },

@@ -65,7 +65,12 @@ export class WebGPUComputePassEncoder implements ComputePassEncoder {
     this.assertOpen('setBindGroup');
     if (bindGroup) {
       validateDynamicOffsets(bindGroup, dynamicOffsets, this.device, `ComputePass "${this.label}".setBindGroup`);
-      this.native.setBindGroup(index, asGPUBindGroup(bindGroup, `ComputePass "${this.label}".setBindGroup`));
+      // 与渲染通道同理：dynamic offsets 必须真的传给原生调用，漏传会让整条 command buffer 失效。
+      this.native.setBindGroup(
+        index,
+        asGPUBindGroup(bindGroup, `ComputePass "${this.label}".setBindGroup`),
+        dynamicOffsets ?? [],
+      );
       return;
     }
     if (dynamicOffsets && dynamicOffsets.length > 0) {

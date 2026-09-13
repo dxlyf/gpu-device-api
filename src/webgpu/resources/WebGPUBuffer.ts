@@ -21,6 +21,16 @@ export class WebGPUBuffer implements Buffer {
   private readonly device: WebGPUDevice;
   private _disposed = false;
   private _mapped = false;
+  /**
+   * `mapAsync` 交给上层的映射视图。
+   *
+   * 必须记下来：WebGPU 规定同一个映射范围只能被 `getMappedRange` 取一次
+   *（第二次会以「与已返回的范围重叠」报错），而 core 的 `Buffer` 契约是
+   * 「`mapAsync` 以映射范围 resolve，`getMappedRange` 再取当前映射范围」——
+   * 也就是两个方法都要能用（WebGL2 后端就是这样）。所以这里自己记着已经交出去的视图，
+   * 第二次调用直接复用，不再往原生对象上问一遍。
+   */
+  private mappedRange: { offset: number; size: number; data: ArrayBuffer } | null = null;
 
   constructor(device: WebGPUDevice, descriptor: BufferDescriptor) {
     this.device = device;
@@ -79,20 +89,29 @@ export class WebGPUBuffer implements Buffer {
     this.assertRange(offset, mapSize, 'Buffer.mapAsync');
     await this.native.mapAsync(toGPUMapMode(mode), offset, mapSize);
     this._mapped = true;
-    return this.native.getMappedRange(offset, mapSize);
+    const data = this.native.getMappedRange(offset, mapSize);
+    this.mappedRange = { offset, size: mapSize, data };
+    return data;
   }
 
-  /** 当前已映射的范围；buffer 未映射时抛错。 */
+  /**
+   * 当前已映射的范围（偏移量相对于映射起点，与 WebGL2 后端一致）。
+   *
+   * 不再直接问原生 `GPUBuffer`：同一个范围只能被取一次，重复取会报
+   * 「overlaps with previously returned range」。
+   */
   getMappedRange(offset = 0, size?: number): ArrayBuffer {
     this.assertUsable('Buffer.getMappedRange');
-    if (!this._mapped) {
+    const mapped = this.mappedRange;
+    if (!this._mapped || !mapped) {
       throw new ValidationError(
         `[gpu-device-api] Buffer "${this.label}" is not mapped; await mapAsync() before calling getMappedRange().`,
       );
     }
-    const mapSize = size ?? this.size - offset;
-    this.assertRange(offset, mapSize, 'Buffer.getMappedRange');
-    return this.native.getMappedRange(offset, mapSize);
+    const mapSize = size ?? mapped.size - offset;
+    this.assertRange(offset, mapSize, 'Buffer.getMappedRange', mapped.size);
+    if (offset === 0 && mapSize === mapped.size) return mapped.data;
+    return mapped.data.slice(offset, offset + mapSize);
   }
 
   /**
@@ -105,6 +124,7 @@ export class WebGPUBuffer implements Buffer {
     if (this._disposed) return;
     if (!this._mapped) return;
     this._mapped = false;
+    this.mappedRange = null;
     this.native.unmap();
   }
 
@@ -113,6 +133,7 @@ export class WebGPUBuffer implements Buffer {
     if (this._disposed) return;
     this._disposed = true;
     this._mapped = false;
+    this.mappedRange = null;
     this.native.destroy();
   }
 
@@ -132,13 +153,16 @@ export class WebGPUBuffer implements Buffer {
     }
   }
 
-  private assertRange(offset: number, size: number, context: string): void {
+  private assertRange(offset: number, size: number, context: string, limit = this.size): void {
     assertNonNegativeInteger(offset, `${context} offset`);
     assertPositiveInteger(size, `${context} size`);
-    if (offset + size > this.size) {
+    if (offset + size > limit) {
+      const bounds =
+        limit === this.size
+          ? `buffer "${this.label}" size ${this.size}`
+          : `mapped range size ${limit} of buffer "${this.label}"`;
       throw new ValidationError(
-        `[gpu-device-api] ${context}: range [${offset}, ${offset + size}) exceeds buffer "${this.label}" ` +
-          `size ${this.size}.`,
+        `[gpu-device-api] ${context}: range [${offset}, ${offset + size}) exceeds ${bounds}.`,
       );
     }
   }
