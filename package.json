@@ -1,0 +1,38 @@
+{
+  "name": "gpu-device-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified low-level WebGL2 / WebGPU abstraction library for easy drawing on either backend.",
+  "main": "./dist/gpu-device-api.js",
+  "module": "./dist/gpu-device-api.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/gpu-device-api.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "build:demo": "vite build --config vite.demo.config.ts",
+    "preview": "vite preview --config vite.demo.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "lil-gui": "^0.20.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
+  },
+  "dependencies": {
+    "@webgpu/types": "^0.1.60"
+  }
+}
