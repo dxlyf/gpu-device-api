@@ -186,6 +186,7 @@ export class WebGPURenderTarget implements RenderTarget {
     if (this._disposed) return;
     this._disposed = true;
     this.releaseTextures();
+    this.device.untrack(this);
   }
 
   /** `Disposable` 的别名。 */

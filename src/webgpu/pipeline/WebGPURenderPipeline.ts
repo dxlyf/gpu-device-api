@@ -45,6 +45,14 @@ import { PipelineCache as WgpuPipelineCache, renderPipelineCacheKey } from './Pi
 export const DEFAULT_VERTEX_ENTRY_POINT = 'vsMain';
 export const DEFAULT_FRAGMENT_ENTRY_POINT = 'fsMain';
 
+/**
+ * 共享的空值：解析 variant 时会用到「空入参 / 空 vertex layout / 空 color format」，
+ * 原先每次 `resolve()` 都会为它们新建数组，属于每 draw 的纯分配。
+ */
+const EMPTY_VARIANT: Partial<RenderPipelineVariant> = Object.freeze({});
+const EMPTY_VERTEX_LAYOUTS: readonly VertexBufferLayout[] = [];
+const EMPTY_COLOR_FORMATS: readonly TextureFormat[] = [];
+
 export class WebGPURenderPipeline implements RenderPipeline {
   readonly label: string;
   readonly descriptor: RenderPipelineDescriptor;
@@ -54,8 +62,21 @@ export class WebGPURenderPipeline implements RenderPipeline {
   private readonly device: WebGPUDevice;
   private readonly cache: PipelineCache<GPURenderPipeline>;
   private readonly logger: Logger;
+  private readonly sampleCountContext: string;
   private _disposed = false;
   private warnedMissingVertexLayouts = false;
+
+  /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
+  private defaultColorFormatsCache: readonly TextureFormat[] | null = null;
+
+  /** 上一次 `resolve()` 的入参与结果，用于按身份快速命中（见 {@link WebGPURenderPipeline.resolve}）。 */
+  private lastVariantInput: Partial<RenderPipelineVariant> | null = null;
+  private lastVariantColorFormats: readonly TextureFormat[] | undefined;
+  private lastVariantSampleCount: number | undefined;
+  private lastVariantDepthFormat: TextureFormat | null | undefined;
+  private lastVariantVertexLayouts: readonly VertexBufferLayout[] | undefined;
+  private lastVariantResolved: RenderPipelineVariant | null = null;
+  private lastVariantKey: string | null = null;
 
   constructor(device: WebGPUDevice, descriptor: RenderPipelineDescriptor) {
     this.device = device;
@@ -64,6 +85,7 @@ export class WebGPURenderPipeline implements RenderPipeline {
     this.layout = descriptor.layout ?? 'auto';
     this.vertexLayouts = descriptor.vertex.buffers ?? null;
     this.logger = createLogger(`webgpu:${this.label}`);
+    this.sampleCountContext = `RenderPipeline "${this.label}": sampleCount`;
     this.cache = new WgpuPipelineCache<GPURenderPipeline>(64, (_value, key) => {
       this.logger.debug(`evicted render pipeline variant ${key}`);
     });
@@ -92,15 +114,44 @@ export class WebGPURenderPipeline implements RenderPipeline {
    * 解析（并缓存）某个 target/variant 对应的具体 pipeline。
    *
    * `variant` 里未给出的字段按以下顺序取值：pipeline descriptor → `render` 预设 → 默认值。
+   *
+   * 同一个 render pass 内每次 `setPipeline` 传的都是同一个 variant 请求对象
+   *（见 `WebGPURenderPassEncoder` 的 `variantRequest`），因此这里按「入参身份 + 字段值」
+   * 复用上一次的解析结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
+   * 也不再重算 vertex layout key —— 这些原本都在每 draw 的路径上。
    */
-  resolve(variant: Partial<RenderPipelineVariant> = {}): GPURenderPipeline {
+  resolve(variant: Partial<RenderPipelineVariant> = EMPTY_VARIANT): GPURenderPipeline {
     if (this._disposed) {
       throw new ValidationError(
         `[gpu-device-api] RenderPipeline "${this.label}" has been disposed.`,
       );
     }
-    const resolved = this.resolveVariant(variant);
-    return this.cache.resolve(renderPipelineCacheKey(resolved), () => this.createNative(resolved));
+    let resolved: RenderPipelineVariant;
+    let key: string;
+    if (
+      variant === this.lastVariantInput &&
+      variant.colorFormats === this.lastVariantColorFormats &&
+      variant.sampleCount === this.lastVariantSampleCount &&
+      variant.depthFormat === this.lastVariantDepthFormat &&
+      variant.vertexLayouts === this.lastVariantVertexLayouts &&
+      this.lastVariantResolved !== null &&
+      this.lastVariantKey !== null
+    ) {
+      resolved = this.lastVariantResolved;
+      key = this.lastVariantKey;
+    } else {
+      resolved = this.resolveVariant(variant);
+      key = renderPipelineCacheKey(resolved);
+      // 记住入参字段的当前值：调用方若换掉某个字段（而不是原地改数组内容），下一次就会重新解析。
+      this.lastVariantInput = variant;
+      this.lastVariantColorFormats = variant.colorFormats;
+      this.lastVariantSampleCount = variant.sampleCount;
+      this.lastVariantDepthFormat = variant.depthFormat;
+      this.lastVariantVertexLayouts = variant.vertexLayouts;
+      this.lastVariantResolved = resolved;
+      this.lastVariantKey = key;
+    }
+    return this.cache.resolve(key, () => this.createNative(resolved));
   }
 
   /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
@@ -113,6 +164,7 @@ export class WebGPURenderPipeline implements RenderPipeline {
     if (this._disposed) return;
     this._disposed = true;
     this.cache.dispose();
+    this.device.untrack(this);
   }
 
   private resolveVariant(partial: Partial<RenderPipelineVariant>): RenderPipelineVariant {
@@ -120,13 +172,14 @@ export class WebGPURenderPipeline implements RenderPipeline {
     const colorFormats = partial.colorFormats ?? this.defaultColorFormats();
     const sampleCount = assertSampleCount(
       partial.sampleCount ?? descriptor.multisample?.count ?? descriptor.render?.multisample?.count ?? 1,
-      `RenderPipeline "${this.label}": sampleCount`,
+      this.sampleCountContext,
     );
     const depthFormat =
       partial.depthFormat !== undefined
         ? partial.depthFormat
         : descriptor.depthStencil?.format ?? null;
-    const vertexLayouts = partial.vertexLayouts ?? descriptor.vertex.buffers ?? [];
+    // `descriptor.vertex.buffers ?? []` 原先每 draw 都会新建一个空数组；空列表共享一个常量即可。
+    const vertexLayouts = partial.vertexLayouts ?? this.vertexLayouts ?? EMPTY_VERTEX_LAYOUTS;
 
     if (descriptor.fragment && colorFormats.length === 0) {
       throw new ValidationError(
@@ -157,17 +210,34 @@ export class WebGPURenderPipeline implements RenderPipeline {
     return { colorFormats, sampleCount, depthFormat, vertexLayouts };
   }
 
+  /**
+   * descriptor 里声明的（或从 fragment targets 推导出的）color format 列表。
+   *
+   * 推导路径原先每次调用都新建一个数组；descriptor 是 readonly 的，结果缓存到实例上，
+   * 与「共享空数组」一起消掉每 draw 的数组分配。
+   */
   private defaultColorFormats(): readonly TextureFormat[] {
+    const cached = this.defaultColorFormatsCache;
+    if (cached !== null) return cached;
     const { descriptor } = this;
-    if (descriptor.colorFormats) return descriptor.colorFormats;
-    if (descriptor.render?.colorFormats) return descriptor.render.colorFormats;
-    const targets = descriptor.fragment?.targets;
-    if (!targets) return [];
-    const formats: TextureFormat[] = [];
-    for (const target of targets) {
-      if (target?.format === undefined) return [];
-      formats.push(target.format);
+    let formats: readonly TextureFormat[];
+    if (descriptor.colorFormats) {
+      formats = descriptor.colorFormats;
+    } else if (descriptor.render?.colorFormats) {
+      formats = descriptor.render.colorFormats;
+    } else {
+      const targets = descriptor.fragment?.targets;
+      const collected: TextureFormat[] = [];
+      if (targets) {
+        for (const target of targets) {
+          if (target?.format === undefined) break;
+          collected.push(target.format);
+        }
+      }
+      // 任一 target 没写 format 时按「推导不出来」处理（与原先返回空数组一致）。
+      formats = targets && collected.length === targets.length ? collected : EMPTY_COLOR_FORMATS;
     }
+    this.defaultColorFormatsCache = formats;
     return formats;
   }
 

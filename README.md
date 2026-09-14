@@ -61,7 +61,10 @@ renderer.endFrame();
   或者每个物体一次 draw call、各自带自己的 model 与 uniform，共用一条管线。见
   [示例与自检](#示例与自检)。
 - **带实测数字的性能基准**：`examples/benchmark.html` 只用 core 层（不经过 gfx），在
-  2000 / 5000 / 10000 / 20000 / 40000 个图形下逐档测帧耗时、CPU 提交与每秒三角形，两个后端可直接对比。
+  2000 / 5000 / 10000 / 20000 / 40000 个图形下跑**真实动态负载**（24 顶点盒子 + 光照着色器，
+  每个物体每帧移动并重传矩阵），每档给出「含同步 / 不同步」两轮、静态对照、CPU 与 GPU 同步等待；
+  `examples/gfx-benchmark.html` 另外量化便捷层每 draw 的固定开销。见
+  [性能基准](#性能基准benchmarkhtml)。
 - **可观测**：`device.onError()` 统一上报（WebGPU 的 `onuncapturederror`、WebGL2 的 `getError()`，
   以及本库内部校验失败）；`device.limits` / `device.features` 两个后端都能无差别读取。
 - **逃生口**：`device.native` 是原生的 `GPUDevice` 或 `WebGL2RenderingContext`；`examples/smoke.ts`
@@ -245,6 +248,10 @@ device.queue.submit([encoder.finish()]);
   `Renderer`）因此可以用同一段代码处理「画到 canvas」与「画到离屏目标」，不会有一条路径
   悄悄丢掉 depth attachment（丢掉之后后端会如实关掉 `DEPTH_TEST`，画面退化成画家算法）。
 - **`device.onError(cb)`** 注册错误回调（返回取消订阅的函数）；`device.reportError(err)` 主动上报。
+- **调试标记**：`CommandEncoder` / `RenderPassEncoder` / `ComputePassEncoder` 都有
+  `pushDebugGroup(label)` / `popDebugGroup()` / `insertDebugMarker(label)`，抓帧工具（RenderDoc、PIX）据此分组。
+  WebGPU 直接转发原生调用；WebGL2 走 `EXT_debug_marker`，**扩展不可用时是空操作**（只影响抓帧分组，
+  不影响渲染结果，所以没必要抛错）。
 
 ### GLSL 的自动包装可以关掉
 
@@ -322,6 +329,9 @@ renderer.destroy();
 - `depth: false` 时画布通道不带 depth attachment，深度测试会被（正确地）关掉；`sampleCount`
   只有 WebGPU 的 canvas 生效（WebGL2 的 canvas 采样数由 `antialias` 决定，传 `> 1` 会直接抛
   `ValidationError`，不会静默忽略）。见 [画布深度测试的回归页](#示例与自检)。
+- **相机矩阵每帧只算一次**（`beginFrame()` 里刷新），所以 `draw()` 的固定开销里没有相机数学。
+  在帧中间改了相机参数（`position` / `target` / `fov` …）想立刻生效，就自己调一次
+  `renderer.updateCamera()` —— 否则改动会在下一帧的 `beginFrame()` 才反映出来。
 
 ### Geometry
 
@@ -470,7 +480,8 @@ u.set('bones', boneMatrices);
 | `examples/index.html` | gfx 层的完整 demo：lil-gui 调参、切换后端、几何体/材质/光照切换 |
 | `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
-| `examples/benchmark.html` | **性能基准**：只用 core 层（不经过 gfx），在 2000 / 5000 / 10000 / 20000 / 40000 个图形下逐帧计时 |
+| `examples/benchmark.html` | **性能基准（core 层）**：box + 光照着色器的**动态**场景，2000 / 5000 / 10000 / 20000 / 40000 个图形每帧移动并重传矩阵；含静态对照与「含同步 / 不同步」两轮 |
+| `examples/gfx-benchmark.html` | **性能基准（gfx 层）**：同样的档位测 `renderer.draw()` 的每 draw 固定开销（相机 uniform、model、法线矩阵、uniform arena + 动态偏移、逐属性顶点绑定） |
 | `examples/smoke.html` | core 层的浏览器内冒烟测试：17 项检查，含像素级断言（canvas 中央、离屏目标角落）与 GLSL 包装开关 |
 | `examples/depth.html` | **画布深度测试回归**：近红先画、远绿后画，中心像素必须是红 —— 两个后端各自一遍，读回的也是 canvas 本身 |
 
@@ -542,24 +553,38 @@ WebGPU 用 `queue.onSubmittedWorkDone()`；WebGL2 用一次 1×1 的 `readPixels
 那样测到的只是 CPU 录制时间，而且驱动队列会越积越多、数字完全不可比）。
 `cpu` 列是「录制 + 提交」，`frame` 列是「从开始录制到画完」。
 
-本机实测（同一份代码，两行是同一台机器上的两个后端）：
+本机实测（同一份代码，两行是同一台机器上的两个后端）。负载是**真实动态场景**：24 顶点/36 索引的盒子
+（position + normal + uv，12 个三角形）+ 方向光/半球环境光的片元着色器，每个物体**每帧都在动** ——
+每帧重算 40000 个 model 矩阵并重新上传（实例化 64 B/物体、draws 模式 256 B/物体，40000 个 ≈ 2.56 MB/帧）。
 
-| 图形数 | WebGL2 / SwiftShader（软件光栅化）帧耗时 | WebGPU / Intel（真实 GPU）帧耗时 | CPU 提交（实例化） |
-| --- | --- | --- | --- |
-| 2000 | 37.3 ms（27 FPS） | 6.35 ms（158 FPS） | ≈ 4 ms（WebGL2）/ 0.4 ms（WebGPU） |
-| 5000 | 92.0 ms | 3.93 ms（255 FPS） | — |
-| 10000 | 189.8 ms | 4.60 ms | — |
-| 20000 | 286.1 ms | 4.87 ms（205 FPS） | — |
-| 40000 | 583.9 ms（1.7 FPS） | 7.39 ms（135 FPS） | ≈ 3.3 ms / 0.2 ms |
+| 图形数 | WebGL2 / SwiftShader 帧耗时（含同步） | WebGL2 CPU（不同步） | WebGPU / Intel 帧耗时（含同步） | WebGPU CPU（不同步） | WebGPU GPU 同步等待 |
+| --- | --- | --- | --- | --- | --- |
+| 2000 | 45.8 ms | 3.60 ms | 11.8 ms | 2.64 ms | 9.4 ms |
+| 5000 | 104.9 ms | 5.92 ms | 11.0 ms | 5.82 ms | 4.7 ms |
+| 10000 | 209.2 ms | 23.82 ms | 16.3 ms | 12.04 ms | 5.0 ms |
+| 20000 | 414.6 ms | 25.27 ms | 27.4 ms | 21.47 ms | 5.9 ms |
+| 40000 | 826.8 ms | 45.93 ms | 55.8 ms | 43.70 ms | 11.1 ms |
 
-两个结论：**帧耗时的增长几乎全在 GPU 侧**（实例化下 CPU 提交基本恒定，40000 个图形也只有几毫秒），
-以及**软件光栅化与真实 GPU 差两个数量级** —— 所以页面上会把 adapter 名字一并显示出来
-（`data-benchmark-adapter`），看到 `SwiftShader` 就别把 FPS 当真实性能。
-同一份 `draws` 模式在 SwiftShader 上则是 2000 次 draw 就吃掉 23.7ms CPU、10000 次 268ms，
-正好反过来印证「实例化省的是 draw call 与 CPU 提交」。
+几点必须说清楚，否则很容易误读：
+
+1. **CPU 侧不再可以忽略。** 在真实 GPU 上 40000 个物体时，纯 CPU（重算矩阵 + 上传 2.56 MB + 录制 + 提交）
+   是 43.7 ms，而整帧 55.8 ms —— 同一量级。旧的「静态纯色三角形」基准测不到这部分（那时 CPU 只有几毫秒），
+   这正是它容易让人误判的地方：**场景一动，瓶颈结构就变了。**
+2. **软件光栅化与真实 GPU 差 1～2 个数量级**，所以页面会把 adapter 名字写进 `data-benchmark-adapter`，
+   看到 `SwiftShader` 就别把 FPS 当真实性能（上面 WebGL2 那一列是软件光栅化的数字）。
+3. **「含同步」列把 CPU/GPU 串行化了，帧时间偏悲观**；小档位上 `Δ帧` 甚至可能为负（这一帧的 CPU 矩阵计算
+   与上一帧的 GPU 工作重叠）。要看「让物体动起来」的代价，请看页面同时给出的**静态对照**与 `ΔCPU`。
+4. `draws` 模式（每物体一次 draw call）与 `instanced`（1 次 draw call）的差距仍然很大，
+   印证「实例化省的是 draw call 与 CPU 提交」。
+
+便捷层（`src/gfx`）的每 draw 成本是另一个页面：`examples/gfx-benchmark.html` —— 它逐档测
+`renderer.draw()` 的固定开销（相机 uniform、每 draw 的 model、法线矩阵、uniform arena + 动态偏移、
+逐属性绑定顶点缓冲）。它当初就是靠 40000 档把 `UniformArena` 的一个真实缺陷（扩容时在录制中途销毁旧 buffer，
+WebGPU 会在 submit 时报 `used in submit while destroyed`）逼出来的。
 
 ⚠️ 跑这个页面**不要加 `--virtual-time-budget`**：虚拟时间会让 `performance.now()` 跟着跳，
-测出来的数字没有意义（无头环境请用真实时间等它跑完，页面会把进度写进 `data-*` 与 `#progress`）。
+测出来的数字没有意义（无头环境请用真实时间等它跑完，页面会把进度写进 `data-*` 与 `#progress`；
+本仓库用 `scripts/verify-headless.mjs` 按真实时间轮询 `data-*` 结论）。
 
 `examples/index.html` 的查询参数：`?backend=webgl2|webgpu|auto&shape=box&material=unlit&grid=0&verify=1`。
 `verify=1` 的结果写在 `<html data-demo-pixel / data-demo-pixel-corner / data-demo-pixel-lit / data-demo-error>` 上 ——

@@ -346,6 +346,8 @@ export class WebGPUCanvasContext implements CanvasContext {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    // unconfigure() 会把 currentDevice 清空，所以先通知设备取消追踪。
+    this.currentDevice?.untrack(this);
     this.unconfigure();
   }
 

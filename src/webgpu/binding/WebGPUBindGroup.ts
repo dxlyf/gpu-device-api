@@ -33,10 +33,12 @@ export class WebGPUBindGroup implements BindGroup {
   readonly entries: readonly BindGroupEntry[];
   readonly native: GPUBindGroup;
 
+  private readonly device: WebGPUDevice;
   private readonly byBinding: Map<number, BindGroupEntry>;
   private _disposed = false;
 
   constructor(device: WebGPUDevice, descriptor: BindGroupDescriptor) {
+    this.device = device;
     this.label = descriptor.label ?? `bindGroup#${device.nextResourceId('bindGroup')}`;
     this.layout = descriptor.layout;
     this.entries = descriptor.entries;
@@ -74,6 +76,7 @@ export class WebGPUBindGroup implements BindGroup {
   /** GPUBindGroup 没有 destroy；释放只是把本包装对象标记为不可用。 */
   dispose(): void {
     this._disposed = true;
+    this.device.untrack(this);
   }
 }
 
@@ -249,6 +252,50 @@ function validateTextureBinding(
 }
 
 /**
+ * 共享的空 dynamic offset 数组。
+ *
+ * pass encoder 原先写 `dynamicOffsets ?? []`，于是每次 `setBindGroup` 都会多分配一个空数组
+ * （绝大多数 bind group 根本没有动态偏移）。原生 `setBindGroup` 只读这个数组，复用一个即可。
+ */
+export const NO_DYNAMIC_OFFSETS: readonly number[] = Object.freeze([]);
+
+/**
+ * 一个 layout 的动态偏移摘要。
+ *
+ * 哪些 entry 带 `hasDynamicOffset`、每个 entry 的对齐值，都只由 layout 与 device limits 决定，
+ * 而 `setBindGroup` 是每次 draw 都会走的路径：原先每次调用都要 `filter` 出一个（通常是空的）
+ * 数组，并逐个 entry 重读 `device.limits`。按 layout 身份缓存后，每 draw 只剩一次命中判断。
+ */
+interface DynamicOffsetSummary {
+  /** 带 `hasDynamicOffset` 的 entry 数量；为 0 时校验退化为「offset 必须为空」。 */
+  readonly count: number;
+  /** 各动态 entry 的对齐值（按 sortedEntries 顺序）。 */
+  readonly alignments: readonly number[];
+  /** 对齐值对应的 limit 名，仅用于报错。 */
+  readonly limitNames: readonly string[];
+}
+
+const dynamicOffsetSummaries = new WeakMap<BindGroupLayout, DynamicOffsetSummary>();
+
+function dynamicOffsetSummary(layout: BindGroupLayout, device: WebGPUDevice): DynamicOffsetSummary {
+  const cached = dynamicOffsetSummaries.get(layout);
+  if (cached) return cached;
+  const alignments: number[] = [];
+  const limitNames: string[] = [];
+  for (const entry of layout.sortedEntries) {
+    if (entry.buffer?.hasDynamicOffset !== true) continue;
+    const uniform = entry.type === 'uniform';
+    alignments.push(
+      uniform ? device.limits.minUniformBufferOffsetAlignment : device.limits.minStorageBufferOffsetAlignment,
+    );
+    limitNames.push(uniform ? 'minUniformBufferOffsetAlignment' : 'minStorageBufferOffsetAlignment');
+  }
+  const summary: DynamicOffsetSummary = { count: alignments.length, alignments, limitNames };
+  dynamicOffsetSummaries.set(layout, summary);
+  return summary;
+}
+
+/**
  * 校验 `setBindGroup` 的 dynamic offsets。
  *
  * WebGPU 要求：声明了 `hasDynamicOffset` 的 entry 恰好一个 offset，且每个 offset 是
@@ -261,9 +308,9 @@ export function validateDynamicOffsets(
   device: WebGPUDevice,
   context: string,
 ): void {
-  const dynamicEntries = bindGroup.layout.sortedEntries.filter((entry) => entry.buffer?.hasDynamicOffset === true);
-  if (dynamicEntries.length === 0) {
-    if (dynamicOffsets && dynamicOffsets.length > 0) {
+  const summary = dynamicOffsetSummary(bindGroup.layout, device);
+  if (summary.count === 0) {
+    if (dynamicOffsets !== undefined && dynamicOffsets.length > 0) {
       throw new ValidationError(
         `[gpu-device-api] ${context}: bind group "${bindGroup.label}" has no entry with hasDynamicOffset, but ` +
           `${dynamicOffsets.length} dynamic offset(s) were supplied.`,
@@ -271,20 +318,16 @@ export function validateDynamicOffsets(
     }
     return;
   }
-  if (!dynamicOffsets || dynamicOffsets.length !== dynamicEntries.length) {
+  if (dynamicOffsets === undefined || dynamicOffsets.length !== summary.count) {
     throw new ValidationError(
-      `[gpu-device-api] ${context}: bind group "${bindGroup.label}" needs ${dynamicEntries.length} dynamic ` +
+      `[gpu-device-api] ${context}: bind group "${bindGroup.label}" needs ${summary.count} dynamic ` +
         `offset(s) (declaration order of the entries with hasDynamicOffset), got ` +
         `${dynamicOffsets ? dynamicOffsets.length : 0}.`,
     );
   }
-  for (let i = 0; i < dynamicEntries.length; i++) {
-    const entry = dynamicEntries[i]!;
+  for (let i = 0; i < summary.count; i++) {
     const offset = dynamicOffsets[i]!;
-    const alignment =
-      entry.type === 'uniform'
-        ? device.limits.minUniformBufferOffsetAlignment
-        : device.limits.minStorageBufferOffsetAlignment;
+    const alignment = summary.alignments[i]!;
     if (!Number.isInteger(offset) || offset < 0) {
       throw new ValidationError(
         `[gpu-device-api] ${context}: dynamic offset #${i} must be a non-negative integer, got ${String(offset)}.`,
@@ -293,7 +336,7 @@ export function validateDynamicOffsets(
     if (offset % alignment !== 0) {
       throw new ValidationError(
         `[gpu-device-api] ${context}: dynamic offset #${i} (${offset}) must be a multiple of ${alignment} ` +
-          `(${entry.type === 'uniform' ? 'minUniformBufferOffsetAlignment' : 'minStorageBufferOffsetAlignment'}).`,
+          `(${summary.limitNames[i]!}).`,
       );
     }
   }

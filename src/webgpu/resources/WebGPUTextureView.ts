@@ -26,9 +26,17 @@ export class WebGPUTextureView implements TextureView {
 
   private _disposed = false;
 
-  constructor(texture: WebGPUTexture, descriptor: TextureViewDescriptor = {}) {
+  /**
+   * `preResolved` 由 {@link WebGPUTexture.createView} 传入：它已经为查缓存解析过一次，
+   * 这里不再重复解析（`resolveTextureViewDescriptor` 每次都会新建一个对象）。
+   */
+  constructor(
+    texture: WebGPUTexture,
+    descriptor: TextureViewDescriptor = {},
+    preResolved?: ResolvedTextureViewDescriptor,
+  ) {
     this.texture = texture;
-    const resolved = resolveTextureViewDescriptor(texture, descriptor);
+    const resolved = preResolved ?? resolveTextureViewDescriptor(texture, descriptor);
     this.label = descriptor.label ?? `${texture.label}#view`;
 
     const aspect = resolved.aspect;

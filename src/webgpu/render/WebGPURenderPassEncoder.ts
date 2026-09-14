@@ -16,7 +16,7 @@ import type { DrawDescriptor, DrawIndexedDescriptor, DrawIndirectDescriptor } fr
 import type { BufferLike } from '../../core/render/CommandEncoder.js';
 import type { IndexFormat } from '../../core/enums/IndexFormat.js';
 import type { BindGroup } from '../../core/binding/BindGroup.js';
-import type { RenderPipeline } from '../../core/pipeline/RenderPipeline.js';
+import type { RenderPipeline, RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
 import type { Buffer } from '../../core/resources/Buffer.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
@@ -24,7 +24,7 @@ import { ValidationError } from '../../core/errors/ValidationError.js';
 import { asGPUBuffer } from '../resources/WebGPUBuffer.js';
 import { asGPUTextureView } from '../resources/WebGPUTextureView.js';
 import { asGPUQuerySet } from '../resources/WebGPUQuerySet.js';
-import { asGPUBindGroup, validateDynamicOffsets } from '../binding/WebGPUBindGroup.js';
+import { asGPUBindGroup, NO_DYNAMIC_OFFSETS, validateDynamicOffsets } from '../binding/WebGPUBindGroup.js';
 import { asGPURenderPipeline } from '../pipeline/WebGPURenderPipeline.js';
 import { WebGPURenderTarget } from './WebGPURenderTarget.js';
 import { resolveClearColor, toGPUIndexFormat, toGPULoadOp, toGPUStoreOp } from '../utils/wgpuEnumMap.js';
@@ -195,6 +195,21 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
   private readonly onEnd: (() => void) | undefined;
   private _ended = false;
 
+  /**
+   * 一个 pass 的 attachment 布局与 label 在生命周期内都不变，因此「pipeline variant 请求」
+   * 与各处报错用的 context 字符串都在构造时建一次。
+   *
+   * 这些值原先每次 `setPipeline` / `setBindGroup` / `setVertexBuffer` 都会现拼：
+   * 每 draw 一个对象 + 若干模板字符串，在几千个 draw 的帧里是纯浪费。
+   */
+  private readonly variantRequest: Partial<RenderPipelineVariant>;
+  private readonly contextSetPipeline: string;
+  private readonly contextSetBindGroup: string;
+  private readonly contextSetVertexBuffer: string;
+  private readonly contextSetIndexBuffer: string;
+  private readonly contextDrawIndirect: string;
+  private readonly contextDrawIndexedIndirect: string;
+
   constructor(
     device: WebGPUDevice,
     native: GPURenderPassEncoder,
@@ -207,6 +222,19 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
     this.layout = layout;
     this.label = label;
     this.onEnd = onEnd;
+
+    const pass = `RenderPass "${label}"`;
+    this.contextSetPipeline = `${pass}.setPipeline`;
+    this.contextSetBindGroup = `${pass}.setBindGroup`;
+    this.contextSetVertexBuffer = `${pass}.setVertexBuffer`;
+    this.contextSetIndexBuffer = `${pass}.setIndexBuffer`;
+    this.contextDrawIndirect = `${pass}.drawIndirect`;
+    this.contextDrawIndexedIndirect = `${pass}.drawIndexedIndirect`;
+    this.variantRequest = {
+      colorFormats: layout.colorFormats,
+      sampleCount: layout.sampleCount,
+      depthFormat: layout.depthFormat,
+    };
   }
 
   get ended(): boolean {
@@ -215,27 +243,21 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
 
   setPipeline(pipeline: RenderPipeline): void {
     this.assertOpen('setPipeline');
-    this.native.setPipeline(
-      asGPURenderPipeline(pipeline, `RenderPass "${this.label}".setPipeline`, {
-        colorFormats: this.layout.colorFormats,
-        sampleCount: this.layout.sampleCount,
-        depthFormat: this.layout.depthFormat,
-      }),
-    );
+    this.native.setPipeline(asGPURenderPipeline(pipeline, this.contextSetPipeline, this.variantRequest));
   }
 
   setBindGroup(index: number, bindGroup: BindGroup | null, dynamicOffsets?: readonly number[]): void {
     this.assertOpen('setBindGroup');
     if (bindGroup) {
-      validateDynamicOffsets(bindGroup, dynamicOffsets, this.device, `RenderPass "${this.label}".setBindGroup`);
+      validateDynamicOffsets(bindGroup, dynamicOffsets, this.device, this.contextSetBindGroup);
       // 必须把 dynamicOffsets 传给原生调用：布局里声明了 `hasDynamicOffset` 的 entry 要求
       // 这里恰好给出对应数量的偏移，漏传会让 WebGPU 判定「动态偏移数量 0 ≠ 动态 buffer 数量 1」，
       // 整条 command buffer 随之失效（`Invalid CommandBuffer ... due to a previous error`），
       // 于是画面只剩清屏色 —— 而且报错出现在 submit 上，非常难定位。
       this.native.setBindGroup(
         index,
-        asGPUBindGroup(bindGroup, `RenderPass "${this.label}".setBindGroup`),
-        dynamicOffsets ?? [],
+        asGPUBindGroup(bindGroup, this.contextSetBindGroup),
+        dynamicOffsets ?? NO_DYNAMIC_OFFSETS,
       );
       return;
     }
@@ -253,13 +275,13 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
       this.native.setVertexBuffer(slot, null, offset, size);
       return;
     }
-    this.native.setVertexBuffer(slot, asGPUBuffer(buffer, `RenderPass "${this.label}".setVertexBuffer`), offset, size);
+    this.native.setVertexBuffer(slot, asGPUBuffer(buffer, this.contextSetVertexBuffer), offset, size);
   }
 
   setIndexBuffer(buffer: Buffer, format: IndexFormat, offset?: number, size?: number): void {
     this.assertOpen('setIndexBuffer');
     this.native.setIndexBuffer(
-      asGPUBuffer(buffer, `RenderPass "${this.label}".setIndexBuffer`),
+      asGPUBuffer(buffer, this.contextSetIndexBuffer),
       toGPUIndexFormat(format),
       offset,
       size,
@@ -309,13 +331,13 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
 
   drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset = 0): void {
     this.assertOpen('drawIndirect');
-    const resolved = resolveIndirect(indirect, indirectOffset, `RenderPass "${this.label}".drawIndirect`);
+    const resolved = resolveIndirect(indirect, indirectOffset, this.contextDrawIndirect);
     this.native.drawIndirect(resolved.buffer, resolved.offset);
   }
 
   drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset = 0): void {
     this.assertOpen('drawIndexedIndirect');
-    const resolved = resolveIndirect(indirect, indirectOffset, `RenderPass "${this.label}".drawIndexedIndirect`);
+    const resolved = resolveIndirect(indirect, indirectOffset, this.contextDrawIndexedIndirect);
     this.native.drawIndexedIndirect(resolved.buffer, resolved.offset);
   }
 

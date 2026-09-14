@@ -143,6 +143,11 @@ export class WebGPUDevice implements Device {
     return !this._disposed && this.lostInfo === null;
   }
 
+  /** 当前仍在追踪中的资源数量；仅供诊断与测试（core 的 `Device` 接口没有这个成员）。 */
+  get trackedResourceCount(): number {
+    return this.resources.size;
+  }
+
   /** 生成 `prefix#N` 形式的资源 id，供各资源的默认 label 使用。 */
   nextResourceId(prefix: string): string {
     return nextId(prefix);
@@ -298,6 +303,19 @@ export class WebGPUDevice implements Device {
   private track<T extends Disposable>(resource: T): T {
     this.resources.add(resource);
     return resource;
+  }
+
+  /**
+   * 资源在 `destroy()` / `dispose()` 时把自己从追踪集合里摘掉。
+   *
+   * 不做这一步的话，每帧 create/destroy 的工作负载（command encoder、buffer、texture、
+   * bind group……）会让 `resources` 一直强引用这些已经释放的包装对象及其原生句柄，
+   * 直到 `device.dispose()` 才释放 —— 这是实打实的泄漏。
+   *
+   * 幂等：对未追踪（或已摘掉）的资源调用是空操作。
+   */
+  untrack(resource: Disposable): void {
+    this.resources.delete(resource);
   }
 
   private assertUsable(context: string): void {

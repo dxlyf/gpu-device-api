@@ -13,7 +13,7 @@ import type { DispatchIndirectDescriptor } from '../../core/render/DrawCommands.
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { asGPUComputePipeline } from '../pipeline/WebGPUComputePipeline.js';
-import { asGPUBindGroup, validateDynamicOffsets } from '../binding/WebGPUBindGroup.js';
+import { asGPUBindGroup, NO_DYNAMIC_OFFSETS, validateDynamicOffsets } from '../binding/WebGPUBindGroup.js';
 import { asGPUBuffer } from '../resources/WebGPUBuffer.js';
 import { asGPUQuerySet } from '../resources/WebGPUQuerySet.js';
 
@@ -40,6 +40,11 @@ export class WebGPUComputePassEncoder implements ComputePassEncoder {
   private readonly onEnd: (() => void) | undefined;
   private _ended = false;
 
+  /** 同 render pass：label 在生命周期内不变，报错用的 context 只建一次，避免每次调用现拼。 */
+  private readonly contextSetPipeline: string;
+  private readonly contextSetBindGroup: string;
+  private readonly contextDispatchIndirect: string;
+
   constructor(
     device: WebGPUDevice,
     native: GPUComputePassEncoder,
@@ -50,6 +55,11 @@ export class WebGPUComputePassEncoder implements ComputePassEncoder {
     this.native = native;
     this.label = label;
     this.onEnd = onEnd;
+
+    const pass = `ComputePass "${label}"`;
+    this.contextSetPipeline = `${pass}.setPipeline`;
+    this.contextSetBindGroup = `${pass}.setBindGroup`;
+    this.contextDispatchIndirect = `${pass}.dispatchWorkgroupsIndirect`;
   }
 
   get ended(): boolean {
@@ -58,18 +68,18 @@ export class WebGPUComputePassEncoder implements ComputePassEncoder {
 
   setPipeline(pipeline: ComputePipeline): void {
     this.assertOpen('setPipeline');
-    this.native.setPipeline(asGPUComputePipeline(pipeline, `ComputePass "${this.label}".setPipeline`));
+    this.native.setPipeline(asGPUComputePipeline(pipeline, this.contextSetPipeline));
   }
 
   setBindGroup(index: number, bindGroup: BindGroup | null, dynamicOffsets?: readonly number[]): void {
     this.assertOpen('setBindGroup');
     if (bindGroup) {
-      validateDynamicOffsets(bindGroup, dynamicOffsets, this.device, `ComputePass "${this.label}".setBindGroup`);
+      validateDynamicOffsets(bindGroup, dynamicOffsets, this.device, this.contextSetBindGroup);
       // 与渲染通道同理：dynamic offsets 必须真的传给原生调用，漏传会让整条 command buffer 失效。
       this.native.setBindGroup(
         index,
-        asGPUBindGroup(bindGroup, `ComputePass "${this.label}".setBindGroup`),
-        dynamicOffsets ?? [],
+        asGPUBindGroup(bindGroup, this.contextSetBindGroup),
+        dynamicOffsets ?? NO_DYNAMIC_OFFSETS,
       );
       return;
     }
@@ -88,7 +98,7 @@ export class WebGPUComputePassEncoder implements ComputePassEncoder {
 
   dispatchWorkgroupsIndirect(indirect: DispatchIndirectDescriptor | BufferLike, indirectOffset = 0): void {
     this.assertOpen('dispatchWorkgroupsIndirect');
-    const context = `ComputePass "${this.label}".dispatchWorkgroupsIndirect`;
+    const context = this.contextDispatchIndirect;
     if ('indirectBuffer' in indirect) {
       this.native.dispatchWorkgroupsIndirect(
         asGPUBuffer(indirect.indirectBuffer, context),

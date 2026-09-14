@@ -60,6 +60,9 @@ export class WebGPUTexture implements Texture {
   private readonly extent: Extent3D;
   private readonly viewCache = new Map<string, WebGPUTextureView>();
   private readonly viewList: WebGPUTextureView[] = [];
+  /** 无参 `createView()` 的解析结果与 cache key：这是最常见的热路径，只需算一次。 */
+  private defaultViewResolved: TextureView['descriptor'] | null = null;
+  private defaultViewKey: string | null = null;
   private _disposed = false;
 
   private constructor(
@@ -161,17 +164,27 @@ export class WebGPUTexture implements Texture {
   }
 
   /** 按 subresource 选择创建（并缓存）view。 */
-  createView(descriptor: TextureViewDescriptor = {}): WebGPUTextureView {
+  createView(descriptor?: TextureViewDescriptor): WebGPUTextureView {
     if (this._disposed) {
       throw new ValidationError(
         `[gpu-device-api] Texture.createView: texture "${this.label}" has been destroyed.`,
       );
     }
-    // 先按解析后的 descriptor 查缓存，命中时不产生任何 GPUTextureView。
-    const key = viewCacheKey(resolveTextureViewDescriptor(this, descriptor));
+    // 解析后的 descriptor 与 cache key 都只与 subresource 组合有关：
+    // - 无参调用是最常见的热路径，解析结果与 key 在 texture 生命周期内固定，缓存起来；
+    // - 非默认调用解析一次就够，解析结果直接交给 view（原先 view 构造时又解析了一遍）。
+    let resolved: TextureView['descriptor'];
+    let key: string;
+    if (descriptor === undefined) {
+      resolved = this.defaultViewResolved ?? (this.defaultViewResolved = resolveTextureViewDescriptor(this, {}));
+      key = this.defaultViewKey ?? (this.defaultViewKey = viewCacheKey(resolved));
+    } else {
+      resolved = resolveTextureViewDescriptor(this, descriptor);
+      key = viewCacheKey(resolved);
+    }
     const cached = this.viewCache.get(key);
     if (cached) return cached;
-    const view = new WebGPUTextureView(this, descriptor);
+    const view = new WebGPUTextureView(this, descriptor, resolved);
     this.viewCache.set(key, view);
     this.viewList.push(view);
     return view;
@@ -188,7 +201,11 @@ export class WebGPUTexture implements Texture {
     this._disposed = true;
     for (const view of this.viewList) view.dispose();
     this.viewCache.clear();
+    this.defaultViewResolved = null;
+    this.defaultViewKey = null;
     if (this.owned) this.native.destroy();
+    // 通知设备取消追踪；canvas 帧纹理（adopt）本来就没被追踪，delete 是空操作。
+    this.device.untrack(this);
   }
 
   /** `Disposable` 的别名。 */

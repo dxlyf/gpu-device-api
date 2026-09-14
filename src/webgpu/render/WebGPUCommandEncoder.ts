@@ -212,6 +212,7 @@ export class WebGPUCommandEncoder implements CommandEncoder {
   /** 释放本 encoder 的包装对象（不影响已经 finish 出来的 command buffer）。 */
   dispose(): void {
     this._disposed = true;
+    this.device.untrack(this);
   }
 
   private closeOpenPass(): void {

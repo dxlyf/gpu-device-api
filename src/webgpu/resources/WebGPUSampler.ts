@@ -17,9 +17,11 @@ export class WebGPUSampler implements Sampler {
   readonly descriptor: Sampler['descriptor'];
   readonly native: GPUSampler;
 
+  private readonly device: WebGPUDevice;
   private _disposed = false;
 
   constructor(device: WebGPUDevice, descriptor: SamplerDescriptor = {}) {
+    this.device = device;
     this.label = descriptor.label ?? `sampler#${device.nextResourceId('sampler')}`;
     const resolved = resolveSamplerDescriptor(descriptor);
 
@@ -78,6 +80,7 @@ export class WebGPUSampler implements Sampler {
   /** GPUSampler 没有 destroy；释放只是把本包装对象标记为不可用。 */
   dispose(): void {
     this._disposed = true;
+    this.device.untrack(this);
   }
 }
 

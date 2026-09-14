@@ -21,9 +21,11 @@ export class WebGPUQuerySet implements QuerySet {
   readonly count: number;
   readonly native: GPUQuerySet;
 
+  private readonly device: WebGPUDevice;
   private _disposed = false;
 
   constructor(device: WebGPUDevice, descriptor: QuerySetDescriptor) {
+    this.device = device;
     this.label = descriptor.label ?? `querySet#${device.nextResourceId('querySet')}`;
 
     if (!Number.isInteger(descriptor.count) || descriptor.count <= 0) {
@@ -56,6 +58,7 @@ export class WebGPUQuerySet implements QuerySet {
     if (this._disposed) return;
     this._disposed = true;
     this.native.destroy();
+    this.device.untrack(this);
   }
 
   /** `Disposable` 的别名。 */

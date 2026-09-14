@@ -119,6 +119,7 @@ export class WebGPUShaderModule implements ShaderModule {
   dispose(): void {
     this._disposed = true;
     this.modulesByStage.clear();
+    this.device.untrack(this);
   }
 }
 

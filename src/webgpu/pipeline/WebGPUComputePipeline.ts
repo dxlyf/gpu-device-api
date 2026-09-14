@@ -73,6 +73,7 @@ export class WebGPUComputePipeline implements ComputePipeline {
     if (this._disposed) return;
     this._disposed = true;
     this._native = null;
+    this.device.untrack(this);
   }
 }
 

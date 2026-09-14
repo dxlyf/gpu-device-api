@@ -9,6 +9,7 @@
 
 import type { PipelineLayout, PipelineLayoutDescriptor } from '../../core/binding/PipelineLayout.js';
 import type { BindGroupLayout } from '../../core/binding/BindGroupLayout.js';
+import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { asGPUBindGroupLayout } from './WebGPUBindGroupLayout.js';
 
@@ -19,6 +20,8 @@ export class WebGPUPipelineLayout implements PipelineLayout {
   readonly native: GPUPipelineLayout | 'auto';
   readonly isAuto: boolean;
 
+  /** 由 `device.createPipelineLayout()` 创建时有值；`auto` 替身没有设备（也未被追踪）。 */
+  private readonly device: WebGPUDevice | null;
   private _disposed = false;
 
   private constructor(
@@ -26,15 +29,17 @@ export class WebGPUPipelineLayout implements PipelineLayout {
     bindGroupLayouts: readonly BindGroupLayout[],
     native: GPUPipelineLayout | 'auto',
     isAuto: boolean,
+    device: WebGPUDevice | null,
   ) {
     this.label = label;
     this.bindGroupLayouts = bindGroupLayouts;
     this.native = native;
     this.isAuto = isAuto;
+    this.device = device;
   }
 
   /** 创建显式 layout。 */
-  static create(device: import('../WebGPUDevice.js').WebGPUDevice, descriptor: PipelineLayoutDescriptor): WebGPUPipelineLayout {
+  static create(device: WebGPUDevice, descriptor: PipelineLayoutDescriptor): WebGPUPipelineLayout {
     const label = descriptor.label ?? `pipelineLayout#${device.nextResourceId('pipelineLayout')}`;
     if (descriptor.bindGroupLayouts.length > device.limits.maxBindGroups) {
       throw new ValidationError(
@@ -48,12 +53,12 @@ export class WebGPUPipelineLayout implements PipelineLayout {
         asGPUBindGroupLayout(layout, `PipelineLayout "${label}"`),
       ),
     });
-    return new WebGPUPipelineLayout(label, descriptor.bindGroupLayouts, native, false);
+    return new WebGPUPipelineLayout(label, descriptor.bindGroupLayouts, native, false, device);
   }
 
   /** `layout: 'auto'` 的替身：`native` 为字符串 `'auto'`，`isAuto` 为 true。 */
   static auto(label = 'auto'): WebGPUPipelineLayout {
-    return new WebGPUPipelineLayout(label, [], 'auto', true);
+    return new WebGPUPipelineLayout(label, [], 'auto', true, null);
   }
 
   get disposed(): boolean {
@@ -63,6 +68,7 @@ export class WebGPUPipelineLayout implements PipelineLayout {
   /** GPUPipelineLayout 没有 destroy；释放只是把本包装对象标记为不可用。 */
   dispose(): void {
     this._disposed = true;
+    this.device?.untrack(this);
   }
 }
 

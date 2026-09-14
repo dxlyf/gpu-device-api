@@ -135,6 +135,8 @@ export class WebGPUBuffer implements Buffer {
     this._mapped = false;
     this.mappedRange = null;
     this.native.destroy();
+    // 通知设备取消追踪，否则每帧 create/destroy 的 buffer 包装对象会一直留在设备集合里。
+    this.device.untrack(this);
   }
 
   /** `Disposable` 的别名，语义与 {@link WebGPUBuffer.destroy} 相同。 */
