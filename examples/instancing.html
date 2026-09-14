@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>gpu-device-api — WebGL2 / WebGPU 统一抽象示例</title>
+    <title>gpu-device-api — 实例化示例</title>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -18,15 +18,18 @@
       #view { flex: 1; width: 100%; display: block; min-height: 0; }
       footer {
         display: flex;
-        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
         gap: 16px;
         padding: 8px 12px;
         border-top: 1px solid #1d2530;
         background: #0f141b;
       }
       #status { color: #9fb3c8; }
-      #stats { color: #7f8fa4; }
       .grow { flex: 1; }
+      #stats { color: #7f8fa4; }
+      label { display: inline-flex; align-items: center; gap: 6px; color: #9fb3c8; }
+      input[type='range'] { width: 180px; accent-color: #3f7bd8; }
       a { color: #6fa8ff; text-decoration: none; }
       a:hover { text-decoration: underline; }
       .error { color: #ff8b8b; }
@@ -38,8 +41,10 @@
       <span id="status">正在启动…</span>
       <span class="grow"></span>
       <span id="stats"></span>
-      <span><a href="./instancing.html">实例化</a> · <a href="./batch.html">批量</a> · <a href="./smoke.html">冒烟测试</a></span>
+      <label>实例数 <input id="count" type="range" min="1" max="20000" step="1" value="4096" /><span id="count-value">4096</span></label>
+      <label><input id="spin" type="checkbox" checked /> 自转</label>
+      <span><a href="./index.html">demo</a> · <a href="./batch.html">批量示例</a> · <a href="./smoke.html">冒烟测试</a></span>
     </footer>
-    <script type="module" src="./main.ts"></script>
+    <script type="module" src="./instancing.ts"></script>
   </body>
 </html>

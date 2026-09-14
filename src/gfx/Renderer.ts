@@ -100,6 +100,12 @@ export interface RendererStats {
   drawCalls: number;
   triangles: number;
   instances: number;
+  /**
+   * 本帧真正发生的**管线切换**次数：相邻两次 draw 用了不同管线才计数。
+   *
+   * 注意它不是「setPipeline 调用次数」—— 同一个材质连续画 N 个物体共用一条管线，
+   * 切换次数应该是 1（这正是「批量绘制用一条管线」的价值所在，也是这行统计的意义）。
+   */
   pipelineSwitches: number;
   /** 上一帧的 CPU 提交耗时（毫秒）。 */
   frameTime: number;
@@ -144,6 +150,8 @@ export class Renderer {
   private pass: RenderPassEncoder | null = null;
   private commandBuffers: CommandBuffer[] = [];
   private currentMaterial: Material | null = null;
+  /** 上一次 draw 用的管线，用来统计真正的「管线切换」次数（每个通道开头清空）。 */
+  private currentPipeline: RenderPipeline | null = null;
   private defaultTexture: GfxTexture | null = null;
   private frameStart = 0;
   /** 计算法线矩阵时复用的暂存区，避免每帧分配。 */
@@ -359,6 +367,7 @@ export class Renderer {
     this.statsValue.triangles = 0;
     this.statsValue.instances = 0;
     this.statsValue.pipelineSwitches = 0;
+    this.currentPipeline = null;
     this._inFrame = true;
   }
 
@@ -425,6 +434,9 @@ export class Renderer {
       ],
       ...(depthStencilAttachment ? { depthStencilAttachment } : {}),
     });
+
+    // 新通道开始时管线状态要重新绑定，所以第一个 draw 记作一次切换。
+    this.currentPipeline = null;
   }
 
   /** 绘制一个几何体。 */
@@ -443,9 +455,14 @@ export class Renderer {
     const state = this.materials.get(material) ?? (this.createMaterial(material), this.materials.get(material)!);
 
     geometry.validateAgainst(material.attributes, material.name);
+    this.assertInstanceCount(geometry, options.instances);
     const pipeline = this.acquirePipeline(state);
     this.pass.setPipeline(pipeline);
-    this.statsValue.pipelineSwitches += 1;
+    // 只有「和上一次 draw 用的不是同一条管线」才算一次切换。
+    if (this.currentPipeline !== pipeline) {
+      this.currentPipeline = pipeline;
+      this.statsValue.pipelineSwitches += 1;
+    }
 
     /* ---- group 0：uniform ------------------------------------------------------------------ */
     if (material.uniforms && state.values) {
@@ -501,6 +518,28 @@ export class Renderer {
   /** 一次画多个实例（需要材质配合 `perInstance` 属性）。 */
   drawInstanced(geometry: Geometry, instances: number, options: DrawOptions = {}): void {
     this.draw(geometry, { ...options, instances });
+  }
+
+  /**
+   * 实例数与几何体提供的实例数据是否匹配。
+   *
+   * 实例属性的元素个数就是「最多能画多少个实例」：要多了，WebGL2 会静默地读到缓冲区之外的数据
+   *（画面出错但不报错），WebGPU 会在 draw 时报校验错误 —— 两种都不好定位，所以这里提前拦下。
+   */
+  private assertInstanceCount(geometry: Geometry, instances: number | undefined): void {
+    if (instances === undefined) return;
+    if (!Number.isInteger(instances) || instances < 1) {
+      throw new ValidationError(
+        `[gpu-device-api] draw() 的 instances 必须是正整数，实际是 ${String(instances)}。`,
+      );
+    }
+    const available = geometry.instanceCount;
+    if (available !== null && instances > available) {
+      throw new ValidationError(
+        `[gpu-device-api] 几何体「${geometry.label}」只提供了 ${available} 份实例数据，` +
+          `但要画 ${instances} 个实例。请把实例属性（perInstance: true）的数据补足到 ${instances} 份。`,
+      );
+    }
   }
 
   destroy(): void {

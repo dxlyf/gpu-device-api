@@ -15,6 +15,7 @@
 import { ValidationError } from '../core/errors/ValidationError.js';
 import { smallestIndexFormat, type IndexFormat } from '../core/enums/IndexFormat.js';
 import { vertexFormatInfo, type VertexFormat } from '../core/enums/VertexFormat.js';
+import type { VertexStepMode } from '../core/enums/VertexStepMode.js';
 import type { PrimitiveTopology } from '../core/enums/PrimitiveTopology.js';
 import type { Buffer } from '../core/resources/Buffer.js';
 import type { Device } from '../core/Device.js';
@@ -82,6 +83,13 @@ export class Geometry {
   readonly indexBuffer: Buffer | null;
   readonly indexFormat: IndexFormat | null;
   readonly indexCount: number;
+  /**
+   * 按实例步进的属性能提供多少个实例（取各实例属性里最少的那个）；没有实例属性时为 `null`。
+   *
+   * 它和 `vertexCount` 是两回事：实例属性的元素个数可以比顶点数少（典型情况：
+   * 一个盒子的 36 个顶点 + 1000 份实例数据），所以两者分开推断、也分开校验。
+   */
+  readonly instanceCount: number | null;
 
   private _disposed = false;
 
@@ -90,6 +98,7 @@ export class Geometry {
     topology: PrimitiveTopology;
     attributes: Map<string, GeometryAttribute>;
     vertexCount: number;
+    instanceCount: number | null;
     indexBuffer: Buffer | null;
     indexFormat: IndexFormat | null;
     indexCount: number;
@@ -99,6 +108,7 @@ export class Geometry {
     this.attributes = init.attributes;
     this.attributeNames = [...init.attributes.keys()];
     this.vertexCount = init.vertexCount;
+    this.instanceCount = init.instanceCount;
     this.indexBuffer = init.indexBuffer;
     this.indexFormat = init.indexFormat;
     this.indexCount = init.indexCount;
@@ -127,16 +137,23 @@ export class Geometry {
       throw new ValidationError(`[gpu-device-api] 几何体「${label}」至少要有一个顶点属性。`);
     }
 
-    /* ---- 顶点数 ---------------------------------------------------------------------------- */
+    /* ---- 顶点数与实例数 --------------------------------------------------------------------- */
+    // 只有「按顶点步进」的属性参与顶点数推断；实例属性的元素个数是实例数，两者数量本来就可以不同。
     let vertexCount = desc.vertexCount ?? 0;
+    let instanceCount: number | null = null;
     for (const [name, input] of inputs) {
       const format = input.format ?? inferFormat(name, input.data);
       const count = Math.floor(input.data.byteLength / vertexFormatInfo(format).byteSize);
-      if (count > vertexCount) vertexCount = count;
+      if (input.perInstance) {
+        instanceCount = instanceCount === null ? count : Math.min(instanceCount, count);
+      } else if (count > vertexCount) {
+        vertexCount = count;
+      }
     }
     if (vertexCount <= 0) {
       throw new ValidationError(
-        `[gpu-device-api] 几何体「${label}」无法推断顶点数，请检查属性数据是否为空。`,
+        `[gpu-device-api] 几何体「${label}」无法推断顶点数：至少要有一个按顶点步进的属性（实例属性只描述实例，` +
+          '不决定顶点数），并检查属性数据是否为空。',
       );
     }
 
@@ -151,11 +168,13 @@ export class Geometry {
             `不是其格式 ${format}（${info.byteSize} 字节）的整数倍。`,
         );
       }
+      // 按顶点步进的属性必须覆盖全部顶点；实例属性只需要覆盖它自己的实例数（上面已单独推断）。
       const expected = vertexCount * info.byteSize;
-      if (input.data.byteLength < expected) {
+      if (!input.perInstance && input.data.byteLength < expected) {
         throw new ValidationError(
           `[gpu-device-api] 几何体「${label}」的属性「${name}」只有 ${input.data.byteLength} 字节，` +
-            `但按顶点数 ${vertexCount} 需要 ${expected} 字节。所有属性必须提供同样多的顶点。`,
+            `但按顶点数 ${vertexCount} 需要 ${expected} 字节。所有属性必须提供同样多的顶点` +
+            '（只有 `perInstance: true` 的实例属性可以少于顶点数）。',
         );
       }
 
@@ -197,6 +216,7 @@ export class Geometry {
       topology: desc.topology ?? 'triangle-list',
       attributes,
       vertexCount,
+      instanceCount,
       indexBuffer,
       indexFormat,
       indexCount,
@@ -212,9 +232,14 @@ export class Geometry {
     return this.indexBuffer ? this.indexCount : this.vertexCount;
   }
 
-  /** 检查几何体是否提供了材质需要的所有属性，格式是否匹配。 */
+  /**
+   * 检查几何体是否提供了材质需要的所有属性，格式与步进模式是否匹配。
+   *
+   * `stepMode` 必须与数据上传时的 `perInstance` 一致：步进模式对不上时，
+   * 顶点缓冲会按错误的节奏被读取（画出来是乱码而不是报错），所以这里直接拦下。
+   */
   validateAgainst(
-    required: readonly { name: string; format: VertexFormat }[],
+    required: readonly { name: string; format: VertexFormat; stepMode?: VertexStepMode }[],
     materialName: string,
   ): void {
     for (const attribute of required) {
@@ -229,6 +254,16 @@ export class Geometry {
         throw new ValidationError(
           `[gpu-device-api] 几何体「${this.label}」的属性「${attribute.name}」格式是 ${provided.format}，` +
             `但材质「${materialName}」要求 ${attribute.format}。`,
+        );
+      }
+      const wantsPerInstance = (attribute.stepMode ?? 'vertex') === 'instance';
+      if (provided.perInstance !== wantsPerInstance) {
+        throw new ValidationError(
+          `[gpu-device-api] 几何体「${this.label}」的属性「${attribute.name}」是` +
+            `${provided.perInstance ? '按实例' : '按顶点'}步进的，但材质「${materialName}」把它声明成了 ` +
+            `${wantsPerInstance ? "'instance'" : "'vertex'"} 步进。\n` +
+            '两边必须一致：实例化属性要在 Geometry 里写成 `{ data, format, perInstance: true }`，' +
+            "并在材质的 attributes 里写成 `{ format, stepMode: 'instance' }`。",
         );
       }
     }

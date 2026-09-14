@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>bench harness</title>
+  </head>
+  <body>
+    <iframe id="frame" width="900" height="640" style="border: 0"></iframe>
+    <pre id="log"></pre>
+    <script>
+      // 临时调试页：性能基准必须在**真实时间**里跑（--virtual-time-budget 会让 performance.now()
+      // 跟着虚拟时间跳，测出来的数字没有意义），所以这里用 iframe + 轮询，把结果送出来。
+      const lines = [];
+      const report = (m) => {
+        lines.push(m);
+        document.getElementById('log').textContent = lines.join('\n');
+        fetch('http://127.0.0.1:5201/?d=' + encodeURIComponent(lines.join('\n')), { mode: 'no-cors' }).catch(
+          () => {},
+        );
+      };
+      const frame = document.getElementById('frame');
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const page = new URLSearchParams(location.search).get('page') || './benchmark.html';
+      frame.src = page;
+      report('iframe src = ' + page);
+
+      const state = () => {
+        const doc = frame.contentDocument;
+        const ds = doc?.documentElement?.dataset ?? {};
+        const status = doc?.getElementById('status');
+        const progress = doc?.getElementById('progress');
+        return {
+          attrs: { ...ds },
+          status: status ? status.textContent || '' : '',
+          progress: progress ? progress.textContent || '' : '',
+        };
+      };
+
+      (async () => {
+        const started = Date.now();
+        let lastProgress = '';
+        for (;;) {
+          await sleep(1000);
+          const { attrs, status, progress } = state();
+          const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+          if (progress && progress !== lastProgress) {
+            lastProgress = progress;
+            report(`[${elapsed}s] ${progress}`);
+          }
+          if (attrs.benchmarkDone === '1' || attrs.benchmarkError) {
+            report(`[${elapsed}s] ${JSON.stringify(attrs, null, 0)}`);
+            report('status: ' + status);
+            report('DONE');
+            return;
+          }
+          if (Date.now() - started > 240000) {
+            report(`[${elapsed}s] 超时；${JSON.stringify(attrs)}`);
+            report('DONE');
+            return;
+          }
+        }
+      })();
+    </script>
+  </body>
+</html>

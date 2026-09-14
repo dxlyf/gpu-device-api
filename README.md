@@ -54,6 +54,9 @@ renderer.endFrame();
   并生成两边的块声明；`defineMaterial()` 自动补上 attribute 声明、uniform 块、sampler 与片元输出。
 - **uniform arena + 动态偏移**：修掉「改 uniform → draw → 再改 → 再 draw」在两个后端语义不一致的
   问题（见 [两个后端的硬约束](#两个后端的硬约束踩过的坑)）。
+- **实例化与批量的两条路都通**：每实例属性（`stepMode: 'instance'`）一条 draw call 画出上万实例；
+  或者每个物体一次 draw call、各自带自己的 model 与 uniform，共用一条管线。见
+  [示例与自检](#示例与自检)。
 - **可观测**：`device.onError()` 统一上报（WebGPU 的 `onuncapturederror`、WebGL2 的 `getError()`，
   以及本库内部校验失败）；`device.limits` / `device.features` 两个后端都能无差别读取。
 - **逃生口**：`device.native` 是原生的 `GPUDevice` 或 `WebGL2RenderingContext`；`examples/smoke.ts`
@@ -210,8 +213,11 @@ renderer.destroy();
 ```
 
 - `beginPass()` 可以在同一帧里再开一个通道（画到另一个目标，或做后处理）。
-- `draw()` 会自动 `geometry.validateAgainst(material.attributes)`：缺属性或格式不符会立刻报错。
+- `draw()` 会自动 `geometry.validateAgainst(material.attributes)`：缺属性、格式不符、或者
+  **步进模式（vertex / instance）与数据不一致**，都会立刻报错。
 - `drawInstanced(geometry, n, options)` 是 `draw(..., { instances: n })` 的简写。
+- `stats.pipelineSwitches` 统计的是**真正的切换**（相邻两次 draw 用了不同管线才计数）：
+  同一个材质连续画 N 个物体，它是 1 而不是 N。
 
 ### Geometry
 
@@ -228,8 +234,25 @@ const geometry = renderer.createGeometry({
   topology: 'triangle-list',
 });
 
-geometry.vertexCount;   // 按属性数据长度推断
-geometry.indexCount;    // 0 表示非索引绘制
+geometry.vertexCount;    // 只由「按顶点步进」的属性推断
+geometry.indexCount;     // 0 表示非索引绘制
+geometry.instanceCount;  // 实例属性提供多少份实例数据；没有实例属性时为 null
+```
+
+实例化数据写在 `attributes` 里，用 `perInstance: true` 标记 —— 这时它的元素个数**不必**等于顶点数：
+
+```ts
+const instanced = renderer.createGeometry({
+  position: box.position,                          // 24 个顶点
+  normal: box.normal,
+  indices: box.indices,                            // 36 个索引
+  attributes: {
+    // 4096 份实例数据：每个实例读一次
+    instanceOffset: { data: offsets, format: 'float32x3', perInstance: true },
+    instanceColor: { data: colors, format: 'float32x4', perInstance: true },
+    instanceScale: { data: scales, format: 'float32', perInstance: true },
+  },
+});
 ```
 
 标准属性名与默认格式：`position`/`normal` → `float32x3`、`uv`/`uv1` → `float32x2`、
@@ -256,6 +279,25 @@ const lambert = defineMaterial({
   blend: 'alpha', cullMode: 'back', depthTest: true,
   dynamicUniforms: true,                                          // 默认走 arena 动态偏移
 });
+```
+
+实例化属性在材质这一侧写成 `{ format, stepMode: 'instance' }`（必须与几何体的 `perInstance` 一致），
+之后它就和普通属性一样在着色器里按名字使用：
+
+```ts
+const instanced = defineMaterial({
+  name: 'instanced',
+  attributes: {
+    position: 'float32x3',
+    normal: 'float32x3',
+    instanceOffset: { format: 'float32x3', stepMode: 'instance' },
+    instanceColor: { format: 'float32x4', stepMode: 'instance' },
+    instanceScale: { format: 'float32', stepMode: 'instance' },
+  },
+  // ... uniforms / glsl / wgsl
+});
+
+renderer.drawInstanced(geometry, 4096, { model });   // 一次 draw call 画出 4096 个实例
 ```
 
 - `glsl` 分 vs / fs，`wgsl` 是**一个模块**（含顶点与片元两个入口），因为
@@ -321,11 +363,32 @@ u.set('bones', boneMatrices);
 | 页面 | 内容 |
 | --- | --- |
 | `examples/index.html` | gfx 层的完整 demo：lil-gui 调参、切换后端、几何体/材质/光照切换 |
+| `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
+| `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
 | `examples/smoke.html` | core 层的浏览器内冒烟测试：15 项检查，含像素级断言（canvas 中央、离屏目标角落） |
 
-`examples/index.html` 支持查询参数覆盖，便于无头脚本：`?backend=webgl2|webgpu|auto&shape=box&material=unlit&grid=0&verify=1`。
-加 `verify=1` 时会额外把场景画进一张 64×64 离屏目标并读回中心/角落像素，把结果写在
-`<html data-demo-pixel / data-demo-pixel-corner / data-demo-pixel-lit / data-demo-error>` 上 ——
+**实例化 vs 批量**（两个示例正好是一对）：
+
+| | 实例化（`instancing.html`） | 批量（`batch.html`） |
+| --- | --- | --- |
+| draw call | 1（与实例数无关） | 每个物体 1 次 |
+| 差异放在哪 | 顶点缓冲里的**每实例属性**（`stepMode: 'instance'`） | `draw()` 的 `model` 与 `uniforms`（走 arena 动态偏移） |
+| 适合 | 同一网格的海量副本（草、粒子、体素） | 物体各自有独立参数/材质变体，数量在千级以内 |
+| 上限 | 实例数可以上万 | 受 draw call 与 uniform 带宽限制 |
+
+三个页面都支持 `?backend=webgl2|webgpu|auto`；`instancing.html` 另支持 `&count=`、`batch.html` 支持 `&side=`、
+两者都支持 `&spin=0` 与 `&verify=1`。加 `verify=1` 会额外把场景画进一张离屏目标并读回像素（复用
+`examples/offscreen-verify.ts`），把结论写在 `<html>` 的 `data-*` 上：
+
+- `index.html` → `data-demo-pixel / -pixel-corner / -pixel-lit / -error`
+- `instancing.html` → `data-instancing-backend / -count / -drawcalls / -instances / -pixel / -lit-pixels / -distinct / -lit / -error`
+- `batch.html` → `data-batch-backend / -items / -drawcalls / -pipeline-switches / -pixel / -lit-pixels / -distinct / -lit / -error`
+
+其中 `-lit` 的判据不只是「有像素被光栅化」，还要求画面上出现**多种颜色**：只剩一种颜色通常意味着
+每实例数据没生效、或者每次 draw 的 uniform 串到了同一段内存（这两个后端的两种典型故障）。
+
+`examples/index.html` 的查询参数：`?backend=webgl2|webgpu|auto&shape=box&material=unlit&grid=0&verify=1`。
+`verify=1` 的结果写在 `<html data-demo-pixel / data-demo-pixel-corner / data-demo-pixel-lit / data-demo-error>` 上 ——
 这是**后端无关**的像素级自检（绘制走 gfx、读回走 core 的 `copyTextureToBuffer`）。
 
 无头 Chrome 跑这两个页面（本仓库实际使用的配方）：
@@ -425,7 +488,7 @@ WebGPU 提交时生效、WebGL2 立即生效。**不要在同一帧内对同一 
 
 ### 测试构成
 
-`test/` 下 6 个文件、119 条用例，全部跑在 **node** 环境（不需要浏览器）：
+`test/` 下 6 个文件、122 条用例，全部跑在 **node** 环境（不需要浏览器）：
 
 | 文件 | 覆盖 |
 | --- | --- |
@@ -436,8 +499,9 @@ WebGPU 提交时生效、WebGL2 立即生效。**不要在同一帧内对同一 
 | `test/utils.test.ts` | 断言、TypedArray、位标志、logger |
 | `test/factories.test.ts` | 后端探测、回退与错误路径 |
 
-**像素级**的验证放在浏览器里：`examples/smoke.html`（core 层 15 项）与
-`examples/index.html?verify=1`（gfx 层）。改动渲染路径后请两者都跑一遍，两个后端都要看。
+**像素级**的验证放在浏览器里：`examples/smoke.html`（core 层 15 项）、
+`examples/index.html?verify=1`（gfx 层）以及 `examples/instancing.html?verify=1` /
+`examples/batch.html?verify=1`（实例化与批量各自的像素自检）。改动渲染路径后请都跑一遍，两个后端都要看。
 
 ### 代码约定
 

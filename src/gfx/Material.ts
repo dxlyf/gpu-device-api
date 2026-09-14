@@ -47,6 +47,7 @@ import type { CompareFunction } from '../core/enums/CompareFunction.js';
 import type { CullMode } from '../core/enums/CullMode.js';
 import type { FrontFace } from '../core/enums/FrontFace.js';
 import type { PrimitiveTopology } from '../core/enums/PrimitiveTopology.js';
+import type { VertexStepMode } from '../core/enums/VertexStepMode.js';
 import type { BindGroupLayoutEntry, TextureSampleType } from '../core/binding/BindingTypes.js';
 import type { BindGroupLayout } from '../core/binding/BindGroupLayout.js';
 import type { PipelineLayout } from '../core/binding/PipelineLayout.js';
@@ -86,13 +87,22 @@ export interface MaterialTextureDesc {
 
 export type BlendPresetName = 'none' | 'alpha' | 'premultiplied' | 'additive' | 'multiply' | 'screen';
 
+/**
+ * 单个顶点属性的声明。
+ *
+ * 直接给格式字符串（`'float32x3'`）表示「按顶点步进」；实例化属性写成
+ * `{ format: 'float32x3', stepMode: 'instance' }` —— 这时它对每个实例读一次，
+ * 而不是对每个顶点读一次（几何体那边对应的数据也要用 `perInstance: true` 上传）。
+ */
+export type MaterialAttributeInput = VertexFormat | { format: VertexFormat; stepMode?: VertexStepMode };
+
 export interface MaterialDesc {
   name?: string;
   /**
-   * 顶点属性：名字 → 格式。**声明顺序即 shaderLocation（从 0 开始）**，
+   * 顶点属性：名字 → 格式（或 `{ format, stepMode }`）。**声明顺序即 shaderLocation（从 0 开始）**，
    * 所以渲染器绑定顶点缓冲时也按这个顺序取槽位。
    */
-  attributes?: Record<string, VertexFormat>;
+  attributes?: Record<string, MaterialAttributeInput>;
   /** uniform 布局：描述对象或已定义好的 {@link UniformLayout}。 */
   uniforms?: UniformLayoutDesc | UniformLayout | null;
   /** 采样的纹理。 */
@@ -229,8 +239,13 @@ function inject(source: string, blocks: readonly { placeholder: string; text: st
 export class Material {
   readonly name: string;
   readonly desc: MaterialDesc;
-  /** 属性名 → 格式，顺序即 shaderLocation。 */
-  readonly attributes: readonly { name: string; format: VertexFormat; location: number }[];
+  /** 属性名 → 格式 / 步进模式，顺序即 shaderLocation。 */
+  readonly attributes: readonly {
+    name: string;
+    format: VertexFormat;
+    location: number;
+    stepMode: VertexStepMode;
+  }[];
   readonly uniforms: UniformLayout | null;
   readonly textures: readonly ResolvedMaterialTexture[];
 
@@ -249,7 +264,10 @@ export class Material {
         `[gpu-device-api] 材质「${this.name}」声明了 ${attributeEntries.length} 个顶点属性，超过 WebGL2/WebGPU 的 16 个上限。`,
       );
     }
-    this.attributes = attributeEntries.map(([name, format], index) => ({ name, format, location: index }));
+    this.attributes = attributeEntries.map(([name, input], index) => {
+      const resolved = typeof input === 'string' ? { format: input, stepMode: 'vertex' as const } : input;
+      return { name, format: resolved.format, location: index, stepMode: resolved.stepMode ?? 'vertex' };
+    });
 
     /* ---- uniform --------------------------------------------------------------------------- */
     if (desc.uniforms instanceof UniformLayoutClass) {
@@ -347,11 +365,14 @@ export class Material {
     return new Material(desc);
   }
 
-  /** 顶点缓冲布局：每个属性一个缓冲槽，步长就是该格式的字节数（几何体按属性分开存）。 */
+  /**
+   * 顶点缓冲布局：每个属性一个缓冲槽，步长就是该格式的字节数（几何体按属性分开存），
+   * `stepMode` 取自声明 —— 实例化属性就是 `'instance'`。
+   */
   vertexBufferLayouts(): VertexBufferLayout[] {
     return this.attributes.map((attribute) => ({
       arrayStride: vertexFormatInfo(attribute.format).byteSize,
-      stepMode: 'vertex' as const,
+      stepMode: attribute.stepMode,
       attributes: [{ shaderLocation: attribute.location, offset: 0, format: attribute.format }],
     }));
   }

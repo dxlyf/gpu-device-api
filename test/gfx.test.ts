@@ -376,6 +376,37 @@ void main() {
     expect(layouts[1]!.attributes[0]).toMatchObject({ shaderLocation: 1, format: 'unorm8x4' });
   });
 
+  it('实例化属性用 stepMode: instance 生成布局，并在两种着色器里都声明出来', () => {
+    const material = defineMaterial({
+      name: 'instanced',
+      attributes: {
+        position: 'float32x3',
+        instanceOffset: { format: 'float32x3', stepMode: 'instance' },
+        instanceScale: { format: 'float32', stepMode: 'instance' },
+      },
+      glsl: { vs: 'void main() {}', fs: 'void main() { fragColor = vec4(1.0); }' },
+      wgsl: '@fragment fn fsMain() -> @location(0) vec4f { return vec4f(1.0); }',
+    });
+
+    expect(material.attributes.map((attribute) => attribute.stepMode)).toEqual([
+      'vertex',
+      'instance',
+      'instance',
+    ]);
+
+    const layouts = material.vertexBufferLayouts();
+    // 按顶点步进 → divisor 0；按实例步进 → divisor 1（WebGL2 的 vertexAttribDivisor / WebGPU 的 stepMode）。
+    expect(layouts[0]).toMatchObject({ arrayStride: 12, stepMode: 'vertex' });
+    expect(layouts[1]).toMatchObject({ arrayStride: 12, stepMode: 'instance' });
+    expect(layouts[2]).toMatchObject({ arrayStride: 4, stepMode: 'instance' });
+
+    // 声明注入后，实例属性就是普通的 in / @location 属性，名字与 attributes 的键一致。
+    expect(material.glsl.vs).toContain('layout(location = 1) in vec3 instanceOffset;');
+    expect(material.glsl.vs).toContain('layout(location = 2) in float instanceScale;');
+    expect(material.wgsl).toContain('@location(1) instanceOffset: vec3f,');
+    expect(material.wgsl).toContain('@location(2) instanceScale: f32,');
+  });
+
   it('没有 uniform 时纹理落在 group 0，不会出现空的 group 0', () => {
     const material = defineMaterial({
       name: 'texture-only',
@@ -545,6 +576,64 @@ describe('Geometry：数据打包与校验', () => {
         uv: new Float32Array([0, 0]),
       }),
     ).toThrowError(/所有属性必须提供同样多的顶点/);
+  });
+
+  it('实例化几何体：顶点数只看按顶点步进的属性，实例数单独推断', () => {
+    const { device } = createFakeDevice();
+    const geometry = Geometry.create(device, {
+      label: 'instanced-quad',
+      // 3 个顶点
+      position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      attributes: {
+        // 6 份实例数据（比顶点数多，也不受顶点数约束）
+        instanceOffset: { data: new Float32Array(6 * 3), format: 'float32x3', perInstance: true },
+      },
+    });
+
+    expect(geometry.vertexCount).toBe(3);
+    expect(geometry.instanceCount).toBe(6);
+    expect(geometry.attributes.get('instanceOffset')!.perInstance).toBe(true);
+    expect(geometry.drawCount).toBe(3);
+
+    // 没有实例属性时 instanceCount 是 null（绘制实例数不受限）。
+    const plain = Geometry.create(device, { position: new Float32Array([0, 0, 0]) });
+    expect(plain.instanceCount).toBeNull();
+    geometry.destroy();
+    plain.destroy();
+  });
+
+  it('属性的步进模式必须与材质声明一致', () => {
+    const { device } = createFakeDevice();
+    const geometry = Geometry.create(device, {
+      label: 'instanced',
+      position: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      attributes: {
+        instanceOffset: { data: new Float32Array([0, 0, 0, 1, 1, 1]), format: 'float32x3', perInstance: true },
+      },
+    });
+
+    // 一致时通过
+    expect(() =>
+      geometry.validateAgainst(
+        [
+          { name: 'position', format: 'float32x3', stepMode: 'vertex' },
+          { name: 'instanceOffset', format: 'float32x3', stepMode: 'instance' },
+        ],
+        'instanced',
+      ),
+    ).not.toThrow();
+
+    // 材质漏写 stepMode：数据是按实例步进的，材质却当成按顶点步进
+    expect(() =>
+      geometry.validateAgainst([{ name: 'instanceOffset', format: 'float32x3' }], 'instanced'),
+    ).toThrowError(/是按实例步进的，但材质「instanced」把它声明成了 'vertex' 步进/);
+
+    // 反过来：把按顶点步进的 position 声明成了实例属性
+    expect(() =>
+      geometry.validateAgainst([{ name: 'position', format: 'float32x3', stepMode: 'instance' }], 'instanced'),
+    ).toThrowError(/是按顶点步进的，但材质「instanced」把它声明成了 'instance' 步进/);
+
+    geometry.destroy();
   });
 
   it('无法推断的格式要求显式指定', () => {

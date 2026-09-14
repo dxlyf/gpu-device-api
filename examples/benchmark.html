@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — core 层性能基准</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: #0b0e13;
+        color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #view { flex: 1 1 auto; width: 100%; display: block; min-height: 180px; }
+      #panel { border-top: 1px solid #1d2530; background: #0f141b; padding: 10px 12px; max-height: 55vh; overflow: auto; }
+      .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; }
+      label { display: inline-flex; align-items: center; gap: 6px; color: #9fb3c8; }
+      select, input[type='number'], button {
+        background: #16202b; color: #d7dde5; border: 1px solid #26333f; border-radius: 4px;
+        padding: 3px 6px; font: inherit;
+      }
+      button { cursor: pointer; }
+      button:hover { border-color: #3f7bd8; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #1a2430; white-space: nowrap; }
+      th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
+      thead th { color: #8fa3b8; font-weight: 600; }
+      tbody tr.done td { color: #d7dde5; }
+      tbody tr.pending td { color: #55677a; }
+      tbody tr.skipped td { color: #c8a06a; }
+      .hint { color: #7f8fa4; margin-top: 8px; }
+      .hint code { color: #b9c7d6; }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .grow { flex: 1; }
+      #stats { color: #7f8fa4; }
+      a { color: #6fa8ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .error { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <section id="panel">
+      <div class="controls">
+        <label>模式
+          <select id="mode">
+            <option value="instanced">实例化（1 次 draw call）</option>
+            <option value="draws">逐个绘制（N 次 draw call）</option>
+          </select>
+        </label>
+        <label>每档测量帧数 <input id="frames" type="number" min="3" max="300" step="1" value="30" /></label>
+        <button id="rerun">重新测量</button>
+        <span id="progress" class="hint"></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>图形数</th><th>draw calls</th><th>三角形/帧</th><th>帧耗时(均值)</th>
+            <th>最小</th><th>最大</th><th>CPU 提交(均值)</th><th>FPS</th><th>每秒三角形</th><th>说明</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="hint">
+        只用 <code>src/index.ts</code>（core + factories + utils）实现，**没有**用到 <code>src/gfx</code> 便捷层：
+        着色器、顶点/实例缓冲、uniform 块、bind group、管线、通道全部手写。每档先空跑若干帧热身，
+        再逐帧 `performance.now()` 计时并用 <code>queue.onSubmittedWorkDone()</code> 等到 GPU 真正做完
+        （WebGL2 是 <code>gl.finish()</code>，WebGPU 是队列排空），所以「帧耗时」包含 GPU 时间。
+        画布通道没有深度附件（本抽象不提供 canvas 深度缓冲），因此这里测的是顶点/实例吞吐与填充开销；
+        逐帧几何数据在整个测量过程中不变，避免把上传开销算进来。
+      </p>
+    </section>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span class="grow"></span>
+      <span id="stats"></span>
+      <span><a href="./index.html">demo</a> · <a href="./instancing.html">实例化</a> · <a href="./batch.html">批量</a> · <a href="./smoke.html">冒烟测试</a></span>
+    </footer>
+    <script type="module" src="./benchmark.ts"></script>
+  </body>
+</html>
