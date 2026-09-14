@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>gpu-device-api — core 层性能基准</title>
+    <title>gpu-device-api — core 层性能基准（真实几何 + 动态场景）</title>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -16,7 +16,7 @@
         font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
       }
       #view { flex: 1 1 auto; width: 100%; display: block; min-height: 180px; }
-      #panel { border-top: 1px solid #1d2530; background: #0f141b; padding: 10px 12px; max-height: 55vh; overflow: auto; }
+      #panel { border-top: 1px solid #1d2530; background: #0f141b; padding: 10px 12px; max-height: 62vh; overflow: auto; }
       .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; }
       label { display: inline-flex; align-items: center; gap: 6px; color: #9fb3c8; }
       select, input[type='number'], button {
@@ -25,6 +25,7 @@
       }
       button { cursor: pointer; }
       button:hover { border-color: #3f7bd8; }
+      button:disabled { cursor: progress; color: #55677a; }
       table { border-collapse: collapse; width: 100%; }
       th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #1a2430; white-space: nowrap; }
       th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
@@ -34,6 +35,10 @@
       tbody tr.skipped td { color: #c8a06a; }
       .hint { color: #7f8fa4; margin-top: 8px; }
       .hint code { color: #b9c7d6; }
+      #out {
+        margin: 10px 0 0; padding: 8px 10px; background: #0b1017; border: 1px solid #1a2430; border-radius: 4px;
+        color: #b9c7d6; white-space: pre-wrap; min-height: 1.5em;
+      }
       footer {
         display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
         padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
@@ -52,8 +57,14 @@
       <div class="controls">
         <label>模式
           <select id="mode">
-            <option value="instanced">实例化（1 次 draw call）</option>
-            <option value="draws">逐个绘制（N 次 draw call）</option>
+            <option value="instanced">实例化（1 次 draw call，矩阵走实例属性）</option>
+            <option value="draws">逐个绘制（每物体 1 次 draw call，uniform 动态偏移）</option>
+          </select>
+        </label>
+        <label>运动
+          <select id="motion">
+            <option value="on">动态（每帧重算 + 上传矩阵）</option>
+            <option value="off">静态（矩阵只上传一次）</option>
           </select>
         </label>
         <label>每档测量帧数 <input id="frames" type="number" min="3" max="300" step="1" value="30" /></label>
@@ -63,26 +74,53 @@
       <table>
         <thead>
           <tr>
-            <th>图形数</th><th>draw calls</th><th>三角形/帧</th><th>帧耗时(均值)</th>
-            <th>最小</th><th>最大</th><th>CPU 提交(均值)</th><th>FPS</th><th>每秒三角形</th><th>说明</th>
+            <th>物体数</th><th>draw calls</th><th>顶点/帧</th><th>三角形/帧</th>
+            <th>帧耗时(均值,含同步)</th><th>FPS(含同步)</th><th>最小</th><th>最大</th>
+            <th>CPU 提交(无同步)</th><th>CPU 提交(含同步)</th><th>GPU 同步等待</th>
+            <th>每 draw µs</th><th>每物体 µs</th><th>draws/s</th><th>每秒三角形</th>
+            <th>移动开销 ΔCPU/Δ帧</th><th>测帧数</th><th>说明</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
+      <pre id="out">正在启动…</pre>
       <p class="hint">
-        只用 <code>src/index.ts</code>（core + factories + utils）实现，**没有**用到 <code>src/gfx</code> 便捷层：
-        着色器、顶点/实例缓冲、uniform 块、bind group、管线、通道全部手写。每档先空跑若干帧热身，
-        再逐帧 `performance.now()` 计时并用 <code>queue.onSubmittedWorkDone()</code> 等到 GPU 真正做完
-        （WebGL2 是 <code>gl.finish()</code>，WebGPU 是队列排空），所以「帧耗时」包含 GPU 时间。
-        画布通道没有深度附件（本抽象不提供 canvas 深度缓冲），因此这里测的是顶点/实例吞吐与填充开销；
-        逐帧几何数据在整个测量过程中不变，避免把上传开销算进来。
+        这一版量的是**真实负载**：几何体是盒子（24 顶点 / 36 索引 / 12 三角形，position + normal + uv 三个属性），
+        片元着色器做方向光 + 半球环境光 + 基于 uv 的明暗，所以顶点数、属性带宽、矩阵运算、填充率都不是零成本。
+        默认（<code>?motion=on</code>）下**每个物体每帧都在动**：各自的自转角速度、相位、环绕半径、上下浮动幅度
+        （确定性哈希生成，刷新后画面一致）每帧重算 <code>model = T·R·S</code> 并**把整段每物体矩阵重新上传** ——
+        旧版把这一整块成本藏起来了。选「静态」或加 <code>?motion=off</code> 可只测「矩阵上传一次」，
+        动态档里也会自动跑一遍静态对照，直接给出「动起来多花多少」。
+      </p>
+      <p class="hint">
+        计时口径：每档先热身几帧，然后测两轮。<b>第一轮完全不同步</b> —— 只计时
+        「重算矩阵 + 上传 + 录制 + 提交」的 CPU 时间（队列空着起跑，因此最接近纯 CPU 成本；
+        驱动队列满时会被反压）。<b>第二轮逐帧同步</b> —— WebGL2 用 1×1 <code>readPixels</code>
+        强制同步（<code>gl.finish()</code> 在 WebGL 里并不保证 GPU 做完），WebGPU 用
+        <code>queue.onSubmittedWorkDone()</code>。同步这一轮把 CPU/GPU 串行化，所以
+        「帧耗时(均值,含同步)」是**偏悲观的上界**，「GPU 同步等待」是提交后等后端做完的时间。
+        大档会按 <code>framesForCount</code> 降帧（见「测帧数」），单帧探测超过 2 秒的档会跳过。
+        注意在软件光栅化（SwiftShader）上，GPU 一帧要几十毫秒，不同步那一轮很快就被驱动队列反压，
+        所以它的<b>均值</b>会偏高、帧间方差也大 —— <code>data-benchmark-cpu-submit</code> 里的
+        <code>min</code> 才是最干净的「纯 CPU 一帧」。<code>每 draw µs</code> 在实例化模式下分母是
+        1 次 draw call（等于整帧 CPU 时间），看<code>每物体 µs</code>才有意义。
+        另外在 GPU 受限时（尤其是软件光栅化），「移动开销 Δ帧」可能接近 0 甚至为负：这一帧的
+        CPU 矩阵重算与上一帧的 GPU 工作重叠了，只有 ΔCPU 如实反映「动起来」的代价。
+      </p>
+      <p class="hint">
+        渲染通道的深度附件来自 <code>context.createPassDescriptor()</code>：canvas 纹理本身没有深度附件，
+        旧版直接用帧 view 拼 colorAttachments，结果是 WebGL2 静默关掉 <code>DEPTH_TEST</code>、
+        WebGPU 解析成没有深度状态的管线变体。跑完还会做一次离屏 readback 自检：
+        <code>benchmarkLit</code> 证明真的画出了东西，<code>benchmarkMoved</code>/<code>benchmarkMotionPixels</code>
+        证明动态模式下相隔 0.5 秒的两帧画面确实不同。查询参数：
+        <code>?backend=webgl2|webgpu|auto&amp;mode=instanced|draws&amp;motion=on|off&amp;frames=30&amp;counts=2000,5000</code>。
       </p>
     </section>
     <footer>
       <span id="status">正在启动…</span>
       <span class="grow"></span>
       <span id="stats"></span>
-      <span><a href="./gallery.html">示例汇总</a> · <a href="./index.html">demo</a> · <a href="./instancing.html">实例化</a> · <a href="./batch.html">批量</a> · <a href="./core-triangle.html">core 示例</a></span>
+      <span><a href="./gfx-benchmark.html">gfx 基准</a> · <a href="./gallery.html">示例汇总</a> · <a href="./index.html">demo</a> · <a href="./instancing.html">实例化</a> · <a href="./core-triangle.html">core 示例</a></span>
     </footer>
     <script type="module" src="./benchmark.ts"></script>
   </body>

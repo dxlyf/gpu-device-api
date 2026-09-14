@@ -16,9 +16,10 @@
  * - 每次 draw 一次 `setBindGroup`（带动态偏移的数组）；
  * - 按材质属性逐个绑定顶点缓冲（`lambert` 有 position / normal / uv，即每 draw 3 次 `setVertexBuffer`）。
  *
- * 两页共用同一套分档（2000 / 5000 / 10000 / 20000 / 40000）与同一个「每物体一次 draw call」的形状，
- * 所以 `gfxBenchmarkResults` 与 `benchmarkResults` 里同档的 CPU 帧耗时**可以直接相减**，
- * 差值就是便捷层的净开销。
+ * 两页共用同一套分档（2000 / 5000 / 10000 / 20000 / 40000），所以可以和 core 页的对应档位对照。
+ * 但要注意 `benchmark.ts` 已经改成**动态场景**（每帧重建 model 并重新上传实例矩阵），
+ * 要和本页（静态、每 draw 一次 `renderer.draw`）比，请用它的静态档：
+ * `benchmark.html?motion=off&mode=draws` —— 同档 CPU 帧耗时的差值才是便捷层的净开销。
  *
  * ## 计时口径（与 `benchmark.ts` 的关键差别）
  *

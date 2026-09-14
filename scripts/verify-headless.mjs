@@ -138,6 +138,19 @@ const expression = `JSON.stringify({
   text: (document.getElementById('out') ?? document.getElementById('progress'))?.textContent ?? '',
 })`;
 
+/**
+ * 页面上写进 `data-<key>` 的值算不算「已经有结论」。
+ *
+ * 不能只判真假：页面在开始时写的 `0` / `false`（字符串或数字）都是真值，
+ * 会被误判成「已经跑完」（曾经把 WebGPU 的 benchmark 提前当成 done）。
+ * `fail` 仍算结论 —— 失败也要立刻报出来，而不是等到超时。
+ */
+function isTerminalResult(result) {
+  if (result === undefined || result === null) return false;
+  const text = String(result).trim();
+  return text !== '' && text !== '0' && text !== 'false' && text !== 'running';
+}
+
 const deadline = Date.now() + options.timeout;
 let payload = null;
 while (Date.now() < deadline) {
@@ -145,12 +158,12 @@ while (Date.now() < deadline) {
   const value = evaluated?.result?.value;
   if (typeof value === 'string') {
     payload = JSON.parse(value);
-    if (payload.result) break;
+    if (isTerminalResult(payload.result)) break;
   }
   await sleep(400);
 }
 
-if (!payload?.result) {
+if (!isTerminalResult(payload?.result)) {
   console.error(`[gpu-device-api] verify-headless: timed out waiting for data-${options.wait}.`);
   if (payload) console.error(JSON.stringify(payload.data, null, 2));
   shutdown();
