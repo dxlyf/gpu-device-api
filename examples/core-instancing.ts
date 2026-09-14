@@ -31,6 +31,17 @@ const UNIFORM_BYTES = 96; // mat4 projectionView(64) + f32 scale(4) + vec3 paddi
 const MAX_COUNT = 20000;
 const DEFAULT_COUNT = 4096;
 const SPREAD = 10;
+/**
+ * 每实例在格子内的最大位移（单位：格子）。
+ *
+ * 这个值必须和 {@link QUAD_SCALE} 一起改：两者决定相邻实例的四边形会不会**互相覆盖**。
+ * 之前是 jitter 0.6 / 尺寸 0.8 倍格距，四边形之间会露出背景色 —— 放大的时候就是一片
+ * 「黑色小点」（其实是清屏色从缝隙里透出来），看起来像缺陷。现在保证
+ * `QUAD_SCALE ≥ 1 + 2 * JITTER`，相邻实例一定重叠，不再漏底。
+ */
+const JITTER = 0.35;
+/** 四边形边长相对格距的倍数；见 {@link JITTER}。 */
+const QUAD_SCALE = 1.4;
 
 const VERTEX_GLSL = `
 layout(location = 0) in vec3 position;
@@ -123,9 +134,9 @@ function buildInstanceData(count: number): InstanceData {
     const ix = i % side;
     const iy = Math.floor(i / side) % side;
     const iz = Math.floor(i / (side * side));
-    offsets[i * 3] = ((ix + 0.5) / side - 0.5 + (hash(i, 11) - 0.5) * 0.6) * SPREAD;
-    offsets[i * 3 + 1] = ((iy + 0.5) / side - 0.5 + (hash(i, 12) - 0.5) * 0.6) * SPREAD;
-    offsets[i * 3 + 2] = ((iz + 0.5) / side - 0.5 + (hash(i, 13) - 0.5) * 0.6) * SPREAD;
+    offsets[i * 3] = ((ix + 0.5) / side - 0.5 + (hash(i, 11) - 0.5) * JITTER) * SPREAD;
+    offsets[i * 3 + 1] = ((iy + 0.5) / side - 0.5 + (hash(i, 12) - 0.5) * JITTER) * SPREAD;
+    offsets[i * 3 + 2] = ((iz + 0.5) / side - 0.5 + (hash(i, 13) - 0.5) * JITTER) * SPREAD;
     const color = PALETTE[i % PALETTE.length]!;
     colors[i * 4] = color[0];
     colors[i * 4 + 1] = color[1];
@@ -183,7 +194,7 @@ async function main(): Promise<void> {
 
   /* ---- uniform：projectionView(64) + pointSize(4) + 12 字节填充 = 96 ------------------------- */
   const uniformData = new Float32Array(UNIFORM_BYTES / 4);
-  uniformData[16] = (SPREAD / Math.ceil(Math.cbrt(count))) * 0.8;
+  uniformData[16] = (SPREAD / Math.ceil(Math.cbrt(count))) * QUAD_SCALE;
   const uniforms = createUniformBinding(device, { name: 'Uniforms', size: UNIFORM_BYTES });
 
   const projectionGL = mat4.create();
