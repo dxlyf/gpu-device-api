@@ -1,6 +1,6 @@
 {
   "name": "@dxyl/gpu-device-api",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Unified low-level WebGL2 / WebGPU abstraction library for easy drawing on either backend.",
   "type": "module",
   "sideEffects": false,

@@ -101,7 +101,7 @@ pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```ts
 import {
   createDevice, createDeviceWithAdapter, detectBackend,   // factories：后端探测与选择
-  BufferUsage, TextureUsage, TextureFormat,                // core：枚举、资源、绑定、管线、通道
+  BufferUsage, TextureUsage, PrimitiveTopology,            // core：枚举、资源、绑定、管线、通道
   ValidationError,                                         // core：错误类型
   registerShader, compileShaderStage,                      // shaders：源码管理与编译
   mat4, vec3, degToRad, createLogger, disposeAll,          // utils：数学、日志、批量释放
@@ -137,7 +137,7 @@ src/
 所以热路径上不产生临时分配；`euler` / `box3` / `frustum` / `raycaster` 这几类带自身状态的用对象：
 
 ```ts
-import { vec3, mat4, quat, euler, ray, box3, frustum, color, raycaster } from 'gpu-device-api';
+import { vec3, mat4, quat, euler, ray, box3, frustum, color, raycaster } from '@dxyl/gpu-device-api';
 
 // Euler(弧度) → 四元数 → 模型矩阵：每一步都把结果写进已有对象
 const q = euler.toQuaternion(quat.create(), euler.set(euler.create(), 0, Math.PI / 4, 0));
@@ -174,7 +174,7 @@ core 是「显式、无魔法」的一层：资源、管线、通道都自己建
 下面这段与 `examples/smoke.ts` 里 15/15 通过的那段代码同构：
 
 ```ts
-import { createDeviceWithAdapter, BufferUsage } from 'gpu-device-api';
+import { createDeviceWithAdapter, BufferUsage } from '@dxyl/gpu-device-api';
 
 const { device, context, backend } = await createDeviceWithAdapter({
   canvas,
