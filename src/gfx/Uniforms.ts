@@ -201,6 +201,14 @@ const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export class UniformLayout {
   readonly desc: UniformLayoutDesc;
   readonly fields: readonly UniformFieldLayout[];
+  /**
+   * 字段名 → 字段。构造时建一次，供 {@link has} / {@link field} 做 O(1) 查找。
+   *
+   * 为什么不用 `fields.some(...)`：`Renderer.draw()` 每 draw 要问 7 次「这个材质有没有
+   * projectionView / model / normalMatrix…」，线性扫描 + 每次一个闭包会在 40k draw 的
+   * 场景里变成几毫秒/帧的纯开销。
+   */
+  private readonly fieldByName: Map<string, UniformFieldLayout>;
   /** 块总字节数（16 的倍数）。 */
   readonly byteLength: number;
   /** 内容指纹，用于缓存与校验「管线与数值是否匹配」。 */
@@ -251,12 +259,13 @@ export class UniformLayout {
     }
 
     this.fields = fields;
+    this.fieldByName = new Map(fields.map((field) => [field.name, field]));
     this.byteLength = alignTo(cursor, maxAlign);
     this.key = `${this.structName}|${this.group}|${this.binding}|${names.map((name) => `${name}:${desc[name]}`).join(',')}`;
   }
 
   field(name: string): UniformFieldLayout {
-    const field = this.fields.find((item) => item.name === name);
+    const field = this.fieldByName.get(name);
     if (!field) {
       throw new ValidationError(
         `[gpu-device-api] uniform 布局里没有字段「${name}」。现有字段：${this.fields.map((item) => item.name).join('、')}。`,
@@ -266,7 +275,7 @@ export class UniformLayout {
   }
 
   has(name: string): boolean {
-    return this.fields.some((item) => item.name === name);
+    return this.fieldByName.has(name);
   }
 
   /**
@@ -468,6 +477,8 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
   readonly layout: UniformLayout;
   readonly buffer: ArrayBuffer;
   private readonly fieldValues: Record<string, UniformFieldValue<UniformFieldType>>;
+  /** {@link bytes} 的缓存视图；`buffer` 终生不重新分配，所以视图可以一直复用。 */
+  private readonly bytesView: Uint8Array;
   /** 每次修改自增；渲染器据此跳过没必要的上传。 */
   version = 1;
 
@@ -476,6 +487,9 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
   constructor(desc: D | UniformLayout, options?: UniformOptions) {
     this.layout = desc instanceof UniformLayout ? desc : defineUniforms(desc, options);
     this.buffer = new ArrayBuffer(Math.max(this.layout.byteLength, 16));
+    // 视图只建一次：`bytes` 在每次 draw 都会被读（arena 上传），每次 new 一个视图
+    // 在 40k draw 的场景里就是 40k 个短命对象。
+    this.bytesView = new Uint8Array(this.buffer, 0, this.layout.byteLength);
     const values: Record<string, UniformFieldValue<UniformFieldType>> = {};
     for (const field of this.layout.fields) values[field.name] = this.createFieldValue(field);
     this.fieldValues = values;
@@ -557,9 +571,9 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
     return (target as UniformFieldAccessor).get(out);
   }
 
-  /** 有效字节数的视图（上传时用，避免把尾部对齐填充也传上去）。 */
+  /** 有效字节数的视图（上传时用，避免把尾部对齐填充也传上去）。视图是复用的，不要保留它的引用。 */
   get bytes(): Uint8Array {
-    return new Uint8Array(this.buffer, 0, this.layout.byteLength);
+    return this.bytesView;
   }
 
   /** 复制一份紧凑的字节数据。 */

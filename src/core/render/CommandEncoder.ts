@@ -63,6 +63,18 @@ export interface CommandEncoder {
   /** 将 buffer 的一段范围清零。 */
   clearBuffer(buffer: BufferLike, offset?: number, size?: number): void;
 
+  /**
+   * 打一个调试分组（对应 WebGPU 的 `pushDebugGroup` / WebGL2 的 `EXT_debug_marker`）。
+   *
+   * 用途是让 RenderDoc / PIX / Xcode 的抓帧按「一帧里的哪个阶段」分组显示，不改变渲染结果。
+   * WebGL2 上没有该扩展时是**空操作**（不是错误）：调试标记缺失不影响正确性。
+   */
+  pushDebugGroup(label: string): void;
+  /** 结束最近一次 {@link pushDebugGroup}。 */
+  popDebugGroup(): void;
+  /** 插入一个瞬时标记（不配对）。 */
+  insertDebugMarker(label: string): void;
+
   finish(): CommandBuffer;
 }
 

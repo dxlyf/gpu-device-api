@@ -17,6 +17,11 @@ import { ValidationError } from '../../core/errors/ValidationError.js';
 import { indexFormatByteSize } from '../../core/enums/IndexFormat.js';
 import { BindingType } from '../../core/enums/BindingType.js';
 import { GL_INDEX_TYPES, resolveClearColor } from '../utils/glEnumMap.js';
+import {
+  insertDebugMarker as insertGlDebugMarker,
+  popDebugGroup as popGlDebugGroup,
+  pushDebugGroup as pushGlDebugGroup,
+} from '../utils/debugMarkers.js';
 import type { IndexFormat } from '../../core/enums/IndexFormat.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
 import type { Color } from '../../core/render/RenderTarget.js';
@@ -30,7 +35,7 @@ import type { RenderPassDescriptor, RenderPassEncoder } from '../../core/render/
 import type { BindGroupEntry, BufferBinding, SamplerBinding, TextureBinding } from '../../core/binding/BindingTypes.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2BindGroup } from '../binding/WebGL2BindGroup.js';
-import type { WebGLBindingPlan } from '../binding/TextureUnitAllocator.js';
+import type { WebGLBindingPlan, UniformBlockSlot } from '../binding/TextureUnitAllocator.js';
 import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
 import type { WebGL2Sampler } from '../resources/WebGL2Sampler.js';
 import type { WebGL2TextureView } from '../resources/WebGL2TextureView.js';
@@ -38,6 +43,12 @@ import type { WebGL2RenderPipeline, VertexBufferBinding } from '../pipeline/WebG
 import type { WebGL2RenderTarget } from './WebGL2RenderTarget.js';
 import { isDefaultFramebufferView } from '../WebGL2CanvasContext.js';
 import type { FramebufferCache } from './framebuffer-cache.js';
+
+/**
+ * 动态槽位列表的兜底常量：`dynamicBlocksByGroup` 里每个 group 都有条目，理论上取不到空，
+ * 但用共享空数组可以避免运行时写 `?? []`（那也是一次每 draw 的分配）。
+ */
+const EMPTY_DYNAMIC_SLOTS: readonly UniformBlockSlot[] = [];
 
 export interface WebGL2RenderPassOptions {
   gl: WebGL2RenderingContext;
@@ -291,6 +302,22 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
     );
   }
 
+  /**
+   * 调试分组：WebGL2 靠 `EXT_debug_marker` 实现，扩展不可用时是空操作
+   * （只影响抓帧工具的分组显示，不影响渲染结果）。
+   */
+  pushDebugGroup(label: string): void {
+    pushGlDebugGroup(this.gl, label);
+  }
+
+  popDebugGroup(): void {
+    popGlDebugGroup(this.gl);
+  }
+
+  insertDebugMarker(label: string): void {
+    insertGlDebugMarker(this.gl, label);
+  }
+
   end(): void {
     if (this._ended) return;
     this._ended = true;
@@ -363,72 +390,75 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
       if (!group) continue;
 
       // ---- uniform block --------------------------------------------------------------------
-      const dynamicSlots = [...plan.uniformBlocks.values()]
-        .filter((slot) => slot.group === groupIndex && slot.dynamic)
-        .sort((a, b) => a.binding - b.binding);
-      const dynamicValues = this.dynamicOffsets.get(groupIndex) ?? [];
-      if (dynamicSlots.length > 0 && dynamicValues.length < dynamicSlots.length) {
-        throw new ValidationError(
-          `[gpu-device-api] setBindGroup(${groupIndex}, ...) 缺少动态偏移：布局里有 ${dynamicSlots.length} 个` +
-            `带 hasDynamicOffset 的 uniform buffer，但只提供了 ${dynamicValues.length} 个偏移值。`,
-        );
-      }
-
-      let dynamicIndex = 0;
-      for (const slot of plan.uniformBlocks.values()) {
-        if (slot.group !== groupIndex) continue;
-        const entry = group.entry(slot.binding);
-        if (!entry) {
+      // 槽位列表与动态槽位列表都是计划里预分解好的（构建时一次），这里不再 filter/sort。
+      const blocks = plan.uniformBlocksByGroup.get(groupIndex);
+      if (blocks) {
+        const dynamicSlots = plan.dynamicBlocksByGroup.get(groupIndex) ?? EMPTY_DYNAMIC_SLOTS;
+        // 没有动态槽位时连 Map 都不查（绝大多数管线走这条路径）。
+        const dynamicValues = dynamicSlots.length > 0 ? this.dynamicOffsets.get(groupIndex) : undefined;
+        if (dynamicSlots.length > 0 && (dynamicValues === undefined || dynamicValues.length < dynamicSlots.length)) {
           throw new ValidationError(
-            `[gpu-device-api] bind group「${group.label}」缺少 binding ${slot.binding}（布局要求提供 uniform buffer）。`,
+            `[gpu-device-api] setBindGroup(${groupIndex}, ...) 缺少动态偏移：布局里有 ${dynamicSlots.length} 个` +
+              `带 hasDynamicOffset 的 uniform buffer，但只提供了 ${dynamicValues?.length ?? 0} 个偏移值。`,
           );
         }
-        const resource = entry.resource as BufferBinding;
-        const buffer = resource.buffer as WebGL2Buffer;
-        const baseOffset = resource.offset ?? 0;
 
-        if (slot.dynamic) {
-          const alignment = this.state.context.getParameter(
-            this.gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT,
-          ) as number;
-          const dynamicOffset = dynamicValues[dynamicIndex++] ?? 0;
-          if (alignment > 0 && dynamicOffset % alignment !== 0) {
+        let dynamicIndex = 0;
+        for (const slot of blocks) {
+          const entry = group.entry(slot.binding);
+          if (!entry) {
             throw new ValidationError(
-              `[gpu-device-api] 动态偏移 ${dynamicOffset} 不是 UNIFORM_BUFFER_OFFSET_ALIGNMENT（${alignment}）的倍数。` +
-                'uniform arena 的每段长度必须按这个对齐值取整。',
+              `[gpu-device-api] bind group「${group.label}」缺少 binding ${slot.binding}（布局要求提供 uniform buffer）。`,
             );
           }
-          const offset = baseOffset + dynamicOffset;
-          const size = resource.size ?? buffer.size - offset;
-          this.state.bindUniformBuffer(slot.blockBinding, buffer.native, offset, size);
-        } else {
-          this.state.bindUniformBuffer(slot.blockBinding, buffer.native, 0, -1);
+          const resource = entry.resource as BufferBinding;
+          const buffer = resource.buffer as WebGL2Buffer;
+          const baseOffset = resource.offset ?? 0;
+
+          if (slot.dynamic) {
+            // 设备常量，按 context 记一次（原先每 draw 每个动态块都做一次同步 getParameter）。
+            const alignment = this.state.uniformBufferOffsetAlignment();
+            const dynamicOffset = dynamicValues![dynamicIndex++] ?? 0;
+            if (alignment > 0 && dynamicOffset % alignment !== 0) {
+              throw new ValidationError(
+                `[gpu-device-api] 动态偏移 ${dynamicOffset} 不是 UNIFORM_BUFFER_OFFSET_ALIGNMENT（${alignment}）的倍数。` +
+                  'uniform arena 的每段长度必须按这个对齐值取整。',
+              );
+            }
+            const offset = baseOffset + dynamicOffset;
+            const size = resource.size ?? buffer.size - offset;
+            this.state.bindUniformBuffer(slot.blockBinding, buffer.native, offset, size);
+          } else {
+            this.state.bindUniformBuffer(slot.blockBinding, buffer.native, 0, -1);
+          }
         }
       }
 
       // ---- 纹理与采样器 ---------------------------------------------------------------------
-      for (const slot of plan.textures.values()) {
-        if (slot.group !== groupIndex) continue;
-        const entry = group.entry(slot.binding);
-        if (!entry) {
-          throw new ValidationError(
-            `[gpu-device-api] bind group「${group.label}」缺少 binding ${slot.binding}（布局要求提供纹理「${slot.name}」）。`,
-          );
-        }
-        const view = (entry.resource as TextureBinding).view as WebGL2TextureView;
-        this.assertViewRangeSupported(view);
-        this.state.bindTexture(slot.unit, view.target, view.glTexture);
-
-        if (slot.samplerBinding !== null) {
-          const samplerEntry: BindGroupEntry | undefined = group.entry(slot.samplerBinding);
-          if (!samplerEntry) {
+      const textures = plan.texturesByGroup.get(groupIndex);
+      if (textures) {
+        for (const slot of textures) {
+          const entry = group.entry(slot.binding);
+          if (!entry) {
             throw new ValidationError(
-              `[gpu-device-api] bind group「${group.label}」缺少 binding ${slot.samplerBinding}` +
-                `（纹理「${slot.name}」配套的 sampler「${slot.samplerName ?? '未命名'}」）。`,
+              `[gpu-device-api] bind group「${group.label}」缺少 binding ${slot.binding}（布局要求提供纹理「${slot.name}」）。`,
             );
           }
-          const sampler = (samplerEntry.resource as SamplerBinding).sampler as WebGL2Sampler;
-          this.state.bindSampler(slot.unit, sampler.native);
+          const view = (entry.resource as TextureBinding).view as WebGL2TextureView;
+          this.assertViewRangeSupported(view);
+          this.state.bindTexture(slot.unit, view.target, view.glTexture);
+
+          if (slot.samplerBinding !== null) {
+            const samplerEntry: BindGroupEntry | undefined = group.entry(slot.samplerBinding);
+            if (!samplerEntry) {
+              throw new ValidationError(
+                `[gpu-device-api] bind group「${group.label}」缺少 binding ${slot.samplerBinding}` +
+                  `（纹理「${slot.name}」配套的 sampler「${slot.samplerName ?? '未命名'}」）。`,
+              );
+            }
+            const sampler = (samplerEntry.resource as SamplerBinding).sampler as WebGL2Sampler;
+            this.state.bindSampler(slot.unit, sampler.native);
+          }
         }
       }
     }
@@ -438,11 +468,12 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
 
   /** 布局要求了某个 group，但调用方一次都没 setBindGroup —— 早报错好过画面全黑。 */
   private assertAllGroupsBound(plan: WebGLBindingPlan): void {
-    const required = new Set<number>();
-    for (const slot of plan.uniformBlocks.values()) required.add(slot.group);
-    for (const slot of plan.textures.values()) required.add(slot.group);
-    const missing = [...required].filter((groupIndex) => !this.bindGroups.get(groupIndex));
-    if (missing.length > 0) {
+    let missing: number[] | null = null;
+    for (const groupIndex of plan.requiredGroups) {
+      if (this.bindGroups.get(groupIndex)) continue;
+      (missing ??= []).push(groupIndex);
+    }
+    if (missing) {
       throw new ValidationError(
         `[gpu-device-api] 管线需要 bind group ${missing.join('、')}，但本次绘制前没有调用 setBindGroup()。` +
           '缺少绑定会让着色器读到未定义的数据（画面通常全黑且没有任何报错），所以这里直接拦下。',

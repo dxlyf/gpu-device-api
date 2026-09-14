@@ -119,6 +119,14 @@ export interface RendererStats {
   frameTime: number;
 }
 
+/**
+ * 共享的单位矩阵：`draw()` 没给 `options.model` 时写它。
+ *
+ * 它只会被 `UniformValues.set()` 拷进 uniform buffer，从不暴露给调用方，所以整个进程共用
+ * 一份是安全的 —— 而每 draw `mat4.create()` 会白白产生 40k 个 Float32Array(16)/帧。
+ */
+const IDENTITY_MAT4 = mat4.create();
+
 interface MaterialState {
   readonly material: Material;
   readonly layout: PipelineLayout | 'auto';
@@ -308,6 +316,8 @@ export class Renderer {
 
   setCamera(camera: Camera | null): void {
     this.camera = camera;
+    // 立刻按当前宽高比/后端约定刷新一次，免得第一次 draw 用到的是别处留下的矩阵。
+    this.updateCamera();
   }
 
   /* ------------------------------------------------------------------ 资源 ------------------- */
@@ -360,6 +370,8 @@ export class Renderer {
 
     this.resize();
     this.arenaPool.beginFrame();
+    // 相机矩阵每帧只算一次（宽高比/深度约定都依赖帧状态，所以放在这里最合适）。
+    this.updateCamera();
 
     this.encoder = this.device.createCommandEncoder({ label: 'gfx-frame' });
     const clearColor = options.color ?? this._clearColor;
@@ -481,8 +493,11 @@ export class Renderer {
     /* ---- group 0：uniform ------------------------------------------------------------------ */
     if (material.uniforms && state.values) {
       this.applyCameraUniforms(state.values, material);
-      if (options.model) {
-        this.setIfPresent(state.values, 'model', options.model);
+      // model 只写一次：没给 options.model 时写共享的单位矩阵常量。
+      // （以前是「先写一个新 new 出来的单位矩阵、再被 options.model 覆盖」，每 draw 多一次
+      //  Float32Array(16) 分配 + 一次 64 字节上传。）
+      if (material.uniforms.has('model')) {
+        state.values.set('model' as never, (options.model ?? IDENTITY_MAT4) as never);
       }
       this.updateNormalMatrix(state.values, material);
       if (options.uniforms) {
@@ -591,13 +606,16 @@ export class Renderer {
     return state.pipeline;
   }
 
-  /** 把相机矩阵写进 uniform（字段名存在才写，材质可以不用相机）。 */
+  /**
+   * 把相机矩阵写进 uniform（字段名存在才写，材质可以不用相机）。
+   *
+   * 这里**不再**调用 `camera.update()`：相机矩阵每帧只需要算一次（见 {@link updateCamera}）。
+   * 原先每 draw 都重算 lookAt + 两套 perspective + 一次乘法，40k draw 的场景下光这一步就是
+   * 几十毫秒/帧的纯 CPU 开销，而且结果完全一样。
+   */
   private applyCameraUniforms(values: UniformValues, material: Material): void {
     const camera = this.camera;
     if (!camera) return;
-    camera.aspect = this.aspect;
-    camera.depthRange = this.backend === 'webgpu' ? 'zo' : 'gl';
-    camera.update();
 
     if (material.uniforms?.has('projectionView')) {
       values.set('projectionView' as never, camera.projectionViewMatrix as never);
@@ -611,10 +629,21 @@ export class Renderer {
     if (material.uniforms?.has('cameraPosition')) {
       values.set('cameraPosition' as never, camera.position as never);
     }
-    if (material.uniforms?.has('model')) {
-      // 默认单位矩阵；调用方用 `options.model` 覆盖。
-      values.set('model' as never, mat4.create() as never);
-    }
+  }
+
+  /**
+   * 按当前画布宽高比与后端深度约定刷新相机矩阵。
+   *
+   * `beginFrame()` 与 `setCamera()` 会自动调用；**在帧中间改了相机参数**（position/target/fov…）
+   * 之后想立刻生效，就自己调一次这个方法 —— 否则改动会在下一帧的 `beginFrame()` 才反映出来。
+   */
+  updateCamera(): void {
+    const camera = this.camera;
+    if (!camera) return;
+    camera.aspect = this.aspect;
+    // 两个后端的裁剪空间 z 约定不同，切换后端时投影矩阵要跟着换（相机自己不知道后端）。
+    camera.depthRange = this.backend === 'webgpu' ? 'zo' : 'gl';
+    camera.update();
   }
 
   /**

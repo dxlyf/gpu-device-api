@@ -26,6 +26,11 @@ import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
 import type { WebGL2Texture } from '../resources/WebGL2Texture.js';
 import { WebGL2RenderPassEncoder, type WebGL2RenderPassOptions } from './WebGL2RenderPassEncoder.js';
 import { WebGL2ComputePassEncoder } from './WebGL2ComputePassEncoder.js';
+import {
+  insertDebugMarker as insertGlDebugMarker,
+  popDebugGroup as popGlDebugGroup,
+  pushDebugGroup as pushGlDebugGroup,
+} from '../utils/debugMarkers.js';
 
 /** `finish()` 产出的 command buffer：记录本次编码期间的统计信息。 */
 export interface WebGL2CommandBuffer extends CommandBuffer {
@@ -270,6 +275,19 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     const zeros = new Uint8Array(length);
     // 走 buffer 自己的目标：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
     target.upload(offset, zeros);
+  }
+
+  /** 调试分组：WebGL2 靠 `EXT_debug_marker`，扩展不可用时是空操作（见 utils/debugMarkers.ts）。 */
+  pushDebugGroup(label: string): void {
+    pushGlDebugGroup(this.gl, label);
+  }
+
+  popDebugGroup(): void {
+    popGlDebugGroup(this.gl);
+  }
+
+  insertDebugMarker(label: string): void {
+    insertGlDebugMarker(this.gl, label);
   }
 
   finish(): WebGL2CommandBuffer {

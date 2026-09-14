@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GpuError, OutOfMemoryError, ValidationError, isGpuError } from '../src/core/errors/index.js';
 import {
+  insertDebugMarker,
+  popDebugGroup,
+  pushDebugGroup,
+  supportsDebugMarkers,
+} from '../src/webgl2/utils/debugMarkers.js';
+import {
   DisposalScope,
   alignTo,
   alignTo4,
@@ -164,5 +170,51 @@ describe('logger', () => {
       spy.mockRestore();
       setGlobalLogLevel('warn');
     }
+  });
+});
+
+describe('WebGL2 调试标记（EXT_debug_marker）', () => {
+  function fakeGl(extension: unknown): { gl: WebGL2RenderingContext; calls: () => number } {
+    let count = 0;
+    const gl = {
+      getExtension: () => {
+        count += 1;
+        return extension;
+      },
+    } as unknown as WebGL2RenderingContext;
+    return { gl, calls: () => count };
+  }
+
+  it('扩展不可用时是空操作，不抛错（调试标记缺失不影响渲染）', () => {
+    const { gl } = fakeGl(null);
+    expect(supportsDebugMarkers(gl)).toBe(false);
+    expect(() => {
+      pushDebugGroup(gl, 'frame');
+      insertDebugMarker(gl, 'draw');
+      popDebugGroup(gl);
+    }).not.toThrow();
+  });
+
+  it('扩展可用时转发给 glPushGroupMarkerEXT 等入口', () => {
+    const log: string[] = [];
+    const { gl } = fakeGl({
+      pushGroupMarkerEXT: (marker: string) => log.push(`push:${marker}`),
+      popGroupMarkerEXT: () => log.push('pop'),
+      insertEventMarkerEXT: (marker: string) => log.push(`marker:${marker}`),
+    });
+
+    expect(supportsDebugMarkers(gl)).toBe(true);
+    pushDebugGroup(gl, '一帧');
+    insertDebugMarker(gl, '某次 draw');
+    popDebugGroup(gl);
+    expect(log).toEqual(['push:一帧', 'marker:某次 draw', 'pop']);
+  });
+
+  it('每个 GL context 只查一次扩展（不会每次 push 都 getExtension）', () => {
+    const { gl, calls } = fakeGl(null);
+    pushDebugGroup(gl, 'a');
+    popDebugGroup(gl);
+    insertDebugMarker(gl, 'b');
+    expect(calls()).toBe(1);
   });
 });

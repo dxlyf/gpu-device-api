@@ -92,6 +92,14 @@ export class Geometry {
   readonly instanceCount: number | null;
 
   private _disposed = false;
+  /**
+   * 已经校验过的「材质属性声明」集合，键是 `Material.attributes` 这个数组对象本身。
+   *
+   * 校验结果只取决于 (几何体, 材质声明) 这一对，而两者在创建后都不再变 —— 所以每 draw
+   * 重复校验是纯浪费（40k draw 的场景下每帧几毫秒）。用数组身份当键，既拿到了
+   * 「按材质缓存」的效果，又不用在渲染器里维护 WeakMap。
+   */
+  private readonly validatedAgainst = new WeakSet<readonly object[]>();
 
   private constructor(init: {
     label: string;
@@ -242,6 +250,8 @@ export class Geometry {
     required: readonly { name: string; format: VertexFormat; stepMode?: VertexStepMode }[],
     materialName: string,
   ): void {
+    // 同一份材质声明 + 同一个几何体只需要校验一次（材质销毁后身份回收，不会泄漏）。
+    if (this.validatedAgainst.has(required)) return;
     for (const attribute of required) {
       const provided = this.attributes.get(attribute.name);
       if (!provided) {
@@ -267,6 +277,7 @@ export class Geometry {
         );
       }
     }
+    this.validatedAgainst.add(required);
   }
 
   destroy(): void {

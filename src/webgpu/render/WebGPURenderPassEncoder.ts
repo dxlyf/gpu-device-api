@@ -319,6 +319,22 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
     this.native.drawIndexedIndirect(resolved.buffer, resolved.offset);
   }
 
+  /** 调试分组：直接转发给原生的 `GPURenderPassEncoder`（抓帧工具据此分组显示）。 */
+  pushDebugGroup(label: string): void {
+    this.assertOpen('pushDebugGroup');
+    this.native.pushDebugGroup(label);
+  }
+
+  popDebugGroup(): void {
+    this.assertOpen('popDebugGroup');
+    this.native.popDebugGroup();
+  }
+
+  insertDebugMarker(label: string): void {
+    this.assertOpen('insertDebugMarker');
+    this.native.insertDebugMarker(label);
+  }
+
   /** 结束该 pass。幂等；此后再调用任何录制方法都会抛错。 */
   end(): void {
     if (this._ended) return;

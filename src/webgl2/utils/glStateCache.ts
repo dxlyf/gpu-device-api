@@ -48,6 +48,8 @@ export class GlStateCache {
 
   private viewport: [number, number, number, number] | null = null;
   private scissor: [number, number, number, number] | null = null;
+  /** `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 的记忆值（设备常量，见同名方法）。 */
+  private uniformAlignment: number | null = null;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
@@ -56,6 +58,20 @@ export class GlStateCache {
   /** GL 上下文（便于调用方在需要时直接操作）。 */
   get context(): WebGL2RenderingContext {
     return this.gl;
+  }
+
+  /**
+   * `UNIFORM_BUFFER_OFFSET_ALIGNMENT`（动态偏移的对齐要求）。
+   *
+   * 它是**设备常量**，但 `getParameter` 是一次同步的 GL 查询：每 draw 每个动态 uniform block
+   * 都问一次，在几千 draw 的场景里就是几千次同步查询。这里按 context 记一次。
+   */
+  uniformBufferOffsetAlignment(): number {
+    if (this.uniformAlignment === null) {
+      const value = this.gl.getParameter(this.gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT) as number | null;
+      this.uniformAlignment = Number(value ?? 0) || 0;
+    }
+    return this.uniformAlignment;
   }
 
   /**

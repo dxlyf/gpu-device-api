@@ -46,6 +46,18 @@ export class WebGL2ComputePassEncoder implements ComputePassEncoder {
     throw new ValidationError(MESSAGE);
   }
 
+  pushDebugGroup(_label: string): void {
+    throw new ValidationError(MESSAGE);
+  }
+
+  popDebugGroup(): void {
+    throw new ValidationError(MESSAGE);
+  }
+
+  insertDebugMarker(_label: string): void {
+    throw new ValidationError(MESSAGE);
+  }
+
   end(): void {
     // 构造阶段已经抛错，这里不会被执行。
   }

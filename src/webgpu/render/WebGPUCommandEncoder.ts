@@ -180,6 +180,22 @@ export class WebGPUCommandEncoder implements CommandEncoder {
     );
   }
 
+  /** 调试分组：直接转发给原生的 `GPUCommandEncoder`。 */
+  pushDebugGroup(label: string): void {
+    this.assertRecording('pushDebugGroup');
+    this.native.pushDebugGroup(label);
+  }
+
+  popDebugGroup(): void {
+    this.assertRecording('popDebugGroup');
+    this.native.popDebugGroup();
+  }
+
+  insertDebugMarker(label: string): void {
+    this.assertRecording('insertDebugMarker');
+    this.native.insertDebugMarker(label);
+  }
+
   /**
    * 结束录制并返回 command buffer。
    *

@@ -38,11 +38,6 @@ export interface UniformArenaOptions {
   label?: string;
 }
 
-interface ArenaWrite {
-  offset: number;
-  data: Uint8Array;
-}
-
 export class UniformArena {
   readonly layout: UniformLayout;
   readonly label: string;
@@ -57,7 +52,14 @@ export class UniformArena {
   private head = 0;
   private bindGroupValue: BindGroup | null = null;
   private bindGroupLayoutValue: BindGroupLayout | null = null;
-  private readonly frameWrites: ArenaWrite[] = [];
+  /**
+   * 本帧写入的 `(offset, data)` 对，只用于扩容时重放。
+   *
+   * 用两个平行数组而不是 `{offset, data}` 对象：这里每 draw 记录一次，40k draw 的场景下
+   * 每帧 40k 个短命对象是白白送给 GC 的。
+   */
+  private readonly frameOffsets: number[] = [];
+  private readonly frameData: Uint8Array[] = [];
   private _disposed = false;
 
   constructor(device: Device, layout: UniformLayout, options: UniformArenaOptions = {}) {
@@ -91,7 +93,8 @@ export class UniformArena {
   /** 每帧开始前调用：把游标归零。 */
   beginFrame(): void {
     this.head = 0;
-    this.frameWrites.length = 0;
+    this.frameOffsets.length = 0;
+    this.frameData.length = 0;
   }
 
   /**
@@ -112,7 +115,7 @@ export class UniformArena {
     const offset = this.allocate();
     const data = values.bytes;
     this.device.queue.writeBuffer(this.bufferValue, offset, data);
-    this.frameWrites.push({ offset, data });
+    this.recordWrite(offset, data);
     return offset;
   }
 
@@ -120,8 +123,14 @@ export class UniformArena {
   writeBytes(bytes: Uint8Array): number {
     const offset = this.allocate();
     this.device.queue.writeBuffer(this.bufferValue, offset, bytes);
-    this.frameWrites.push({ offset, data: bytes });
+    this.recordWrite(offset, bytes);
     return offset;
+  }
+
+  /** 记下本帧的写入，供扩容重放（两个平行数组，不产生每 draw 的对象）。 */
+  private recordWrite(offset: number, data: Uint8Array): void {
+    this.frameOffsets.push(offset);
+    this.frameData.push(data);
   }
 
   /**
@@ -188,7 +197,6 @@ export class UniformArena {
       );
     }
 
-    const previousWrites = [...this.frameWrites];
     this.bufferValue.destroy();
     this.bindGroupValue?.dispose();
     this.bindGroupValue = null;
@@ -196,9 +204,9 @@ export class UniformArena {
     this.capacityValue = next;
     this.bufferValue = this.createBuffer(next);
 
-    // 重放已经写过的段，保证扩容对调用方透明。
-    for (const entry of previousWrites) {
-      this.device.queue.writeBuffer(this.bufferValue, entry.offset, entry.data);
+    // 重放已经写过的段，保证扩容对调用方透明（平行数组，不需要先拷贝一份）。
+    for (let index = 0; index < this.frameOffsets.length; index += 1) {
+      this.device.queue.writeBuffer(this.bufferValue, this.frameOffsets[index]!, this.frameData[index]!);
     }
   }
 
