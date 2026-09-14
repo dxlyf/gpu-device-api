@@ -492,13 +492,24 @@ u.set('bones', boneMatrices);
 | `examples/core-triangle.html` | 最小的一次绘制：交织顶点缓冲、`layout: 'auto'`，没有 uniform / bind group |
 | `examples/core-box.html` | 3D 必备件：投影与视图矩阵、uniform 块的字节打包、bind group layout、带深度的管线 |
 | `examples/core-texture.html` | `createTexture` + `queue.writeTexture` + `createSampler`；sampler 按 `<纹理名>_sampler` 配对 |
-| `examples/core-instancing.html` | 每实例属性（`stepMode: 'instance'`）：1 次 draw call 画 N 个实例，`?count=` 调数量 |
+| `examples/core-instancing.html` | 每实例属性（`stepMode: 'instance'`）：1 次 draw call 画 N 个实例，`?count=` 调数量。布局是**正对相机的 2D 格点面**（每实例一个四边形，压满格距并叠加逐实例抖动/自转/深度抖动），`?spin=0` 冻结摆动 |
 | `examples/core-batch.html` | N 次 draw call + **动态偏移** uniform（`hasDynamicOffset` + `setBindGroup(1, bg, [offset])`） |
 
 这五个页面共用 `examples/core-shared.ts`（设备创建、离屏像素自检、帧循环、uniform 绑定等样板），
 每个页面的 `.ts` 顶部注释都写明了它要演示什么、以及对应的 core API 调用点。
 它们也会把结论写进 `data-<名字>-lit / -pixel / -distinct / -error`。
 
+视觉回归用 `scripts/` 下的两个小工具（页面内的 `drawImage` 读回不可信：示例都带
+`preserveDrawingBuffer: false`，合成之后读回画布是**一整块黑**，会把「黑」误算成「画面被物体盖满」）：
+
+```bash
+# 1. 起 dev server 后，用真实合成截图抓一页（CDP 轮询 data-*，WebGPU 的异步也能等）
+node scripts/capture-screenshot.mjs --chrome "<chrome.exe>" \
+  --url "http://localhost:5199/examples/core-instancing.html?backend=webgl2&spin=0&verify=1" \
+  --wait instancingResult --out shot.png -- --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
+# 2. 解码 PNG、按 canvas rect 裁剪，统计「接近清屏色」的像素占比与连通域
+node scripts/analyze-screenshot.mjs shot.png --clear 0.043,0.055,0.075 --crop 0,0,940,431 --fg
+```
 **实例化 vs 批量**（两组示例正好是一对）：
 
 | | 实例化（`instancing.html`） | 批量（`batch.html`） |
