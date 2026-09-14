@@ -9,7 +9,7 @@
  * 与其做一个半可靠的转译器，不如把两种语言分别写好、由编译期校验兜住错误。
  */
 export { describeShaderSource, glslFieldForStage, languageForBackend, missingSourceMessage, stageSource, type ShaderLanguage, type StageSource, } from './ShaderSource.js';
-export { GLSL_PREAMBLE, compileShaderStage, formatShaderErrorLog, glslDefines, numberLines, wgslDefines, wrapGlslSource, wrapWgslSource, type CompiledShaderStage, type ShaderCompileRequest, } from './ShaderCompiler.js';
+export { GLSL_PREAMBLE, GLSL_PRECISION_PREAMBLE, GLSL_VERSION_DIRECTIVE, compileShaderStage, formatShaderErrorLog, glslDefines, numberLines, resolveGlslWrapOptions, wgslDefines, wrapGlslSource, wrapWgslSource, type CompiledShaderStage, type ResolvedGlslWrapOptions, type ShaderCompileRequest, } from './ShaderCompiler.js';
 export { clearShaders, getShader, hasShader, listShaderKeys, registerShader, registerShaders, replaceShader, requireShader, unregisterShader, } from './ShaderRegistry.js';
 export { findWgslEntryPoint, reflectWgslBindings, reflectWgslEntryPoints, stripWgslComments, wgslBindingKeys, type WgslAddressSpace, type WgslBinding, type WgslEntryPoint, type WgslEntryPointStage, type WgslResourceKind, } from './reflection/WGSLReflector.js';
 export { GLSL_SAMPLER_TYPES, GLSL_TYPE_NAMES, glslTypeName, inferBindGroupLayoutEntries, isSamplerType, reflectGlslProgram, reflectSamplerUniforms, type GlslActiveAttribute, type GlslActiveUniform, type GlslActiveUniformBlock, type GlslProgramReflection, } from './reflection/GLSLReflector.js';

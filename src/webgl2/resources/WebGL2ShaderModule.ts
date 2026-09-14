@@ -2,7 +2,7 @@
  * WebGL2 的 shader module。
  *
  * 与 WebGPU 不同，WebGL2 的编译单元是 **program**（一个 vertex + 一个 fragment 链接在一起），
- * 而 `createShaderModule` 只拿到源码。所以这里**只保存原始源码与 defines**，
+ * 而 `createShaderModule` 只拿到源码。所以这里**只保存原始源码、defines 与 GLSL 包装选项**，
  * 真正的 `compileShader` / `linkProgram` 由 `WebGL2RenderPipeline` 在创建管线时完成
  * （那时才同时握有 vertex 与 fragment 两份源码）。
  *
@@ -10,7 +10,12 @@
  * 每个管线各自链接 program，而 GL 的 shader 对象由管线内部的 `ProgramCache` 管理。
  */
 
-import type { ShaderModule, ShaderModuleDescriptor, ShaderSource } from '../../core/resources/ShaderModule.js';
+import type {
+  GlslWrapOptions,
+  ShaderModule,
+  ShaderModuleDescriptor,
+  ShaderSource,
+} from '../../core/resources/ShaderModule.js';
 import { resolveShaderSource } from '../../core/resources/ShaderModule.js';
 import { nextId } from '../../utils/id.js';
 
@@ -18,12 +23,14 @@ export class WebGL2ShaderModule implements ShaderModule {
   readonly label: string;
   readonly source: ShaderSource;
   readonly defines: Record<string, string | number | boolean>;
+  readonly glsl: GlslWrapOptions;
   private _disposed = false;
 
   constructor(descriptor: ShaderModuleDescriptor) {
     this.label = descriptor.label ?? nextId('shaderModule');
     this.source = resolveShaderSource(descriptor.code);
     this.defines = descriptor.defines ? { ...descriptor.defines } : {};
+    this.glsl = descriptor.glsl ? { ...descriptor.glsl } : {};
   }
 
   get disposed(): boolean {

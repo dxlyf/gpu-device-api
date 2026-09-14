@@ -239,6 +239,7 @@ export class WebGL2Device implements Device {
       stage: ShaderStage.Vertex,
       label,
       defines: descriptor.vertex.module.defines,
+      glsl: descriptor.vertex.module.glsl,
     }).code;
 
     if (!descriptor.fragment) {
@@ -253,6 +254,7 @@ export class WebGL2Device implements Device {
       stage: ShaderStage.Fragment,
       label,
       defines: descriptor.fragment.module.defines,
+      glsl: descriptor.fragment.module.glsl,
     }).code;
 
     const compiled = this.programs.acquire(label, vertexCode, fragmentCode);

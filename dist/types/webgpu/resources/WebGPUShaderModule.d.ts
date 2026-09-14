@@ -12,13 +12,15 @@
  * 编译入口是 {@link WebGPUShaderModule.compile}；`native` 反映真实状态：尚未编译时为 `null`，
  * 不会为了「看起来有值」而凭空编译。
  */
-import type { ShaderModule, ShaderModuleDescriptor, ShaderSource } from '../../core/resources/ShaderModule.js';
+import type { GlslWrapOptions, ShaderModule, ShaderModuleDescriptor, ShaderSource } from '../../core/resources/ShaderModule.js';
 import type { ShaderStage } from '../../core/enums/ShaderStage.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 export declare class WebGPUShaderModule implements ShaderModule {
     readonly label: string;
     readonly source: ShaderSource;
     readonly defines: Record<string, string | number | boolean>;
+    /** GLSL 自动包装开关：WGSL 没有版本指令与精度前言，这里只保存不生效。 */
+    readonly glsl: GlslWrapOptions;
     private readonly device;
     private readonly modulesByStage;
     private _disposed;

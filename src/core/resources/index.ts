@@ -27,6 +27,7 @@ export {
 } from './Sampler.js';
 export {
   resolveShaderSource,
+  type GlslWrapOptions,
   type ShaderModule,
   type ShaderModuleDescriptor,
   type ShaderSource,

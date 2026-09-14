@@ -52,6 +52,9 @@ renderer.endFrame();
   错误消息统一以 `[gpu-device-api] ` 开头、用英文。宁可早报错，也不要「画面全黑却没有一行日志」。
 - **一份描述，两种语言**：`defineUniforms()` 同时算出 GLSL `std140` 与 WGSL uniform 的字节布局、
   并生成两边的块声明；`defineMaterial()` 自动补上 attribute 声明、uniform 块、sampler 与片元输出。
+- **着色器样板可控**：GLSL 的 `#version` 替换与精度前言默认自动补齐（WebGPU 的 WGSL 不需要），
+  也可以用 `glsl: { version, preamble }` 两项独立关掉 —— 全关就是逐字节透传。见
+  [GLSL 的自动包装可以关掉](#glsl-的自动包装可以关掉)。
 - **uniform arena + 动态偏移**：修掉「改 uniform → draw → 再改 → 再 draw」在两个后端语义不一致的
   问题（见 [两个后端的硬约束](#两个后端的硬约束踩过的坑)）。
 - **实例化与批量的两条路都通**：每实例属性（`stepMode: 'instance'`）一条 draw call 画出上万实例；
@@ -122,7 +125,8 @@ src/
 ├── webgl2/     WebGL2 后端：GL program/VAO/状态缓存、纹理单元与 uniform block 分配（TextureUnitAllocator）、
 │               framebuffer 缓存、能力探测（glCapabilities）、枚举与格式映射
 ├── webgpu/     WebGPU 后端：原生对象的一对一包装、管线变体缓存、格式与能力映射、错误通道
-├── shaders/    着色器管理：源码注册表、按后端选语言并补样板、GLSL/WGSL 反射（供 layout: 'auto' 与交叉校验）
+├── shaders/    着色器管理：源码注册表、按后端选语言并补样板（GLSL 的 `#version`/精度前言可关，见
+│               [GLSL 的自动包装可以关掉](#glsl-的自动包装可以关掉)）、GLSL/WGSL 反射（供 layout: 'auto' 与交叉校验）
 ├── factories/  后端探测与选择：detectBackend / createDevice / createDeviceWithAdapter / BackendRegistry
 ├── gfx/        便捷绘制层：Renderer、Geometry、Material、Uniforms、UniformArena、Camera、
 │               OrbitControls、shapes、materials、Texture
@@ -171,7 +175,7 @@ const linear = color.convertSRGBToLinear(color.create(), c);
 ## core 层
 
 core 是「显式、无魔法」的一层：资源、管线、通道都自己建，但两个后端的写法完全一致。
-下面这段与 `examples/smoke.ts` 里 15/15 通过的那段代码同构：
+下面这段与 `examples/smoke.ts` 里 17/17 通过的那段代码同构：
 
 ```ts
 import { createDeviceWithAdapter, BufferUsage } from '@dxyl/gpu-device-api';
@@ -235,6 +239,38 @@ device.queue.submit([encoder.finish()]);
 - **管线是「不可变 + 变体」**：`RenderPipeline.resolve({ colorFormats, depthFormat, sampleCount })`
   按渲染目标形态解析出具体状态，同一描述在不同附件组合下会解析成不同变体。
 - **`device.onError(cb)`** 注册错误回调（返回取消订阅的函数）；`device.reportError(err)` 主动上报。
+
+### GLSL 的自动包装可以关掉
+
+WebGL2 需要 `#version 300 es` 与精度声明，而 WebGPU 的 WGSL 不需要，所以**默认**情况下
+GLSL 侧会替你补上这两件事：剥掉你写的 `#version` → 首行注入 `#version 300 es` → 拼接默认精度前言
+→ 拼接 `defines` → 你的源码。想自己掌控（源码已由别的工具预处理、或要精确控制行号）就用
+`glsl` 选项，两项**独立**开关、默认都开：
+
+```ts
+device.createShaderModule({
+  code: { vs, fs },
+  glsl: {
+    version: false,     // 不碰 #version：不注入、不校验、不删除（版本行你自己写）
+    preamble: false,    // 不拼精度前言；也可以传字符串换成自定义前言
+  },
+});
+```
+
+| 选项 | 默认 | `true`（默认行为） | `false` |
+| --- | --- | --- | --- |
+| `version` | `true` | 剥掉你写的 `#version`，首行注入 `#version 300 es`；写的不是 300 es 直接报错 | `#version` 原样保留（有则仍在第一位，前言/`defines` 插到它后面），不校验版本 |
+| `preamble` | `true` | 拼接 `GLSL_PRECISION_PREAMBLE`（`precision highp float;` 等） | 不拼；传字符串则替换成你的前言 |
+
+几条容易踩的：
+- **两项都关掉且没有 `defines` 时是逐字节透传**，连首尾空白都不动（`wrapGlslSource` 直接返回原串）；
+  有 `defines` 时仍会注入宏，且一定排在 `#version` 之后。
+- **关掉 `version` 后不再有兜底**：不写 `#version` 会被后端按 GLSL ES 1.00 编译而报错；
+  写 `#version 310 es` 之类也会由后端报编译错误（默认路径是库先报 `ValidationError`，信息更清楚）。
+- **片元着色器关掉 `preamble` 要自己写 `precision`**：GLSL ES 3.00 里片元着色器没有默认浮点精度。
+- 只影响 WebGL2 后端；WGSL 没有版本指令与精度前言，WebGPU 后端会保存这个选项但不使用。
+- `GLSL_PREAMBLE`（版本 + 精度）与新的 `GLSL_PRECISION_PREAMBLE`（只精度）、
+  `GLSL_VERSION_DIRECTIVE`（只版本）都从包入口导出，`resolveGlslWrapOptions()` 可以看到归一化结果。
 
 ## 便捷层 gfx
 
@@ -424,7 +460,7 @@ u.set('bones', boneMatrices);
 | `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
 | `examples/benchmark.html` | **性能基准**：只用 core 层（不经过 gfx），在 2000 / 5000 / 10000 / 20000 / 40000 个图形下逐帧计时 |
-| `examples/smoke.html` | core 层的浏览器内冒烟测试：15 项检查，含像素级断言（canvas 中央、离屏目标角落） |
+| `examples/smoke.html` | core 层的浏览器内冒烟测试：17 项检查，含像素级断言（canvas 中央、离屏目标角落）与 GLSL 包装开关 |
 
 **core 层示例**（同样只用 `src/index.ts`，**不经过 gfx 便捷层**，用来对照「便捷层到底替你做了什么」）：
 
@@ -619,19 +655,19 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 
 ### 测试构成
 
-`test/` 下 6 个文件、166 条用例，全部跑在 **node** 环境（不需要浏览器）：
+`test/` 下 6 个文件、176 条用例，全部跑在 **node** 环境（不需要浏览器）：
 
 | 文件 | 覆盖 |
 | --- | --- |
 | `test/gfx.test.ts` | uniform 布局与代码生成、`Material` 声明注入、`Geometry` 数据打包与校验、实例化属性 |
-| `test/shaders.test.ts` | 源码注册表、按后端选语言、GLSL/WGSL 反射 |
+| `test/shaders.test.ts` | 源码注册表、按后端选语言、GLSL 包装开关（`#version`/精度前言）、GLSL/WGSL 反射 |
 | `test/math.test.ts` | 向量 / 矩阵 / 四元数 / Euler / Plane / Ray / Box3 / Frustum / Color / Raycaster（含退化输入） |
 | `test/enums.test.ts` | 枚举取值与位标志 |
 | `test/utils.test.ts` | 断言、TypedArray、位标志、logger |
 | `test/factories.test.ts` | 后端探测、回退与错误路径 |
 
 **像素级**的验证放在浏览器里，入口是 `examples/gallery.html`（汇总页，列出下面全部示例）：
-`examples/smoke.html`（core 层 15 项）、`examples/index.html?verify=1`（gfx 层）、
+`examples/smoke.html`（core 层 17 项）、`examples/index.html?verify=1`（gfx 层）、
 `examples/instancing.html?verify=1` / `examples/batch.html?verify=1`（实例化与批量各自的像素自检），
 以及 `core-*.html` 五个 core 层示例（`?verify=1` 会打印像素结论）。
 改动渲染路径后请都跑一遍，两个后端都要看。

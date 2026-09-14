@@ -196,6 +196,77 @@ describe('GLSL 源码包装', () => {
   });
 });
 
+describe('GLSL 包装开关（默认全开）', () => {
+  const BODY = '#version 300 es\nprecision mediump float;\nvoid main() {}';
+
+  it('默认：替换 #version 并拼接前言', () => {
+    const code = wrapGlslSource('void main() {}', undefined, 'test', {});
+    expect(code.startsWith(GLSL_PREAMBLE)).toBe(true);
+
+    // 四项都是默认值时，输出与不传 options 完全一致
+    expect(wrapGlslSource('void main() {}', undefined, 'test')).toBe(code);
+    expect(wrapGlslSource(BODY, undefined, 'test', { version: true, preamble: true })).toBe(
+      wrapGlslSource(BODY, undefined, 'test'),
+    );
+  });
+
+  it('preamble: false：只注入 #version，不加精度前言', () => {
+    const code = wrapGlslSource('void main() {}', undefined, 'test', { preamble: false });
+    expect(code.startsWith('#version 300 es\n')).toBe(true);
+    expect(code).not.toContain('precision highp float;');
+    expect(code).toContain('void main() {}');
+  });
+
+  it('preamble 传字符串：用自定义前言替换默认前言', () => {
+    const code = wrapGlslSource('void main() {}', undefined, 'test', { preamble: 'precision mediump float;\n' });
+    expect(code).toBe('#version 300 es\nprecision mediump float;\nvoid main() {}\n');
+    expect(code).not.toContain('precision highp int;');
+  });
+
+  it('version: false：原样保留用户写的 #version，且前言排在它后面', () => {
+    const code = wrapGlslSource(BODY, undefined, 'test', { version: false });
+    expect(code.match(/#version/g)).toHaveLength(1); // 不会被注入第二个
+    expect(code.indexOf('#version 300 es')).toBe(0);
+    expect(code.indexOf('precision highp float;')).toBeGreaterThan(code.indexOf('#version 300 es'));
+    expect(code).toContain('void main() {}');
+  });
+
+  it('version: false 时不校验版本号（交给后端编译报错）', () => {
+    const code = wrapGlslSource('#version 310 es\nvoid main() {}', undefined, 'test', { version: false });
+    expect(code.startsWith('#version 310 es\n')).toBe(true);
+    // 同样的源码在默认（自动替换）下仍然直接报错
+    expect(() => wrapGlslSource('#version 310 es\nvoid main() {}', undefined, 'test')).toThrowError(
+      /只接受 GLSL ES 3\.00/,
+    );
+  });
+
+  it('version: false 且没有 #version 时，不会凭空注入一行', () => {
+    const code = wrapGlslSource('void main() {}', undefined, 'test', { version: false });
+    expect(code).not.toContain('#version');
+    expect(code.startsWith('precision highp float;')).toBe(true);
+  });
+
+  it('两项都关掉：逐字节透传（连首尾空白都不动）', () => {
+    expect(wrapGlslSource(BODY, undefined, 'test', { version: false, preamble: false })).toBe(BODY);
+    const messy = '\n\n// 注释\nvoid main() {}\n\n';
+    expect(wrapGlslSource(messy, undefined, 'test', { version: false, preamble: false })).toBe(messy);
+  });
+
+  it('两项都关掉但给了 defines：仍然注入宏，且排在 #version 之后', () => {
+    const code = wrapGlslSource(BODY, { HAS_UV: true }, 'test', { version: false, preamble: false });
+    expect(code.startsWith('#version 300 es\n')).toBe(true);
+    expect(code).toContain('#define HAS_UV 1');
+    expect(code.indexOf('#define HAS_UV')).toBeGreaterThan(code.indexOf('#version 300 es'));
+    expect(code).not.toContain('precision highp float;');
+  });
+
+  it('version: false + preamble: false 的组合不会漏掉用户的 precision 行（源码原样）', () => {
+    const code = wrapGlslSource(BODY, undefined, 'test', { version: false, preamble: false });
+    expect(code).toBe(BODY);
+    expect(code).toContain('precision mediump float;');
+  });
+});
+
 describe('着色器编译调度', () => {
   const source = {
     vs: 'void main() { gl_Position = vec4(0.0); }',
@@ -243,6 +314,26 @@ describe('着色器编译调度', () => {
     expect(describeShaderSource({})).toBe('空');
     expect(describeShaderSource(source)).toContain('vs（GLSL）');
     expect(describeShaderSource({ wgsl: 'x' })).toBe('wgsl');
+  });
+
+  it('glsl 包装开关会传到 GLSL 侧，并如实反映在 hasPreamble 上', () => {
+    const raw = compileShaderStage({ backend: 'webgl2', source, stage: ShaderStage.Vertex, label: 'm' });
+    expect(raw.hasPreamble).toBe(true);
+    expect(raw.code.startsWith(GLSL_PREAMBLE)).toBe(true);
+
+    const bare = compileShaderStage({
+      backend: 'webgl2',
+      source,
+      stage: ShaderStage.Vertex,
+      label: 'm',
+      glsl: { version: false, preamble: false },
+    });
+    expect(bare.hasPreamble).toBe(false);
+    expect(bare.code).toBe(source.vs); // 逐字节透传
+
+    // WGSL 没有前言可言
+    const wgsl = compileShaderStage({ backend: 'webgpu', source, stage: ShaderStage.Fragment, label: 'm' });
+    expect(wgsl.hasPreamble).toBe(false);
   });
 });
 

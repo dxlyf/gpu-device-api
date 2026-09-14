@@ -216,7 +216,58 @@ async function run(): Promise<void> {
     `rgb=${offscreenCorner.join(',')} 期望≈64,128,191`,
   );
 
-  /* ---- 5. 错误路径必须真的报错 ------------------------------------------------------------ */
+  /* ---- 5. GLSL 包装开关：关掉自动包装后，自己写的 #version/精度必须真的能链接 ------------------ */
+  // 上面的 pipeline 走的是默认路径（源码里不写 #version 与 precision，由本库补齐）。
+  // 这一段走「全关」路径：源码自己写齐，本库逐字节透传。
+  const manualGlsl = {
+    vs: [
+      '#version 300 es',
+      'precision highp float;',
+      'layout(location = 0) in vec2 position;',
+      'void main() { gl_Position = vec4(position, 0.0, 1.0); }',
+      '',
+    ].join('\n'),
+    fs: [
+      '#version 300 es',
+      'precision highp float;',
+      'layout(location = 0) out vec4 fragColor;',
+      'void main() { fragColor = vec4(0.2, 0.4, 0.6, 1.0); }',
+      '',
+    ].join('\n'),
+  };
+  const manualModule = device.createShaderModule({
+    label: 'smoke-manual-glsl',
+    code: manualGlsl,
+    glsl: { version: false, preamble: false },
+  });
+  const manualPipeline = device.createRenderPipeline({
+    label: 'smoke-manual-pipeline',
+    vertex: { module: manualModule, buffers: [vertexLayout] },
+    fragment: { module: manualModule },
+    primitive: { topology: 'triangle-list' },
+    depthStencil: { format: null },
+  });
+  check(
+    '关闭自动包装（version/preamble 都为 false）后，自带 #version 的源码仍能链接成功',
+    manualPipeline.compiled === true,
+  );
+
+  expectValidationError('关闭自动包装后不写 #version 会被后端编译拒绝（不再有兜底）', () => {
+    const bare = device.createShaderModule({
+      label: 'smoke-bare-glsl',
+      code: { vs: VERTEX_SHADER, fs: FRAGMENT_SHADER },
+      glsl: { version: false, preamble: false },
+    });
+    device.createRenderPipeline({
+      label: 'smoke-bare-pipeline',
+      vertex: { module: bare, buffers: [vertexLayout] },
+      fragment: { module: bare },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: { format: null },
+    });
+  });
+
+  /* ---- 6. 错误路径必须真的报错 ------------------------------------------------------------ */
   expectValidationError('WebGL2 上创建 compute pipeline 应报 ValidationError', () => {
     device.createComputePipeline({ label: 'nope', compute: { module } });
   });

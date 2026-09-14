@@ -20,14 +20,18 @@ export {
 } from './ShaderSource.js';
 export {
   GLSL_PREAMBLE,
+  GLSL_PRECISION_PREAMBLE,
+  GLSL_VERSION_DIRECTIVE,
   compileShaderStage,
   formatShaderErrorLog,
   glslDefines,
   numberLines,
+  resolveGlslWrapOptions,
   wgslDefines,
   wrapGlslSource,
   wrapWgslSource,
   type CompiledShaderStage,
+  type ResolvedGlslWrapOptions,
   type ShaderCompileRequest,
 } from './ShaderCompiler.js';
 export {

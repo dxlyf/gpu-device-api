@@ -13,7 +13,12 @@
  * 不会为了「看起来有值」而凭空编译。
  */
 
-import type { ShaderModule, ShaderModuleDescriptor, ShaderSource } from '../../core/resources/ShaderModule.js';
+import type {
+  GlslWrapOptions,
+  ShaderModule,
+  ShaderModuleDescriptor,
+  ShaderSource,
+} from '../../core/resources/ShaderModule.js';
 import type { ShaderStage } from '../../core/enums/ShaderStage.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
@@ -25,6 +30,8 @@ export class WebGPUShaderModule implements ShaderModule {
   readonly label: string;
   readonly source: ShaderSource;
   readonly defines: Record<string, string | number | boolean>;
+  /** GLSL 自动包装开关：WGSL 没有版本指令与精度前言，这里只保存不生效。 */
+  readonly glsl: GlslWrapOptions;
 
   private readonly device: WebGPUDevice;
   private readonly modulesByStage = new Map<ShaderStage, GPUShaderModule>();
@@ -35,6 +42,7 @@ export class WebGPUShaderModule implements ShaderModule {
     this.label = descriptor.label ?? `shader#${device.nextResourceId('shader')}`;
     this.source = resolveShaderSource(descriptor.code);
     this.defines = { ...(descriptor.defines ?? {}) };
+    this.glsl = descriptor.glsl ? { ...descriptor.glsl } : {};
 
     if (this.source.wgsl === undefined && this.source.vs === undefined && this.source.fs === undefined && this.source.cs === undefined) {
       throw new ValidationError(
@@ -71,6 +79,7 @@ export class WebGPUShaderModule implements ShaderModule {
       stage,
       label: this.label,
       defines: this.defines,
+      glsl: this.glsl, // WGSL 用不到，传下去只是让 request 与 module 保持一致
     }).code;
   }
 
