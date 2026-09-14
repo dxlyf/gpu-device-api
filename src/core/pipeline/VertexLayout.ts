@@ -58,9 +58,19 @@ export function validateVertexBufferLayout(
   }
 }
 
-/** 用于 pipeline 缓存的稳定 key。 */
+/**
+ * 用于 pipeline 缓存的稳定 key。
+ *
+ * 结果按 layouts 数组的**对象身份**记忆（WeakMap）：顶点布局是管线描述的一部分、创建后不再变，
+ * 而两个后端的每 draw 变体解析都会调到这里 —— 每次现拼一遍嵌套 `map/join` 在几千 draw 的
+ * 场景里就是几千次无意义的字符串分配。命中缓存时不再重新拼接。
+ */
+const layoutsKeyCache = new WeakMap<readonly VertexBufferLayout[], string>();
+
 export function vertexBufferLayoutsKey(layouts: readonly VertexBufferLayout[]): string {
-  return layouts
+  const cached = layoutsKeyCache.get(layouts);
+  if (cached !== undefined) return cached;
+  const key = layouts
     .map((layout) => {
       const attributes = layout.attributes
         .map((a) => `${a.shaderLocation}@${a.offset}:${a.format}`)
@@ -68,4 +78,6 @@ export function vertexBufferLayoutsKey(layouts: readonly VertexBufferLayout[]): 
       return `${layout.arrayStride}/${layout.stepMode ?? 'vertex'}[${attributes}]`;
     })
     .join(';');
+  layoutsKeyCache.set(layouts, key);
+  return key;
 }
