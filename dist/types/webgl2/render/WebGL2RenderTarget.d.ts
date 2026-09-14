@@ -75,6 +75,9 @@ export declare class WebGL2RenderTarget implements RenderTarget {
      *
      * 清屏时临时关闭 `SCISSOR_TEST`：GL 的 `clearBuffer*` 会受裁剪框影响，
      * 而这里的语义应该是「清整个附件」。
+     *
+     * 完整性（`checkFramebufferStatus`）不在这里查：附件只在构造与 resize() 时变，
+     * 所以 {@link attach} 里已经查过了。原来每个渲染通道都做一次同步查询是白付的。
      */
     bind(clear?: RenderTargetClearOptions): void;
     resize(width: number, height: number): boolean;

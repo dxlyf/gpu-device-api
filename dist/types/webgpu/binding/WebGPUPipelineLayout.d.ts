@@ -8,16 +8,19 @@
  */
 import type { PipelineLayout, PipelineLayoutDescriptor } from '../../core/binding/PipelineLayout.js';
 import type { BindGroupLayout } from '../../core/binding/BindGroupLayout.js';
+import type { WebGPUDevice } from '../WebGPUDevice.js';
 export declare class WebGPUPipelineLayout implements PipelineLayout {
     readonly label: string;
     readonly bindGroupLayouts: readonly BindGroupLayout[];
     /** `'auto'` 时为字符串 `'auto'`，否则为 `GPUPipelineLayout`。 */
     readonly native: GPUPipelineLayout | 'auto';
     readonly isAuto: boolean;
+    /** 由 `device.createPipelineLayout()` 创建时有值；`auto` 替身没有设备（也未被追踪）。 */
+    private readonly device;
     private _disposed;
     private constructor();
     /** 创建显式 layout。 */
-    static create(device: import('../WebGPUDevice.js').WebGPUDevice, descriptor: PipelineLayoutDescriptor): WebGPUPipelineLayout;
+    static create(device: WebGPUDevice, descriptor: PipelineLayoutDescriptor): WebGPUPipelineLayout;
     /** `layout: 'auto'` 的替身：`native` 为字符串 `'auto'`，`isAuto` 为 true。 */
     static auto(label?: string): WebGPUPipelineLayout;
     get disposed(): boolean;

@@ -45,6 +45,20 @@ export declare class WebGPURenderPassEncoder implements RenderPassEncoder {
     private readonly device;
     private readonly onEnd;
     private _ended;
+    /**
+     * 一个 pass 的 attachment 布局与 label 在生命周期内都不变，因此「pipeline variant 请求」
+     * 与各处报错用的 context 字符串都在构造时建一次。
+     *
+     * 这些值原先每次 `setPipeline` / `setBindGroup` / `setVertexBuffer` 都会现拼：
+     * 每 draw 一个对象 + 若干模板字符串，在几千个 draw 的帧里是纯浪费。
+     */
+    private readonly variantRequest;
+    private readonly contextSetPipeline;
+    private readonly contextSetBindGroup;
+    private readonly contextSetVertexBuffer;
+    private readonly contextSetIndexBuffer;
+    private readonly contextDrawIndirect;
+    private readonly contextDrawIndexedIndirect;
     constructor(device: WebGPUDevice, native: GPURenderPassEncoder, layout: WebGPURenderPassLayout, label: string, onEnd?: () => void);
     get ended(): boolean;
     setPipeline(pipeline: RenderPipeline): void;

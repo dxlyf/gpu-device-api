@@ -18,6 +18,10 @@ export declare class WebGPUComputePassEncoder implements ComputePassEncoder {
     private readonly device;
     private readonly onEnd;
     private _ended;
+    /** 同 render pass：label 在生命周期内不变，报错用的 context 只建一次，避免每次调用现拼。 */
+    private readonly contextSetPipeline;
+    private readonly contextSetBindGroup;
+    private readonly contextDispatchIndirect;
     constructor(device: WebGPUDevice, native: GPUComputePassEncoder, label: string, onEnd?: () => void);
     get ended(): boolean;
     setPipeline(pipeline: ComputePipeline): void;

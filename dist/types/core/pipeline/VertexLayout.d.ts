@@ -20,6 +20,5 @@ export declare function validateVertexBufferLayout(layout: VertexBufferLayout, l
     maxVertexAttributes: number;
     maxVertexBufferArrayStride: number;
 }): void;
-/** 用于 pipeline 缓存的稳定 key。 */
 export declare function vertexBufferLayoutsKey(layouts: readonly VertexBufferLayout[]): string;
 //# sourceMappingURL=VertexLayout.d.ts.map

@@ -19,6 +19,7 @@ export declare class WebGPUBindGroup implements BindGroup {
     readonly layout: BindGroupLayout;
     readonly entries: readonly BindGroupEntry[];
     readonly native: GPUBindGroup;
+    private readonly device;
     private readonly byBinding;
     private _disposed;
     constructor(device: WebGPUDevice, descriptor: BindGroupDescriptor);
@@ -27,6 +28,13 @@ export declare class WebGPUBindGroup implements BindGroup {
     /** GPUBindGroup 没有 destroy；释放只是把本包装对象标记为不可用。 */
     dispose(): void;
 }
+/**
+ * 共享的空 dynamic offset 数组。
+ *
+ * pass encoder 原先写 `dynamicOffsets ?? []`，于是每次 `setBindGroup` 都会多分配一个空数组
+ * （绝大多数 bind group 根本没有动态偏移）。原生 `setBindGroup` 只读这个数组，复用一个即可。
+ */
+export declare const NO_DYNAMIC_OFFSETS: readonly number[];
 /**
  * 校验 `setBindGroup` 的 dynamic offsets。
  *

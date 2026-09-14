@@ -29,6 +29,7 @@ import type { QuerySetDescriptor } from '../core/resources/QuerySet.js';
 import type { SamplerDescriptor } from '../core/resources/Sampler.js';
 import type { ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
 import type { TextureDescriptor } from '../core/resources/Texture.js';
+import type { Disposable } from '../utils/Disposable.js';
 import { GpuError } from '../core/errors/GpuError.js';
 import { type WebGPUAdapterRequestOptions } from './utils/wgpuCapabilities.js';
 import { WebGPUBuffer } from './resources/WebGPUBuffer.js';
@@ -83,6 +84,8 @@ export declare class WebGPUDevice implements Device {
     get disposed(): boolean;
     /** 设备是否仍然可用。 */
     get usable(): boolean;
+    /** 当前仍在追踪中的资源数量；仅供诊断与测试（core 的 `Device` 接口没有这个成员）。 */
+    get trackedResourceCount(): number;
     /** 生成 `prefix#N` 形式的资源 id，供各资源的默认 label 使用。 */
     nextResourceId(prefix: string): string;
     createBuffer(descriptor: BufferDescriptor): WebGPUBuffer;
@@ -117,6 +120,16 @@ export declare class WebGPUDevice implements Device {
     /** 释放设备创建的全部资源，然后销毁 device。幂等。 */
     dispose(): void;
     private track;
+    /**
+     * 资源在 `destroy()` / `dispose()` 时把自己从追踪集合里摘掉。
+     *
+     * 不做这一步的话，每帧 create/destroy 的工作负载（command encoder、buffer、texture、
+     * bind group……）会让 `resources` 一直强引用这些已经释放的包装对象及其原生句柄，
+     * 直到 `device.dispose()` 才释放 —— 这是实打实的泄漏。
+     *
+     * 幂等：对未追踪（或已摘掉）的资源调用是空操作。
+     */
+    untrack(resource: Disposable): void;
     private assertUsable;
     private handleDeviceLost;
 }

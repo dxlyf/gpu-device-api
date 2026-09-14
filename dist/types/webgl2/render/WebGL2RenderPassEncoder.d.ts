@@ -48,6 +48,16 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     private indexBuffer;
     private stencilReference;
     private _ended;
+    /**
+     * 变体请求对象：通道的颜色/深度格式在构造时就定了，生命周期内不会变，
+     * 所以只分配一次（原来每次解析变体都要新建一个对象）。
+     */
+    private readonly variantShape;
+    /** 变体解析结果的缓存：只跟当前管线对象走（见 {@link resolvedVariant}）。 */
+    private variantPipeline;
+    private variantValue;
+    /** 当前顶点/索引绑定内容的版本号（见模块级 nextBindingRevision）。 */
+    private bindingRevision;
     constructor(descriptor: RenderPassDescriptor, options: WebGL2RenderPassOptions);
     get ended(): boolean;
     setPipeline(pipeline: WebGL2RenderPipeline): void;
@@ -70,8 +80,15 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     popDebugGroup(): void;
     insertDebugMarker(label: string): void;
     end(): void;
-    /** 当前渲染目标的形态信息，用于让管线解析出对应状态。 */
-    private variantRequest;
+    /**
+     * 取当前通道形态下已解析好的管线变体。
+     *
+     * 附件形态（颜色/深度格式、采样数）在通道生命周期内固定，变体只跟管线对象走，
+     * 所以按管线记住解析结果就够了 —— 原先 `setPipeline` 与每个 `beginDraw` 都会重新解析一次，
+     * 每次解析都要拼一遍含全部顶点布局的 O(属性数) 键字符串。
+     * 管线被 dispose() 后变体缓存已被清空，这里重新解析以保持与原来一致的行为。
+     */
+    private resolvedVariant;
     private requirePipeline;
     private assertNoUnsupportedInstancing;
     /** 一个 draw 之前必须完成的全部绑定工作。 */

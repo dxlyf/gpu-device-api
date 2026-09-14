@@ -46,6 +46,14 @@ export interface ResolvedVariant {
   readonly vertexLayouts: readonly VertexBufferLayout[];
   /** 该形态下已经建好的 VAO，键里含顶点缓冲组合。 */
   readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
+  /**
+   * 最近一次 VAO 查询的结果（一次只记一条）。
+   *
+   * `revision` 由渲染通道在每次顶点/索引绑定**真正变化**时更新，只增不减，
+   * 所以「版本号相同」等价于「顶点缓冲与索引缓冲的绑定内容完全相同」。
+   * 命中时可以直接返回上一次的 VAO，省掉每次 draw 重建 O(属性数) 键字符串的开销。
+   */
+  vertexArrayLookup: { revision: number; vertexArray: WebGLVertexArrayObject } | null;
 }
 
 /** 一个顶点缓冲槽的绑定内容。 */
@@ -165,6 +173,7 @@ export class WebGL2RenderPipeline implements RenderPipeline {
       sampleCount,
       vertexLayouts,
       vertexArrays: new Map(),
+      vertexArrayLookup: null,
     };
     this.variantCache.set(key, resolved);
     return resolved;
@@ -186,18 +195,32 @@ export class WebGL2RenderPipeline implements RenderPipeline {
    *
    * 返回 `null` 表示管线不读顶点属性（例如全屏三角形由 `gl_VertexID` 生成），
    * 此时调用方应绑定默认 VAO，以免上一次的顶点属性设置残留下来。
+   *
+   * `bindingRevision` 由调用方（渲染通道）维护：同一个版本号必须对应同一份顶点/索引绑定内容。
+   * 传 0 表示调用方不提供版本号，此时只走下面按内容构建的缓存键。
    */
   acquireVertexArray(
     variant: ResolvedVariant,
     bindings: readonly (VertexBufferBinding | null)[],
     indexBuffer: WebGLBuffer | null,
+    bindingRevision = 0,
   ): WebGLVertexArrayObject | null {
     const layouts = variant.vertexLayouts;
     if (layouts.length === 0) return null;
 
+    // 快速路径：绑定内容没变（版本号相同）就直接复用上一次的结果，
+    // 连键字符串都不用拼 —— 构建键是 O(属性数) 的字符串拼接，而它原本每个 draw 都要做一次。
+    const lookup = variant.vertexArrayLookup;
+    if (bindingRevision > 0 && lookup !== null && lookup.revision === bindingRevision) {
+      return lookup.vertexArray;
+    }
+
     const key = buildVertexArrayKey(layouts, bindings, indexBuffer);
     const cached = variant.vertexArrays.get(key);
-    if (cached) return cached;
+    if (cached) {
+      if (bindingRevision > 0) variant.vertexArrayLookup = { revision: bindingRevision, vertexArray: cached };
+      return cached;
+    }
 
     const gl = this.gl;
     const vertexArray = gl.createVertexArray();
@@ -241,6 +264,7 @@ export class WebGL2RenderPipeline implements RenderPipeline {
     this.state.invalidateBufferBindings();
 
     variant.vertexArrays.set(key, vertexArray);
+    if (bindingRevision > 0) variant.vertexArrayLookup = { revision: bindingRevision, vertexArray };
     return vertexArray;
   }
 
@@ -260,6 +284,8 @@ export class WebGL2RenderPipeline implements RenderPipeline {
         this.gl.deleteVertexArray(vertexArray);
       }
       variant.vertexArrays.clear();
+      // 快速路径的记忆指向的 VAO 刚被删掉，必须一起清，否则下次 draw 会拿到已删除的对象。
+      variant.vertexArrayLookup = null;
     }
     this.variantCache.clear();
   }

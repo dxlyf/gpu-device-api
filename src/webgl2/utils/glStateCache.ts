@@ -106,6 +106,22 @@ export class GlStateCache {
     this.scissor = null;
   }
 
+  /**
+   * 只把纹理相关缓存标记为未知（当前活动单元的纹理绑定）。
+   *
+   * 用在「绕过缓存直接 `gl.bindTexture` 上传/拷贝纹理」之后：这类操作只改**当前活动单元**
+   * 的纹理绑定，其它状态（program / blend / depth / VAO / UBO）都没动。
+   * 用 {@link invalidate} 会把它们全部丢掉，于是下一次 draw 要把固定功能状态重下一遍 ——
+   * 每帧都有纹理上传时这笔开销是白付的。
+   *
+   * sampler 不受 `bindTexture` 影响，所以这里保留 sampler 缓存。
+   */
+  invalidateTextureUnits(): void {
+    // 只有 activeUnit 已知时才需要丢记录：textures 里的条目一定是设置过 activeUnit 之后写入的，
+    // 所以 activeUnit < 0 意味着 textures 本来就是空的。
+    if (this.activeUnit >= 0) this.textures.delete(this.activeUnit);
+  }
+
   useProgram(program: WebGLProgram | null): void {
     if (this.program === program) return;
     this.gl.useProgram(program);

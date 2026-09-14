@@ -14,6 +14,7 @@ export declare class WebGPUQuerySet implements QuerySet {
     readonly type: QueryType;
     readonly count: number;
     readonly native: GPUQuerySet;
+    private readonly device;
     private _disposed;
     constructor(device: WebGPUDevice, descriptor: QuerySetDescriptor);
     get disposed(): boolean;

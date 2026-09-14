@@ -208,19 +208,13 @@ export class WebGL2RenderTarget implements RenderTarget {
    *
    * 清屏时临时关闭 `SCISSOR_TEST`：GL 的 `clearBuffer*` 会受裁剪框影响，
    * 而这里的语义应该是「清整个附件」。
+   *
+   * 完整性（`checkFramebufferStatus`）不在这里查：附件只在构造与 resize() 时变，
+   * 所以 {@link attach} 里已经查过了。原来每个渲染通道都做一次同步查询是白付的。
    */
   bind(clear: RenderTargetClearOptions = {}): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
-
-    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-    if (status !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new ValidationError(
-        `[gpu-device-api] 渲染目标「${this.label}」的 framebuffer 不完整（格式组合在 WebGL2 下不受支持）。` +
-          `颜色附件：${this.colorFormats.join('、')}；深度附件：${this.depthFormat ?? '无'}。` +
-          `GL 状态码：0x${status.toString(16)}。`,
-      );
-    }
 
     const needsClear = clear.loadOp !== 'load' || (this.depthTexture !== null && clear.depthLoadOp !== 'load');
     if (needsClear) {
@@ -348,9 +342,21 @@ export class WebGL2RenderTarget implements RenderTarget {
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.STENCIL_ATTACHMENT, gl.TEXTURE_2D, null, 0);
     }
 
+    // 完整性只取决于附件组合与尺寸，而这两者只在构造 / resize() 时改（即只经过这里），
+    // 所以在这里查一次就够 —— 原来的 bind() 每个渲染通道都要做一次同步的 checkFramebufferStatus。
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
     // framebuffer 的绑定没有被状态缓存跟踪，这里作废缓存以免 drawBuffers 等状态判断失准。
     this.state.invalidate();
+
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new ValidationError(
+        `[gpu-device-api] 渲染目标「${this.label}」的 framebuffer 不完整（格式组合在 WebGL2 下不受支持）。` +
+          `颜色附件：${this.colorFormats.join('、')}；深度附件：${this.depthFormat ?? '无'}。` +
+          `GL 状态码：0x${status.toString(16)}。`,
+      );
+    }
   }
 }
 

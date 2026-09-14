@@ -57,6 +57,17 @@ export declare class GlStateCache {
      * 外部通过 `device.native` 改过状态、或切换了 framebuffer 之后都应调用它。
      */
     invalidate(): void;
+    /**
+     * 只把纹理相关缓存标记为未知（当前活动单元的纹理绑定）。
+     *
+     * 用在「绕过缓存直接 `gl.bindTexture` 上传/拷贝纹理」之后：这类操作只改**当前活动单元**
+     * 的纹理绑定，其它状态（program / blend / depth / VAO / UBO）都没动。
+     * 用 {@link invalidate} 会把它们全部丢掉，于是下一次 draw 要把固定功能状态重下一遍 ——
+     * 每帧都有纹理上传时这笔开销是白付的。
+     *
+     * sampler 不受 `bindTexture` 影响，所以这里保留 sampler 缓存。
+     */
+    invalidateTextureUnits(): void;
     useProgram(program: WebGLProgram | null): void;
     /**
      * 只把 buffer 绑定相关的缓存标记为未知。

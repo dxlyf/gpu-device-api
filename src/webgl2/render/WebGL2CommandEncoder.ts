@@ -163,7 +163,9 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     }
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-    this.state.invalidate();
+    // 只绕过缓存直接改了一个纹理单元的绑定，作废纹理单元缓存即可；
+    // invalidate() 会把 program/blend/depth/VAO/UBO 一起丢掉，下一次 draw 要全部重下。
+    this.state.invalidateTextureUnits();
   }
 
   copyTextureToBuffer(source: TextureCopyView, destination: BufferCopyView, copySize: Extent3D): void {
@@ -203,6 +205,8 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
     gl.deleteFramebuffer(framebuffer);
+    // 这条读回路径临时切了 framebuffer：framebuffer 绑定不在状态缓存里（见 WebGL2RenderTarget.attach），
+    // 所以保留整体作废。它不在每 draw 的热路径上，不必为它冒状态失准的风险。
     this.state.invalidate();
 
     const buffer = destination.buffer as WebGL2Buffer;
@@ -265,6 +269,7 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
     gl.deleteFramebuffer(readFramebuffer);
     gl.deleteFramebuffer(drawFramebuffer);
+    // 同上：blit 前后切了 READ/DRAW framebuffer，保留整体作废（非热路径）。
     this.state.invalidate();
   }
 

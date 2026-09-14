@@ -16,7 +16,11 @@ export declare class WebGPUTextureView implements TextureView {
     readonly descriptor: ResolvedTextureViewDescriptor;
     readonly native: GPUTextureView;
     private _disposed;
-    constructor(texture: WebGPUTexture, descriptor?: TextureViewDescriptor);
+    /**
+     * `preResolved` 由 {@link WebGPUTexture.createView} 传入：它已经为查缓存解析过一次，
+     * 这里不再重复解析（`resolveTextureViewDescriptor` 每次都会新建一个对象）。
+     */
+    constructor(texture: WebGPUTexture, descriptor?: TextureViewDescriptor, preResolved?: ResolvedTextureViewDescriptor);
     /** view 覆盖的格式（可能是重解释后的格式）。 */
     get format(): TextureFormat;
     get disposed(): boolean;

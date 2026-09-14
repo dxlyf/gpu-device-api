@@ -39,7 +39,12 @@ import type { WebGLBindingPlan, UniformBlockSlot } from '../binding/TextureUnitA
 import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
 import type { WebGL2Sampler } from '../resources/WebGL2Sampler.js';
 import type { WebGL2TextureView } from '../resources/WebGL2TextureView.js';
-import type { WebGL2RenderPipeline, VertexBufferBinding } from '../pipeline/WebGL2RenderPipeline.js';
+import type {
+  ResolvedVariant,
+  WebGL2RenderPipeline,
+  VertexBufferBinding,
+} from '../pipeline/WebGL2RenderPipeline.js';
+import type { RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
 import type { WebGL2RenderTarget } from './WebGL2RenderTarget.js';
 import { isDefaultFramebufferView } from '../WebGL2CanvasContext.js';
 import type { FramebufferCache } from './framebuffer-cache.js';
@@ -49,6 +54,16 @@ import type { FramebufferCache } from './framebuffer-cache.js';
  * 但用共享空数组可以避免运行时写 `?? []`（那也是一次每 draw 的分配）。
  */
 const EMPTY_DYNAMIC_SLOTS: readonly UniformBlockSlot[] = [];
+
+/**
+ * 顶点/索引绑定的全局版本号。
+ *
+ * 每次绑定内容**真的**变化时取一个新值（只增不减），所以「版本号相同」严格等价于
+ * 「顶点缓冲与索引缓冲的绑定内容完全相同」。`acquireVertexArray` 靠它做一次数字比较，
+ * 就能跳过每次 draw 重建 VAO 缓存键字符串的 O(属性数) 开销。
+ * 用全局计数器（而不是通道内自增）是为了让不同通道之间也不会撞号。
+ */
+let nextBindingRevision = 1;
 
 export interface WebGL2RenderPassOptions {
   gl: WebGL2RenderingContext;
@@ -83,6 +98,17 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   private indexBuffer: IndexBufferBinding | null = null;
   private stencilReference = 0;
   private _ended = false;
+
+  /**
+   * 变体请求对象：通道的颜色/深度格式在构造时就定了，生命周期内不会变，
+   * 所以只分配一次（原来每次解析变体都要新建一个对象）。
+   */
+  private readonly variantShape: Partial<RenderPipelineVariant>;
+  /** 变体解析结果的缓存：只跟当前管线对象走（见 {@link resolvedVariant}）。 */
+  private variantPipeline: WebGL2RenderPipeline | null = null;
+  private variantValue: ResolvedVariant | null = null;
+  /** 当前顶点/索引绑定内容的版本号（见模块级 nextBindingRevision）。 */
+  private bindingRevision = nextBindingRevision++;
 
   constructor(descriptor: RenderPassDescriptor, options: WebGL2RenderPassOptions) {
     this.label = descriptor.label ?? 'renderPass';
@@ -141,6 +167,9 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
         this.state.setViewport(0, 0, width, height);
       }
     }
+
+    // 附件形态到这里就定了：之后的 setPipeline / draw 都复用这一个请求对象。
+    this.variantShape = { colorFormats: this.colorFormats, sampleCount: 1, depthFormat: this.depthFormat };
   }
 
   get ended(): boolean {
@@ -150,7 +179,7 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   setPipeline(pipeline: WebGL2RenderPipeline): void {
     this.assertOpen('setPipeline');
     this.pipeline = pipeline;
-    pipeline.applyState(pipeline.resolveVariant(this.variantRequest()), this.stencilReference);
+    pipeline.applyState(this.resolvedVariant(pipeline), this.stencilReference);
   }
 
   setBindGroup(index: number, bindGroup: WebGL2BindGroup | null, dynamicOffsets?: readonly number[]): void {
@@ -195,7 +224,23 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
           '所以它不能再当顶点缓冲使用。请为顶点数据单独创建一个 buffer。',
       );
     }
-    this.vertexBuffers[slot] = buffer ? { buffer, offset, size } : null;
+
+    const existing = this.vertexBuffers[slot];
+    if (buffer === null) {
+      if (!existing) return;
+      this.vertexBuffers[slot] = null;
+      this.bindingRevision = nextBindingRevision++;
+      return;
+    }
+    // 便捷层每个 draw 都会把所有属性重新 set 一遍，内容没变时就别换对象、也别换版本号 ——
+    // 这样既省掉每属性一次的分配，也让 acquireVertexArray 走「绑定没变」的快速路径。
+    if (existing && existing.buffer === buffer && existing.offset === offset && existing.size === size) return;
+    const binding: VertexBufferBinding = existing ?? { buffer, offset, size };
+    binding.buffer = buffer;
+    binding.offset = offset;
+    binding.size = size;
+    this.vertexBuffers[slot] = binding;
+    this.bindingRevision = nextBindingRevision++;
   }
 
   setIndexBuffer(buffer: WebGL2Buffer, format: IndexFormat, offset = 0, size = -1): void {
@@ -207,7 +252,26 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
           '它无法再绑到 ELEMENT_ARRAY_BUFFER。请在 createBuffer() 时加上 `BufferUsage.Index`。',
       );
     }
-    this.indexBuffer = { buffer, format, offset, size };
+    // 与 setVertexBuffer 同样的道理：内容没变就不换对象、不换版本号。
+    const existing = this.indexBuffer;
+    if (
+      existing &&
+      existing.buffer === buffer &&
+      existing.format === format &&
+      existing.offset === offset &&
+      existing.size === size
+    ) {
+      return;
+    }
+    if (existing) {
+      existing.buffer = buffer;
+      existing.format = format;
+      existing.offset = offset;
+      existing.size = size;
+    } else {
+      this.indexBuffer = { buffer, format, offset, size };
+    }
+    this.bindingRevision = nextBindingRevision++;
   }
 
   setViewport(
@@ -240,7 +304,7 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
     this.assertOpen('setStencilReference');
     this.stencilReference = reference;
     if (this.pipeline) {
-      this.pipeline.applyState(this.pipeline.resolveVariant(this.variantRequest()), reference);
+      this.pipeline.applyState(this.resolvedVariant(this.pipeline), reference);
     }
   }
 
@@ -329,13 +393,20 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
 
   /* ------------------------------------------------------------------ 内部 ------------------- */
 
-  /** 当前渲染目标的形态信息，用于让管线解析出对应状态。 */
-  private variantRequest(): {
-    colorFormats: readonly TextureFormat[];
-    sampleCount: number;
-    depthFormat: TextureFormat | null;
-  } {
-    return { colorFormats: this.colorFormats, sampleCount: 1, depthFormat: this.depthFormat };
+  /**
+   * 取当前通道形态下已解析好的管线变体。
+   *
+   * 附件形态（颜色/深度格式、采样数）在通道生命周期内固定，变体只跟管线对象走，
+   * 所以按管线记住解析结果就够了 —— 原先 `setPipeline` 与每个 `beginDraw` 都会重新解析一次，
+   * 每次解析都要拼一遍含全部顶点布局的 O(属性数) 键字符串。
+   * 管线被 dispose() 后变体缓存已被清空，这里重新解析以保持与原来一致的行为。
+   */
+  private resolvedVariant(pipeline: WebGL2RenderPipeline): ResolvedVariant {
+    if (this.variantPipeline !== pipeline || pipeline.disposed) {
+      this.variantValue = pipeline.resolveVariant(this.variantShape);
+      this.variantPipeline = pipeline;
+    }
+    return this.variantValue!;
   }
 
   private requirePipeline(operation: string): WebGL2RenderPipeline {
@@ -364,13 +435,14 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
 
   /** 一个 draw 之前必须完成的全部绑定工作。 */
   private beginDraw(pipeline: WebGL2RenderPipeline, index: IndexBufferBinding | null): void {
-    const variant = pipeline.resolveVariant(this.variantRequest());
+    const variant = this.resolvedVariant(pipeline);
     pipeline.applyState(variant, this.stencilReference);
 
     const vertexArray = pipeline.acquireVertexArray(
       variant,
       this.vertexBuffers,
       index ? index.buffer.native : null,
+      this.bindingRevision,
     );
     this.state.bindVertexArray(vertexArray);
     if (vertexArray === null && index) {

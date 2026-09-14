@@ -45,6 +45,9 @@ export declare class WebGPUTexture implements Texture {
     private readonly extent;
     private readonly viewCache;
     private readonly viewList;
+    /** 无参 `createView()` 的解析结果与 cache key：这是最常见的热路径，只需算一次。 */
+    private defaultViewResolved;
+    private defaultViewKey;
     private _disposed;
     private constructor();
     /**

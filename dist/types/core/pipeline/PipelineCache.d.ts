@@ -14,6 +14,11 @@ export interface PipelineCache<T> {
  * 以便后端释放对应的 GPU 对象。
  */
 export declare function createPipelineCache<T>(limit?: number, onEvict?: (value: T, key: string) => void): PipelineCache<T>;
-/** 由字符串和数字拼出稳定的 cache key，跳过空片段。 */
+/**
+ * 由字符串和数字拼出稳定的 cache key，跳过空片段。
+ *
+ * 用手写循环而不是 `parts.filter(...).join('|')`：后者每次调用多分配一个中间数组，
+ * 而两个后端的变体解析都会走到这里。
+ */
 export declare function cacheKey(...parts: (string | number | boolean | undefined | null)[]): string;
 //# sourceMappingURL=PipelineCache.d.ts.map

@@ -17,6 +17,7 @@ export declare class WebGPUBindGroupLayout implements BindGroupLayout {
     readonly entries: readonly BindGroupLayoutEntry[];
     readonly sortedEntries: readonly BindGroupLayoutEntry[];
     readonly native: GPUBindGroupLayout;
+    private readonly device;
     private readonly byBinding;
     private _disposed;
     constructor(device: WebGPUDevice, descriptor: BindGroupLayoutDescriptor);

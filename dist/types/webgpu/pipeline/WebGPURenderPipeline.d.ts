@@ -32,8 +32,19 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
     private readonly device;
     private readonly cache;
     private readonly logger;
+    private readonly sampleCountContext;
     private _disposed;
     private warnedMissingVertexLayouts;
+    /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
+    private defaultColorFormatsCache;
+    /** 上一次 `resolve()` 的入参与结果，用于按身份快速命中（见 {@link WebGPURenderPipeline.resolve}）。 */
+    private lastVariantInput;
+    private lastVariantColorFormats;
+    private lastVariantSampleCount;
+    private lastVariantDepthFormat;
+    private lastVariantVertexLayouts;
+    private lastVariantResolved;
+    private lastVariantKey;
     constructor(device: WebGPUDevice, descriptor: RenderPipelineDescriptor);
     /** 至少编译过一个 variant 时为 true（不触发编译）。 */
     get compiled(): boolean;
@@ -46,6 +57,11 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
      * 解析（并缓存）某个 target/variant 对应的具体 pipeline。
      *
      * `variant` 里未给出的字段按以下顺序取值：pipeline descriptor → `render` 预设 → 默认值。
+     *
+     * 同一个 render pass 内每次 `setPipeline` 传的都是同一个 variant 请求对象
+     *（见 `WebGPURenderPassEncoder` 的 `variantRequest`），因此这里按「入参身份 + 字段值」
+     * 复用上一次的解析结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
+     * 也不再重算 vertex layout key —— 这些原本都在每 draw 的路径上。
      */
     resolve(variant?: Partial<RenderPipelineVariant>): GPURenderPipeline;
     /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
@@ -53,6 +69,12 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
     /** 释放缓存（`GPURenderPipeline` 没有 destroy）。 */
     dispose(): void;
     private resolveVariant;
+    /**
+     * descriptor 里声明的（或从 fragment targets 推导出的）color format 列表。
+     *
+     * 推导路径原先每次调用都新建一个数组；descriptor 是 readonly 的，结果缓存到实例上，
+     * 与「共享空数组」一起消掉每 draw 的数组分配。
+     */
     private defaultColorFormats;
     private createNative;
     /** 组装 `GPURenderPipelineDescriptor`；导出的目的是方便单测与调试。 */

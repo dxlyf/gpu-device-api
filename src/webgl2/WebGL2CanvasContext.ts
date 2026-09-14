@@ -144,6 +144,8 @@ export class WebGL2CanvasContext implements CanvasContext {
   private depthBits = 0;
   /** `configure()` 里是否明确要求了深度；`undefined` 表示没表态（不校验）。 */
   private depthRequested: boolean | undefined = undefined;
+  /** 默认帧缓冲的采样数；`SAMPLES` 是 context 创建时定下的常量，查一次即可（见 sampleCount()）。 */
+  private samples: number | null = null;
 
   constructor(options: WebGL2CanvasContextOptions) {
     this.gl = options.gl;
@@ -274,7 +276,7 @@ export class WebGL2CanvasContext implements CanvasContext {
         '[gpu-device-api] canvas 还没有 configure()，无法获取帧目标。请先调用 device.createCanvasContext(canvas)（它会自动完成配置）。',
       );
     }
-    const sampleCount = Number(this.gl.getParameter(this.gl.SAMPLES) ?? 1) || 1;
+    const sampleCount = this.sampleCount();
     const texture = new DefaultFramebufferTexture(
       this._width,
       this._height,
@@ -342,6 +344,19 @@ export class WebGL2CanvasContext implements CanvasContext {
       depthStoreOp: options.depthStoreOp ?? 'store',
       depthClearValue: options.depthClearValue ?? 1,
     };
+  }
+
+  /**
+   * 默认帧缓冲的采样数。
+   *
+   * `gl.getParameter(SAMPLES)` 是一次同步查询（要等 GL 命令队列），而它由创建 context 时的
+   * `antialias` 决定、在 context 生命周期内不会变，所以这里只查一次并记住。
+   */
+  private sampleCount(): number {
+    if (this.samples === null) {
+      this.samples = Number(this.gl.getParameter(this.gl.SAMPLES) ?? 1) || 1;
+    }
+    return this.samples;
   }
 
   private applyBackingSize(): void {

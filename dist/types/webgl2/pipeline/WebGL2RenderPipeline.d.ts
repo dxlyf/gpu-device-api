@@ -34,6 +34,17 @@ export interface ResolvedVariant {
     readonly vertexLayouts: readonly VertexBufferLayout[];
     /** 该形态下已经建好的 VAO，键里含顶点缓冲组合。 */
     readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
+    /**
+     * 最近一次 VAO 查询的结果（一次只记一条）。
+     *
+     * `revision` 由渲染通道在每次顶点/索引绑定**真正变化**时更新，只增不减，
+     * 所以「版本号相同」等价于「顶点缓冲与索引缓冲的绑定内容完全相同」。
+     * 命中时可以直接返回上一次的 VAO，省掉每次 draw 重建 O(属性数) 键字符串的开销。
+     */
+    vertexArrayLookup: {
+        revision: number;
+        vertexArray: WebGLVertexArrayObject;
+    } | null;
 }
 /** 一个顶点缓冲槽的绑定内容。 */
 export interface VertexBufferBinding {
@@ -86,8 +97,11 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
      *
      * 返回 `null` 表示管线不读顶点属性（例如全屏三角形由 `gl_VertexID` 生成），
      * 此时调用方应绑定默认 VAO，以免上一次的顶点属性设置残留下来。
+     *
+     * `bindingRevision` 由调用方（渲染通道）维护：同一个版本号必须对应同一份顶点/索引绑定内容。
+     * 传 0 表示调用方不提供版本号，此时只走下面按内容构建的缓存键。
      */
-    acquireVertexArray(variant: ResolvedVariant, bindings: readonly (VertexBufferBinding | null)[], indexBuffer: WebGLBuffer | null): WebGLVertexArrayObject | null;
+    acquireVertexArray(variant: ResolvedVariant, bindings: readonly (VertexBufferBinding | null)[], indexBuffer: WebGLBuffer | null, bindingRevision?: number): WebGLVertexArrayObject | null;
     /** 当前缓存了多少个 VAO（跨全部形态）。 */
     get vertexArrayCount(): number;
     dispose(): void;

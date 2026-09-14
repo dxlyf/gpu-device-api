@@ -11,6 +11,7 @@ export declare class WebGPUSampler implements Sampler {
     readonly label: string;
     readonly descriptor: Sampler['descriptor'];
     readonly native: GPUSampler;
+    private readonly device;
     private _disposed;
     constructor(device: WebGPUDevice, descriptor?: SamplerDescriptor);
     get disposed(): boolean;

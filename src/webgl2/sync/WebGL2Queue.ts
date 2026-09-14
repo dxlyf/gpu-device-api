@@ -112,7 +112,9 @@ export class WebGL2Queue implements Queue {
 
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-    this.state.invalidate();
+    // 这里只绕过缓存直接改了一个纹理单元的绑定，所以只作废纹理单元缓存；
+    // 用 invalidate() 会顺带丢掉 program/blend/depth/VAO/UBO，下一次 draw 得全部重下。
+    this.state.invalidateTextureUnits();
   }
 
   copyExternalImageToTexture(
@@ -163,7 +165,8 @@ export class WebGL2Queue implements Queue {
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     }
-    this.state.invalidate();
+    // 只改了当前纹理单元的绑定（见 writeTexture 里的说明）。
+    this.state.invalidateTextureUnits();
   }
 
   copyBufferToBuffer(

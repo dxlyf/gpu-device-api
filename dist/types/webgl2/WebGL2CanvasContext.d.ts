@@ -34,6 +34,8 @@ export declare class WebGL2CanvasContext implements CanvasContext {
     private depthBits;
     /** `configure()` 里是否明确要求了深度；`undefined` 表示没表态（不校验）。 */
     private depthRequested;
+    /** 默认帧缓冲的采样数；`SAMPLES` 是 context 创建时定下的常量，查一次即可（见 sampleCount()）。 */
+    private samples;
     constructor(options: WebGL2CanvasContextOptions);
     get device(): WebGL2Device | null;
     get deviceRef(): WebGL2Device | null;
@@ -69,6 +71,13 @@ export declare class WebGL2CanvasContext implements CanvasContext {
      * 上层会据此如实关掉深度测试，而不是让它「看起来开着」。
      */
     private createDepthAttachment;
+    /**
+     * 默认帧缓冲的采样数。
+     *
+     * `gl.getParameter(SAMPLES)` 是一次同步查询（要等 GL 命令队列），而它由创建 context 时的
+     * `antialias` 决定、在 context 生命周期内不会变，所以这里只查一次并记住。
+     */
+    private sampleCount;
     private applyBackingSize;
 }
 //# sourceMappingURL=WebGL2CanvasContext.d.ts.map
