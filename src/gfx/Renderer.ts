@@ -28,10 +28,10 @@ import { createDeviceWithAdapter } from '../factories/createDevice.js';
 import { createLogger, type Logger } from '../utils/logger.js';
 import { mat3, mat4, type Mat4 } from '../utils/math/index.js';
 import type { BackendKind } from '../core/Adapter.js';
-import type { CanvasContext, FrameTarget } from '../core/CanvasContext.js';
+import type { CanvasContext } from '../core/CanvasContext.js';
 import type { Device } from '../core/Device.js';
 import type { CommandEncoder, CommandBuffer } from '../core/render/CommandEncoder.js';
-import type { RenderPassEncoder } from '../core/render/RenderPassEncoder.js';
+import type { RenderPassDescriptor, RenderPassEncoder } from '../core/render/RenderPassEncoder.js';
 import type { RenderTarget, Color } from '../core/render/RenderTarget.js';
 import type { RenderPipeline } from '../core/pipeline/RenderPipeline.js';
 import type { BindGroup } from '../core/binding/BindGroup.js';
@@ -55,6 +55,13 @@ export interface RendererOptions {
   alpha?: boolean;
   /** 是否创建深度缓冲。默认 `true`。 */
   depth?: boolean;
+  /**
+   * canvas 的 MSAA 采样数（1 或 4）。
+   *
+   * WebGPU：会用这个采样数 `configure()` canvas，并在画布渲染通道里做 MSAA resolve；
+   * WebGL2：canvas 的采样数由创建 context 时的 `antialias` 决定、离屏目标不支持 MSAA，
+   * 所以这里传 `> 1` 会直接抛 `ValidationError`（不会静默忽略）。
+   */
   sampleCount?: number;
   pixelRatio?: number;
   powerPreference?: 'low-power' | 'high-performance';
@@ -62,6 +69,7 @@ export interface RendererOptions {
   clearColor?: ColorInput;
   camera?: Camera;
   logger?: Logger;
+  /** WebGL2 的 context 属性覆盖项（覆盖上面几个选项推导出来的默认值）。 */
   contextAttributes?: WebGLContextAttributes;
 }
 
@@ -182,23 +190,51 @@ export class Renderer {
   /** 创建渲染器：自动探测后端、创建设备、配置 canvas。 */
   static async create(options: RendererOptions): Promise<Renderer> {
     const logger = options.logger ?? createLogger('gpu-device-api/gfx');
+    // `contextAttributes` 是逃生口：用户给了就以用户为准（逐字段覆盖），否则用上面几个选项推导。
+    const contextAttributes: WebGLContextAttributes = {
+      antialias: options.antialias ?? true,
+      alpha: options.alpha ?? false,
+      depth: options.depth ?? true,
+      stencil: false,
+      premultipliedAlpha: true,
+      preserveDrawingBuffer: false,
+      powerPreference: options.powerPreference ?? 'high-performance',
+      ...options.contextAttributes,
+    };
+    /** 本次渲染器是否需要深度附件（用户显式关掉时才是 false）。 */
+    const wantDepth = contextAttributes.depth !== false;
+
     const created = await createDeviceWithAdapter({
       canvas: options.canvas,
       backend: options.backend ?? 'auto',
       label: 'gfx-renderer',
-      contextAttributes: {
-        antialias: options.antialias ?? true,
-        alpha: options.alpha ?? false,
-        depth: options.depth ?? true,
-        stencil: false,
-        premultipliedAlpha: true,
-        preserveDrawingBuffer: false,
-        powerPreference: options.powerPreference ?? 'high-performance',
-      },
+      contextAttributes,
     });
 
     if (!created.context) {
       throw new ValidationError('[gpu-device-api] 创建 Renderer 必须提供 canvas。');
+    }
+
+    /*
+     * 深度与 MSAA 要在 canvas context 上说清楚，否则会出现「声明了却没生效」：
+     * - WebGPU 的 canvas 纹理没有深度附件，不显式要就永远没有深度测试；MSAA 也只有在
+     *   configure 时声明才会走多重采样 + resolve；
+     * - WebGL2 的深度缓冲与采样数都由创建 context 时的属性决定，`configure()` 里只能如实核对
+     *   （要不到就抛错，见 WebGL2CanvasContext.configure）。
+     * 只在与默认值不同时才重新 configure 一次，避免无谓地丢弃当前帧。
+     */
+    /*
+     * MSAA：WebGL2 由 context 的 `antialias` 决定，WebGPU 只能靠 `configure()` 声明，
+     * 而 `device.defaultSampleCount` 默认是 1 —— 所以这里必须把 `antialias` 也映射过去，
+     * 否则 `Renderer.create({ canvas })` 会在 WebGL2 上有 MSAA、在 WebGPU 上没有（静默差异）。
+     */
+    const canvasSampleCount =
+      options.sampleCount ?? (created.backend === 'webgpu' && (options.antialias ?? true) ? 4 : undefined);
+    if (canvasSampleCount !== undefined || !wantDepth) {
+      created.device.createCanvasContext(options.canvas, {
+        ...(canvasSampleCount !== undefined ? { sampleCount: canvasSampleCount } : {}),
+        ...(wantDepth ? {} : { depth: false }),
+      });
     }
 
     const renderer = new Renderer({
@@ -327,39 +363,21 @@ export class Renderer {
 
     this.encoder = this.device.createCommandEncoder({ label: 'gfx-frame' });
     const clearColor = options.color ?? this._clearColor;
+    const descriptor = this.createPassDescriptor(options, clearColor);
 
-    let colorView;
-    let depthStencilAttachment = null;
-    if (options.target) {
-      const descriptor = options.target.createPassDescriptor({
-        loadOp: options.load ? 'load' : 'clear',
-        storeOp: 'store',
-        clearValue: clearColor,
-        depthLoadOp: options.load ? 'load' : 'clear',
-        depthClearValue: options.depth ?? 1,
-      });
-      colorView = descriptor.colorAttachments[0]?.view;
-      depthStencilAttachment = descriptor.depthStencilAttachment;
-    } else {
-      const frame: FrameTarget = this.context.getCurrentFrameTarget();
-      colorView = frame.view;
-    }
-
-    if (!colorView) {
+    if (!descriptor.colorAttachments[0]?.view) {
       throw new ValidationError('[gpu-device-api] 当前帧没有颜色附件，无法开始渲染通道。');
     }
 
+    /*
+     * 直接使用后端给的 attachment 列表（而不是只取 `view` 再自己拼）：
+     * canvas 路径的 MSAA resolveTarget 与两个后端的 depth attachment 都在里面，
+     * 自己拼会把它们丢掉 —— 那正是「画布渲染没有深度测试」这个缺陷的成因。
+     */
     this.pass = this.encoder.beginRenderPass({
       label: 'gfx-pass',
-      colorAttachments: [
-        {
-          view: colorView,
-          loadOp: options.load ? 'load' : 'clear',
-          storeOp: 'store',
-          clearValue: clearColor,
-        },
-      ],
-      ...(depthStencilAttachment ? { depthStencilAttachment } : {}),
+      colorAttachments: descriptor.colorAttachments,
+      ...(descriptor.depthStencilAttachment ? { depthStencilAttachment: descriptor.depthStencilAttachment } : {}),
     });
 
     this.commandBuffers = [];
@@ -402,41 +420,37 @@ export class Renderer {
     }
     this.pass?.end();
     const encoder = this.encoder!;
-
-    let colorView;
-    let depthStencilAttachment = null;
-    if (options.target) {
-      const descriptor = options.target.createPassDescriptor({
-        loadOp: options.load ? 'load' : 'clear',
-        storeOp: 'store',
-        clearValue: options.color ?? this._clearColor,
-        depthLoadOp: options.load ? 'load' : 'clear',
-        depthClearValue: options.depth ?? 1,
-      });
-      colorView = descriptor.colorAttachments[0]?.view;
-      depthStencilAttachment = descriptor.depthStencilAttachment;
-    } else {
-      colorView = this.context.getCurrentFrameTarget().view;
-    }
-    if (!colorView) {
+    const descriptor = this.createPassDescriptor(options, options.color ?? this._clearColor);
+    if (!descriptor.colorAttachments[0]?.view) {
       throw new ValidationError('[gpu-device-api] 当前通道没有颜色附件。');
     }
 
     this.pass = encoder.beginRenderPass({
       label: 'gfx-pass',
-      colorAttachments: [
-        {
-          view: colorView,
-          loadOp: options.load ? 'load' : 'clear',
-          storeOp: 'store',
-          clearValue: options.color ?? this._clearColor,
-        },
-      ],
-      ...(depthStencilAttachment ? { depthStencilAttachment } : {}),
+      colorAttachments: descriptor.colorAttachments,
+      ...(descriptor.depthStencilAttachment ? { depthStencilAttachment: descriptor.depthStencilAttachment } : {}),
     });
 
     // 新通道开始时管线状态要重新绑定，所以第一个 draw 记作一次切换。
     this.currentPipeline = null;
+  }
+
+  /**
+   * 「画到离屏 target」与「画到 canvas」走同一段代码，只是附件来源不同。
+   *
+   * 两条路径都返回同一形状的 {@link RenderPassDescriptor}（colorAttachments + depthStencilAttachment），
+   * 所以深度附件不会被某一条路径漏掉 —— 之前的缺陷正是「画布路径自己拼 color attachment、
+   * 从不传 depth attachment」，于是后端的状态解析器如实关掉了 DEPTH_TEST。
+   */
+  private createPassDescriptor(options: FrameOptions, clearColor: Color): RenderPassDescriptor {
+    const clear = {
+      loadOp: options.load ? ('load' as const) : ('clear' as const),
+      storeOp: 'store' as const,
+      clearValue: clearColor,
+      depthLoadOp: options.load ? ('load' as const) : ('clear' as const),
+      depthClearValue: options.depth ?? 1,
+    };
+    return options.target ? options.target.createPassDescriptor(clear) : this.context.createPassDescriptor(clear);
   }
 
   /** 绘制一个几何体。 */

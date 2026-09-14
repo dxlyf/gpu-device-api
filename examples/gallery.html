@@ -127,8 +127,18 @@
       <a class="card" href="./smoke.html">
         <span class="title">冒烟测试</span><span class="tag gfx">gfx + core</span>
         <div class="desc">
-          15 项检查：设备创建、管线交叉校验、canvas 与离屏目标的像素级断言、以及各类错误路径。
+          17 项检查：设备创建、管线交叉校验、canvas 与离屏目标的像素级断言、以及各类错误路径。
           结果写在 <code>data-smoke-result</code>。
+        </div>
+      </a>
+      <a class="card" href="./depth.html?backend=webgl2">
+        <span class="title">画布深度测试回归</span><span class="tag gfx">gfx + core</span>
+        <div class="desc">
+          先画近处红四边形、再画远处绿四边形（都 <code>depthTest: true</code>），中心像素必须是红 ——
+          否则说明画布渲染通道没有 depth attachment、<code>DEPTH_TEST</code> 被悄悄关掉。
+          读回的是 <strong>canvas 本身</strong>（WebGL2 走 <code>readPixels</code>，WebGPU 走
+          <code>copyTextureToBuffer</code>）。用 <code>?backend=webgl2|webgpu</code> 各跑一遍，
+          结论在 <code>data-depth-result / -pixel / -format</code>。
         </div>
       </a>
     </div>
@@ -138,12 +148,13 @@
         <b>无头验证</b>：每个页面都会把自己那次的结论写进 <code>&lt;html data-*&gt;</code>，
         无头浏览器 <code>--dump-dom</code> 抓一下就知道有没有画出来 —— 例如
         <code>data-triangle-lit</code>、<code>data-texture-distinct</code>、
-        <code>data-batch-lit</code>、<code>data-benchmark-results</code>。
+        <code>data-batch-lit</code>、<code>data-depth-result</code>、<code>data-benchmark-results</code>。
       </p>
       <p>
         <b>两个坑</b>：<code>--virtual-time-budget</code> 会让 <code>performance.now()</code> 跟着虚拟时间跳，
         <b>性能基准千万不要加</b>；测 WebGPU 时不要同时加 <code>--use-angle=swiftshader</code>
-        （那个组合下 <code>requestAdapter()</code> 会返回 null）。
+        （那个组合下 <code>requestAdapter()</code> 会返回 null）。WebGPU 的异步返回也抓不住
+        <code>--dump-dom</code>，请用 <code>node scripts/verify-headless.mjs</code>（CDP + 真实时间轮询）。
       </p>
       <p>
         源码与用法见仓库根目录的 <code>README.md</code>；每个示例的 <code>core-*.ts</code> 顶部注释都写了

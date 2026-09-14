@@ -23,11 +23,14 @@ export {
   type DeviceLostInfo,
 } from './Device.js';
 export {
+  CANVAS_DEPTH_FORMAT,
   defaultPixelRatio,
   measureCanvas,
   type CanvasAlphaMode,
   type CanvasColorSpace,
   type CanvasConfig,
   type CanvasContext,
+  type CanvasPassDescriptor,
+  type CanvasPassOptions,
   type FrameTarget,
 } from './CanvasContext.js';

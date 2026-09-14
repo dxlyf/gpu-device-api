@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>gpu-device-api 画布深度测试回归</title>
+    <style>
+      body { font-family: ui-monospace, monospace; background: #101418; color: #d7dde5; margin: 0; padding: 16px; }
+      canvas { border: 1px solid #2a3340; width: 128px; height: 128px; display: block; }
+      pre { white-space: pre-wrap; }
+      .pass { color: #6ee7a8; }
+      .fail { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <h1>画布深度测试回归</h1>
+    <p>先画近处红四边形、再画远处绿四边形，两个材质都 <code>depthTest: true</code>：中心像素必须是红。</p>
+    <canvas id="c" width="128" height="128"></canvas>
+    <pre id="out">运行中…</pre>
+    <script type="module" src="./depth.ts"></script>
+  </body>
+</html>

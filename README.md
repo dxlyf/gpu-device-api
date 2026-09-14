@@ -10,7 +10,7 @@ pipeline layout、不可变管线）由 WebGL2 后端**模拟**，而不是把�
 几何体生成、相机与轨道控制、uniform arena。
 
 ```ts
-import { Renderer, PerspectiveCamera, OrbitControls, materials, shapes } from './src/gfx/index.js';
+import { Renderer, PerspectiveCamera, OrbitControls, materials, shapes } from '@dxyl/gpu-device-api';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 
@@ -83,9 +83,10 @@ npm i @dxyl/gpu-device-api
 import { createDevice, BufferUsage, vec3, mat4, quat } from '@dxyl/gpu-device-api';
 ```
 
-上面的便捷层示例按**源码路径**导入（`./src/gfx/index.js`），是因为仓库里的示例直接跑源码、
-改一行就能看到效果；作为依赖使用时换成 `@dxyl/gpu-device-api` 即可（`gfx` 层目前还没单独开一个
-子入口，见 [能力边界](#能力边界诚实清单)）。
+上面这段按**包根**导入：便捷层与 core / shaders / factories 一起由 `src/index.ts` 导出，
+`package.json` 的 `exports` 也只声明了 `"."`，所以 `@dxyl/gpu-device-api` 就是唯一入口
+（没有 `@dxyl/gpu-device-api/gfx` 这种子路径）。仓库内的示例为了改一行就能看到效果，
+按源码路径导入（`./src/index.js`、`./src/gfx/index.js`），两者指向同一份代码。
 
 在仓库里开发：
 
@@ -94,7 +95,7 @@ pnpm install
 
 pnpm dev          # 启动示例站（vite dev server），打开 /examples/gallery.html
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（6 个文件 / 166 条用例，node 环境）
+pnpm test         # vitest run（6 个文件 / 176 条用例，node 环境）
 pnpm build        # 产出 dist/gpu-device-api.js（ESM）+ dist/types
 pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```
@@ -111,8 +112,7 @@ import {
 } from '@dxyl/gpu-device-api';
 ```
 
-便捷层在 `src/gfx/index.ts`（示例按源码路径导入；若要作为独立入口发布，需要扩展
-`package.json` 的 `exports`）。
+便捷层在 `src/gfx/index.ts`，同样从包根导出（示例按源码路径导入）。
 
 ## 目录结构
 
@@ -238,6 +238,12 @@ device.queue.submit([encoder.finish()]);
 - **`createDeviceWithAdapter` 返回实际选中的后端**，便于日志与自检；`device.native` 是逃生口。
 - **管线是「不可变 + 变体」**：`RenderPipeline.resolve({ colorFormats, depthFormat, sampleCount })`
   按渲染目标形态解析出具体状态，同一描述在不同附件组合下会解析成不同变体。
+- **画布的 depth attachment 由后端如实给出**：`context.createPassDescriptor()` 返回与
+  `RenderTarget.createPassDescriptor()` **同一形状**的附件列表 —— WebGL2 用默认帧缓冲自带的
+  深度缓冲（`contextAttributes.depth` 没关掉就有），WebGPU 为 canvas 创建并复用一张同尺寸的
+  `depth24plus` texture（尺寸变化时重建，MSAA 时与颜色附件同采样数）。上层（例如 gfx 的
+  `Renderer`）因此可以用同一段代码处理「画到 canvas」与「画到离屏目标」，不会有一条路径
+  悄悄丢掉 depth attachment（丢掉之后后端会如实关掉 `DEPTH_TEST`，画面退化成画家算法）。
 - **`device.onError(cb)`** 注册错误回调（返回取消订阅的函数）；`device.reportError(err)` 主动上报。
 
 ### GLSL 的自动包装可以关掉
@@ -285,10 +291,12 @@ const renderer = await Renderer.create({
   canvas,                       // HTMLCanvasElement | OffscreenCanvas
   backend: 'auto',              // 'auto' | 'webgl2' | 'webgpu'
   antialias: true,
-  depth: true,
+  depth: true,                  // 画布路径的 depth attachment；WebGPU 会据此建一张 canvas 深度纹理
+  sampleCount: 4,               // canvas MSAA：WebGPU 生效；WebGL2 传 >1 直接抛错（不静默忽略）
   clearColor: '#0b0e13',
   pixelRatio: 1,                // 省略时跟随设备像素比
   camera,                       // 可稍后 setCamera
+  contextAttributes: { depth: true },   // WebGL2 的 context 属性逃生口（逐字段覆盖上面推导出的默认值）
 });
 
 renderer.resize();                                     // 按 CSS 尺寸同步后备缓冲
@@ -311,6 +319,9 @@ renderer.destroy();
 - `drawInstanced(geometry, n, options)` 是 `draw(..., { instances: n })` 的简写。
 - `stats.pipelineSwitches` 统计的是**真正的切换**（相邻两次 draw 用了不同管线才计数）：
   同一个材质连续画 N 个物体，它是 1 而不是 N。
+- `depth: false` 时画布通道不带 depth attachment，深度测试会被（正确地）关掉；`sampleCount`
+  只有 WebGPU 的 canvas 生效（WebGL2 的 canvas 采样数由 `antialias` 决定，传 `> 1` 会直接抛
+  `ValidationError`，不会静默忽略）。见 [画布深度测试的回归页](#示例与自检)。
 
 ### Geometry
 
@@ -461,6 +472,7 @@ u.set('bones', boneMatrices);
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
 | `examples/benchmark.html` | **性能基准**：只用 core 层（不经过 gfx），在 2000 / 5000 / 10000 / 20000 / 40000 个图形下逐帧计时 |
 | `examples/smoke.html` | core 层的浏览器内冒烟测试：17 项检查，含像素级断言（canvas 中央、离屏目标角落）与 GLSL 包装开关 |
+| `examples/depth.html` | **画布深度测试回归**：近红先画、远绿后画，中心像素必须是红 —— 两个后端各自一遍，读回的也是 canvas 本身 |
 
 **core 层示例**（同样只用 `src/index.ts`，**不经过 gfx 便捷层**，用来对照「便捷层到底替你做了什么」）：
 
@@ -497,6 +509,22 @@ u.set('bones', boneMatrices);
 
 其中 `-lit` 的判据不只是「有像素被光栅化」，还要求画面上出现**多种颜色**：只剩一种颜色通常意味着
 每实例数据没生效、或者每次 draw 的 uniform 串到了同一段内存（这两个后端的两种典型故障）。
+
+### 画布深度测试的回归（`depth.html`）
+
+`examples/depth.html` 专门盯住一个容易静默失效的点：**画进 canvas 的渲染通道有没有 depth attachment**。
+没有它，两个后端都会如实关掉 `DEPTH_TEST`（WebGL2 的 `resolveRenderState()`、WebGPU 的 pipeline
+variant 都按「这个 pass 没有深度」处理），画面看起来只是「后面的盖住前面的」—— 这正是画家算法。
+
+页面画两次，每次读回 canvas 中心像素（WebGL2 用 `readPixels`，WebGPU 用 `copyTextureToBuffer`）：
+
+1. **对照**：只画远处的绿四边形 → 中心必须是绿（证明读回链路本身有效，绿确实被光栅化了）；
+2. **遮挡**：先画近处红四边形、再画远处绿四边形，两个材质都 `depthTest: true` → 中心必须是**红**。
+
+`?backend=webgl2|webgpu|auto` 选后端（一个 canvas 只能绑定一种 context，所以一次跑一个后端）。
+结论写在 `<html data-depth-result="pass|fail">`，另外有
+`data-depth-backend / -pixel / -control-pixel / -corner-pixel / -format / -error`，
+其中 `-format` 是 `context.createPassDescriptor()` 如实报出的画布深度格式（`depth24plus`；没有就是 `none`）。
 
 ### 性能基准（`benchmark.html`）
 
@@ -537,38 +565,43 @@ WebGPU 用 `queue.onSubmittedWorkDone()`；WebGL2 用一次 1×1 的 `readPixels
 `verify=1` 的结果写在 `<html data-demo-pixel / data-demo-pixel-corner / data-demo-pixel-lit / data-demo-error>` 上 ——
 这是**后端无关**的像素级自检（绘制走 gfx、读回走 core 的 `copyTextureToBuffer`）。
 
-无头 Chrome 跑这两个页面（本仓库实际使用的配方）：
+无头 Chrome 跑这些页面（本仓库实际使用的配方）：
 
 ```powershell
 $chrome = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 $base = 'http://localhost:5199'   # 与 dev server 输出保持一致（pnpm exec vite --port 5199）
 
-# WebGL2：软件光栅化，稳定可复现
+# WebGL2：软件光栅化，稳定可复现；--dump-dom 就够（同步绘制，load 之前结果已经写好）
 Start-Process $chrome -NoNewWindow -Wait -RedirectStandardOutput "$env:TEMP\dom.html" -ArgumentList @(
   '--headless=new','--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader',
   '--virtual-time-budget=25000',"--user-data-dir=$env:TEMP\chrome-webgl2",'--dump-dom',
   "$base/examples/smoke.html")
 
-# WebGPU：加 --enable-unsafe-webgpu 就能拿到 adapter（headless 也可以）
-Start-Process $chrome -NoNewWindow -Wait -RedirectStandardOutput "$env:TEMP\dom.html" -ArgumentList @(
-  '--headless=new','--no-sandbox','--enable-unsafe-webgpu',"--user-data-dir=$env:TEMP\chrome-webgpu",'--dump-dom',
-  "$base/examples/index.html?backend=webgpu&shape=box&material=unlit&grid=0&verify=1")
+# 两个后端通用：用 CDP 在**真实时间**里轮询页面的 data-*（WebGPU 必须这样，见下面第 2 条）
+node scripts/verify-headless.mjs --chrome $chrome --wait depthResult `
+  --url "$base/examples/depth.html?backend=webgl2" `
+  -- --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
+node scripts/verify-headless.mjs --chrome $chrome --wait depthResult `
+  --url "$base/examples/depth.html?backend=webgpu" -- --enable-unsafe-webgpu
 ```
 
-dump 出来的 HTML 里，`<html>` 上的 `data-*` 就是结论：`data-smoke-result="pass"`、
+`--dump-dom` 时结论在 dump 出来的 HTML 的 `<html>` 上：`data-smoke-result="pass"`、
 `data-demo-pixel-lit="true"`、`data-demo-error`（为空表示启动没报错）。
 `benchmark.html` 与带 `verify=1` 的 `instancing.html` / `batch.html` 也各自把结论写在同一处。
+`scripts/verify-headless.mjs` 则直接打印 `data-*` 与页面里的 `#out` 文本，结论是 `fail` / `false`
+或超时时退出码为 1，方便串进 CI 之类的脚本。
 
 四个踩过的坑，写在这里省得重复踩：
 
 1. **不要同时加 `--use-angle=swiftshader` 与 `--enable-unsafe-webgpu`** —— 这个组合下
    `requestAdapter()` 会返回 null；测 WebGPU 时去掉 GL 的软件光栅化开关，测 WebGL2 时再加回来。
-2. **`--virtual-time-budget` 会抢跑 WebGPU 的异步返回**（虚拟时间瞬间耗尽，GPU 回调还没到）。
-   要么用 `--dump-dom` 只测 WebGL2，要么让页面在**真实时间**里轮询结果再自行汇报。
+2. **`--virtual-time-budget` 会抢跑 WebGPU 的异步返回**（虚拟时间瞬间耗尽，GPU 回调还没到）；
+   而且**模块里的顶层 await 也不会推迟 load 事件**（实测），所以 `--dump-dom` 对 WebGPU 页面
+   基本抓不到结论。要测 WebGPU 就用 `scripts/verify-headless.mjs`（CDP + 真实时间轮询）。
 3. **性能基准绝对不能加 `--virtual-time-budget`**：虚拟时间会让 `performance.now()` 跟着一起跳，
    测出来的帧耗时没有意义。请让页面在真实时间里跑完（它会自己把结果写进 `data-benchmark-*`）。
 4. **Chrome 是 GUI 子系统程序**，`& $chrome ...` 抓不到 stdout，必须用
-   `Start-Process -RedirectStandardOutput`。
+   `Start-Process -RedirectStandardOutput`（`scripts/verify-headless.mjs` 走的是 CDP，不受这条影响）。
 
 ## 两个后端的硬约束（踩过的坑）
 
@@ -637,7 +670,8 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 - GLSL ↔ WGSL **自动转译**：需求里列为可选，目前不实现（`src/shaders/index.ts` 的说明写了原因）——
   转译器要覆盖的语法面太大，与其做一个半可靠的转译器，不如两种语言各写一份、由编译期校验兜住错误。
 - WebGL2 的 `firstInstance` / `baseVertex` / 间接绘制（见上表）。
-- 便捷层 `gfx` 尚未作为独立入口发布（见 [快速开始](#快速开始)）。
+- 便捷层 `gfx` 没有单独的包入口（子路径）：它和 core 一起从包根导出，`exports` 只有 `"."`
+  （见 [快速开始](#快速开始)）。
 - `docs/需求.md` 里标注「第二阶段」的 query set / fence 等，WebGPU 侧已实现一部分，
   WebGL2 侧按能力可用性抛错。
 
@@ -652,6 +686,8 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 | `pnpm test` / `pnpm test:watch` | vitest（node 环境） |
 | `pnpm build` | `vite build` + `tsc -p tsconfig.build.json`（声明文件）+ `scripts/postbuild.mjs` |
 | `pnpm build:demo` / `pnpm preview` | 构建 / 预览静态示例站 |
+| `node scripts/verify-headless.mjs` | 无头 Chrome + CDP 轮询页面的 `data-*` 结论（WebGPU 页面用它，见[无头配方](#示例与自检)） |
+| `node scripts/verify-comments-only.mjs` | 校验「本次改动只动了注释」 |
 
 ### 测试构成
 
@@ -668,9 +704,10 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 
 **像素级**的验证放在浏览器里，入口是 `examples/gallery.html`（汇总页，列出下面全部示例）：
 `examples/smoke.html`（core 层 17 项）、`examples/index.html?verify=1`（gfx 层）、
+`examples/depth.html?backend=webgl2|webgpu`（gfx 画布路径的深度测试：近红远绿 → 中心必须是红）、
 `examples/instancing.html?verify=1` / `examples/batch.html?verify=1`（实例化与批量各自的像素自检），
 以及 `core-*.html` 五个 core 层示例（`?verify=1` 会打印像素结论）。
-改动渲染路径后请都跑一遍，两个后端都要看。
+改动渲染路径后请都跑一遍，两个后端都要看（`node scripts/verify-headless.mjs` 能把结论抓成退出码）。
 
 ### 代码约定
 
