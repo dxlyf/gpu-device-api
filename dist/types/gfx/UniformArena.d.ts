@@ -43,7 +43,21 @@ export declare class UniformArena {
     private head;
     private bindGroupValue;
     private bindGroupLayoutValue;
-    private readonly frameWrites;
+    /**
+     * 本帧写入的 `(offset, data)` 对，只用于扩容时重放。
+     *
+     * 用两个平行数组而不是 `{offset, data}` 对象：这里每 draw 记录一次，40k draw 的场景下
+     * 每帧 40k 个短命对象是白白送给 GC 的。
+     */
+    private readonly frameOffsets;
+    private readonly frameData;
+    /**
+     * 扩容时退休的 buffer / bind group，等下一帧 `beginFrame()` 再销毁。
+     *
+     * 为什么不能立刻销毁：扩容发生在录制过程中，本帧已经录制了引用它们的 `setBindGroup`。
+     * WebGPU 会因此在 `queue.submit` 时报「Buffer ... used in submit while destroyed」。
+     */
+    private readonly retired;
     private _disposed;
     constructor(device: Device, layout: UniformLayout, options?: UniformArenaOptions);
     get buffer(): Buffer;
@@ -60,6 +74,8 @@ export declare class UniformArena {
     write(values: UniformValues): number;
     /** 直接写入一段原始字节（高级用法：手写打包数据时）。 */
     writeBytes(bytes: Uint8Array): number;
+    /** 记下本帧的写入，供扩容重放（两个平行数组，不产生每 draw 的对象）。 */
+    private recordWrite;
     /**
      * 取得动态偏移用的 bind group。arena 扩容后会失效并按需重建。
      *
@@ -69,9 +85,21 @@ export declare class UniformArena {
     destroy(): void;
     private allocate;
     /**
+     * 真正销毁已经退休的 buffer / bind group。
+     *
+     * 只能在**下一帧的 `beginFrame()`**（那时上一帧已经 submit）或 `destroy()` 里调用 ——
+     * 原因见 {@link grow}。
+     */
+    private releaseRetired;
+    /**
      * 扩容并把本帧已写入的内容重放到新 buffer 上。
      * 这样做而不是「绕回旧区间」：绕回会让同一帧内前后两次 draw 读到彼此的数据，
      * 正是本模块要消除的问题。
+     *
+     * **旧 buffer / bind group 不能在这里销毁**：扩容发生在录制过程中，此时本帧已经录制了
+     * 引用它们的 `setBindGroup`，WebGPU 会在 `queue.submit` 时报
+     * 「Buffer ... used in submit while destroyed」（WebGL2 只是悄悄用到已删除的对象）。
+     * 所以先放进 {@link retired}，等下一帧 `beginFrame()` 时上一帧已经提交完，再真正销毁。
      */
     private grow;
     private createBuffer;

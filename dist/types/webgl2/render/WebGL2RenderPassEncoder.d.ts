@@ -62,6 +62,13 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     drawIndexed(descriptor: DrawIndexedDescriptor): void;
     drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
     drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+    /**
+     * 调试分组：WebGL2 靠 `EXT_debug_marker` 实现，扩展不可用时是空操作
+     * （只影响抓帧工具的分组显示，不影响渲染结果）。
+     */
+    pushDebugGroup(label: string): void;
+    popDebugGroup(): void;
+    insertDebugMarker(label: string): void;
     end(): void;
     /** 当前渲染目标的形态信息，用于让管线解析出对应状态。 */
     private variantRequest;

@@ -60,6 +60,13 @@ export class UniformArena {
    */
   private readonly frameOffsets: number[] = [];
   private readonly frameData: Uint8Array[] = [];
+  /**
+   * 扩容时退休的 buffer / bind group，等下一帧 `beginFrame()` 再销毁。
+   *
+   * 为什么不能立刻销毁：扩容发生在录制过程中，本帧已经录制了引用它们的 `setBindGroup`。
+   * WebGPU 会因此在 `queue.submit` 时报「Buffer ... used in submit while destroyed」。
+   */
+  private readonly retired: Array<{ buffer: Buffer; bindGroup: BindGroup | null }> = [];
   private _disposed = false;
 
   constructor(device: Device, layout: UniformLayout, options: UniformArenaOptions = {}) {
@@ -95,6 +102,8 @@ export class UniformArena {
     this.head = 0;
     this.frameOffsets.length = 0;
     this.frameData.length = 0;
+    // 上一帧的命令已经提交（渲染器在 endFrame() 里 submit），现在销毁是安全的。
+    this.releaseRetired();
   }
 
   /**
@@ -166,6 +175,7 @@ export class UniformArena {
   destroy(): void {
     if (this._disposed) return;
     this._disposed = true;
+    this.releaseRetired();
     this.bindGroupValue?.dispose();
     this.bindGroupValue = null;
     this.bufferValue.destroy();
@@ -179,9 +189,29 @@ export class UniformArena {
   }
 
   /**
+   * 真正销毁已经退休的 buffer / bind group。
+   *
+   * 只能在**下一帧的 `beginFrame()`**（那时上一帧已经 submit）或 `destroy()` 里调用 ——
+   * 原因见 {@link grow}。
+   */
+  private releaseRetired(): void {
+    if (this.retired.length === 0) return;
+    for (const entry of this.retired) {
+      entry.bindGroup?.dispose();
+      entry.buffer.destroy();
+    }
+    this.retired.length = 0;
+  }
+
+  /**
    * 扩容并把本帧已写入的内容重放到新 buffer 上。
    * 这样做而不是「绕回旧区间」：绕回会让同一帧内前后两次 draw 读到彼此的数据，
    * 正是本模块要消除的问题。
+   *
+   * **旧 buffer / bind group 不能在这里销毁**：扩容发生在录制过程中，此时本帧已经录制了
+   * 引用它们的 `setBindGroup`，WebGPU 会在 `queue.submit` 时报
+   * 「Buffer ... used in submit while destroyed」（WebGL2 只是悄悄用到已删除的对象）。
+   * 所以先放进 {@link retired}，等下一帧 `beginFrame()` 时上一帧已经提交完，再真正销毁。
    */
   private grow(): void {
     const needed = this.head + this.slotSize;
@@ -197,8 +227,8 @@ export class UniformArena {
       );
     }
 
-    this.bufferValue.destroy();
-    this.bindGroupValue?.dispose();
+    // 退休而不是销毁：本帧已经录制的 draw 仍然引用它（见 grow() 的说明）。
+    this.retired.push({ buffer: this.bufferValue, bindGroup: this.bindGroupValue });
     this.bindGroupValue = null;
     this.bindGroupLayoutValue = null;
     this.capacityValue = next;

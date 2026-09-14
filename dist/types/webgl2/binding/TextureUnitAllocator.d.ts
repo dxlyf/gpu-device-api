@@ -51,6 +51,21 @@ export interface WebGLBindingPlan {
     readonly uniformBlocks: ReadonlyMap<string, UniformBlockSlot>;
     /** key 为 `group:binding`，只包含纹理条目。 */
     readonly textures: ReadonlyMap<string, TextureSlot>;
+    /**
+     * 按 group 预分解的槽位（每个出现在布局里的 group 都有一份，可能是空数组）。
+     *
+     * `applyBindGroups()` 每 draw 都要「遍历本 group 的槽位」，如果每 draw 从 `uniformBlocks`
+     * 里 `filter()` + `sort()`，40k draw 就是上万次短命数组。槽位分配在计划创建时就固定了，
+     * 所以这些列表在构建时算一次即可 —— 而且 `groups.forEach` + 组内按 binding 排序保证了
+     * 列表本身已经是升序，运行时不需要再排序。
+     */
+    readonly uniformBlocksByGroup: ReadonlyMap<number, readonly UniformBlockSlot[]>;
+    /** 按 group 预分解的动态 uniform block（`hasDynamicOffset: true`）。 */
+    readonly dynamicBlocksByGroup: ReadonlyMap<number, readonly UniformBlockSlot[]>;
+    /** 按 group 预分解的纹理槽位。 */
+    readonly texturesByGroup: ReadonlyMap<number, readonly TextureSlot[]>;
+    /** 布局要求过的 group 序号（升序），用于 O(groups) 的「漏绑」检查。 */
+    readonly requiredGroups: readonly number[];
     /** 计划内容指纹，用于缓存。 */
     readonly key: string;
     readonly textureUnitCount: number;

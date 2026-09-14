@@ -13,5 +13,5 @@ export * from './render/index.js';
 export * from './sync/index.js';
 export { describeAdapter, type Adapter, type AdapterInfo, type BackendKind } from './Adapter.js';
 export { resolveLimits, type Device, type DeviceDescriptor, type DeviceFeatures, type DeviceLimits, type DeviceLostInfo, } from './Device.js';
-export { defaultPixelRatio, measureCanvas, type CanvasAlphaMode, type CanvasColorSpace, type CanvasConfig, type CanvasContext, type FrameTarget, } from './CanvasContext.js';
+export { CANVAS_DEPTH_FORMAT, defaultPixelRatio, measureCanvas, type CanvasAlphaMode, type CanvasColorSpace, type CanvasConfig, type CanvasContext, type CanvasPassDescriptor, type CanvasPassOptions, type FrameTarget, } from './CanvasContext.js';
 //# sourceMappingURL=index.d.ts.map

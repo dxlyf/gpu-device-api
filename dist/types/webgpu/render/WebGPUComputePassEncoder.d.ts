@@ -24,6 +24,10 @@ export declare class WebGPUComputePassEncoder implements ComputePassEncoder {
     setBindGroup(index: number, bindGroup: BindGroup | null, dynamicOffsets?: readonly number[]): void;
     dispatchWorkgroups(workgroupCountX: number, workgroupCountY?: number, workgroupCountZ?: number): void;
     dispatchWorkgroupsIndirect(indirect: DispatchIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+    /** 调试分组：直接转发给原生的 `GPUComputePassEncoder`。 */
+    pushDebugGroup(label: string): void;
+    popDebugGroup(): void;
+    insertDebugMarker(label: string): void;
     /** 结束该 pass。幂等；此后再调用任何录制方法都会抛错。 */
     end(): void;
     private assertOpen;

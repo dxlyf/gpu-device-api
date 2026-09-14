@@ -59,6 +59,10 @@ export declare class WebGPURenderPassEncoder implements RenderPassEncoder {
     drawIndexed(descriptor: DrawIndexedDescriptor): void;
     drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
     drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+    /** 调试分组：直接转发给原生的 `GPURenderPassEncoder`（抓帧工具据此分组显示）。 */
+    pushDebugGroup(label: string): void;
+    popDebugGroup(): void;
+    insertDebugMarker(label: string): void;
     /** 结束该 pass。幂等；此后再调用任何录制方法都会抛错。 */
     end(): void;
     private assertOpen;

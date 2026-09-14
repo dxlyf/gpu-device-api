@@ -17,6 +17,9 @@ export declare class WebGL2ComputePassEncoder implements ComputePassEncoder {
     setBindGroup(_index: number, _bindGroup: BindGroup | null, _dynamicOffsets?: readonly number[]): void;
     dispatchWorkgroups(_x: number, _y?: number, _z?: number): void;
     dispatchWorkgroupsIndirect(_indirect: DispatchIndirectDescriptor | BufferLike, _offset?: number): void;
+    pushDebugGroup(_label: string): void;
+    popDebugGroup(): void;
+    insertDebugMarker(_label: string): void;
     end(): void;
 }
 //# sourceMappingURL=WebGL2ComputePassEncoder.d.ts.map

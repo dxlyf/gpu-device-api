@@ -70,6 +70,14 @@ export declare class Geometry {
      */
     readonly instanceCount: number | null;
     private _disposed;
+    /**
+     * 已经校验过的「材质属性声明」集合，键是 `Material.attributes` 这个数组对象本身。
+     *
+     * 校验结果只取决于 (几何体, 材质声明) 这一对，而两者在创建后都不再变 —— 所以每 draw
+     * 重复校验是纯浪费（40k draw 的场景下每帧几毫秒）。用数组身份当键，既拿到了
+     * 「按材质缓存」的效果，又不用在渲染器里维护 WeakMap。
+     */
+    private readonly validatedAgainst;
     private constructor();
     /** 上传几何体数据到 GPU。 */
     static create(device: Device, desc: GeometryDesc): Geometry;

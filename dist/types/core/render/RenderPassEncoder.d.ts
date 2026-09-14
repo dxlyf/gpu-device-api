@@ -37,6 +37,15 @@ export interface RenderPassEncoder {
     drawIndexed(descriptor: DrawIndexedDescriptor): void;
     drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
     drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+    /**
+     * 打一个调试分组（对应 WebGPU 的 `pushDebugGroup` / WebGL2 的 `EXT_debug_marker`）。
+     * 只影响抓帧工具的分组显示，不改变渲染结果；WebGL2 上没有扩展时是空操作。
+     */
+    pushDebugGroup(label: string): void;
+    /** 结束最近一次 {@link pushDebugGroup}。 */
+    popDebugGroup(): void;
+    /** 插入一个瞬时标记（不配对）。 */
+    insertDebugMarker(label: string): void;
     /** 结束该 pass。此后再提交命令会抛错。 */
     end(): void;
 }

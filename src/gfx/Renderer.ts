@@ -41,6 +41,7 @@ import { Geometry, type GeometryDesc } from './Geometry.js';
 import { GfxTexture, type TextureDesc } from './Texture.js';
 import { UniformArenaPool } from './UniformArena.js';
 import type { UniformValues } from './Uniforms.js';
+import { unwrapUniforms } from './Uniforms.js';
 import type { PerspectiveCamera, OrthographicCamera } from './Camera.js';
 
 /** 便捷层支持的相机类型。 */
@@ -336,7 +337,9 @@ export class Renderer {
         material: resolved,
         layout: resolved.createPipelineLayout(this.device),
         pipeline: null,
-        values: resolved.uniforms ? resolved.createUniforms() : null,
+        // 还原掉 createUniforms() 的 Proxy：渲染器的每 draw 写入路径直接操作原始对象，
+        // 免得每次 set()/has() 都穿一遍 Proxy 陷阱（见 unwrapUniforms 的说明）。
+        values: resolved.uniforms ? unwrapUniforms(resolved.createUniforms()) : null,
       });
     }
     return resolved;

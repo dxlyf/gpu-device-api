@@ -84,6 +84,14 @@ export interface UniformFieldLayout {
 export declare class UniformLayout {
     readonly desc: UniformLayoutDesc;
     readonly fields: readonly UniformFieldLayout[];
+    /**
+     * 字段名 → 字段。构造时建一次，供 {@link has} / {@link field} 做 O(1) 查找。
+     *
+     * 为什么不用 `fields.some(...)`：`Renderer.draw()` 每 draw 要问 7 次「这个材质有没有
+     * projectionView / model / normalMatrix…」，线性扫描 + 每次一个闭包会在 40k draw 的
+     * 场景里变成几毫秒/帧的纯开销。
+     */
+    private readonly fieldByName;
     /** 块总字节数（16 的倍数）。 */
     readonly byteLength: number;
     /** 内容指纹，用于缓存与校验「管线与数值是否匹配」。 */
@@ -168,29 +176,62 @@ export declare class UniformValues<D extends UniformLayoutDesc = UniformLayoutDe
     readonly layout: UniformLayout;
     readonly buffer: ArrayBuffer;
     private readonly fieldValues;
+    /** {@link bytes} 的缓存视图；`buffer` 终生不重新分配，所以视图可以一直复用。 */
+    private readonly bytesView;
+    /**
+     * 字段名 → 写入器，供 {@link set} 走单态快路径。
+     *
+     * 为什么需要它：最直觉的写法（`fieldValues[name]` 查表后 `.set(value)`）会让同一个调用点
+     * 看到 4 种以上的接收者形状（Float32Array / Int32Array / Uint32Array / 访问器对象），
+     * V8 只能走 megamorphic 泛型路径。实测（Node 24）每次 `set` 约 0.9 µs，而等价的
+     * 「单态 typed-array 拷贝 + 查表」只要 0.03 µs —— 40k draw 的场景下这就是每帧几百毫秒。
+     *
+     * 做法：按组件类型把「连续块」字段映射到**整块**视图（f32/i32/u32 各一个）加一个元素偏移，
+     * 这样三个 `.set` 调用点各自只见到一种接收者；只有非连续的字段（mat3x3f、f32[4]…）
+     * 才回退到访问器。
+     */
+    private readonly writers;
+    private f32View;
+    private i32View;
+    private u32View;
     /** 每次修改自增；渲染器据此跳过没必要的上传。 */
     version: number;
     constructor(layout: UniformLayout);
     constructor(desc: D, options?: UniformOptions);
+    /** 为字段建一个形状统一的写入器（见 {@link writers} 的说明）。 */
+    private createFieldWriter;
     private createFieldValue;
     /** 所有字段写入器。 */
     get fields(): UniformFieldValues<D>;
     has(name: string): boolean;
     /** 取单个字段的写入器。 */
     field<K extends keyof D & string>(name: K): UniformFieldValue<D[K]>;
-    /** 写一个字段。标量收 `number`，其余收紧凑数组。 */
+    /**
+     * 写一个字段。标量收 `number`，其余收紧凑数组。
+     *
+     * 走 {@link writers} 里的单态快路径（见那里的实测数字），并且保留「数组写超长就报错」的行为：
+     * 连续块现在是整块视图，写超长会溢到下一个字段，所以这里显式挡一下。
+     */
     set<K extends keyof D & string>(name: K, value: UniformInput<D[K]>): this;
     /** 批量写：`u.assign({ time: 1, color: [1, 0, 0, 1] })`。 */
     assign(values: UniformInputValues<D>): this;
     /** 读回字段的紧凑数据。 */
     get<K extends keyof D & string>(name: K, out?: AnyTypedArray): AnyTypedArray;
-    /** 有效字节数的视图（上传时用，避免把尾部对齐填充也传上去）。 */
+    /** 有效字节数的视图（上传时用，避免把尾部对齐填充也传上去）。视图是复用的，不要保留它的引用。 */
     get bytes(): Uint8Array;
     /** 复制一份紧凑的字节数据。 */
     toArrayBuffer(): ArrayBuffer;
 }
 /** {@link createUniforms} 的返回类型：既有方法，也能直接按字段名取值。 */
 export type Uniforms<D extends UniformLayoutDesc> = UniformValues<D> & UniformFieldValues<D>;
+/**
+ * 把 {@link createUniforms} 返回的 Proxy 还原成原始对象（不是 Proxy 时原样返回）。
+ *
+ * 渲染器的每 draw 写入路径用它：直接操作 raw 对象可以完全避开 Proxy 陷阱
+ * （`has`/`field`/`set` 每次调用仍会多花 0.2–0.4 µs，40k draw 就是每帧十几毫秒）。
+ * 字段式访问（`u.model.set(...)`）是给使用者写的代码用的，不在热路径上。
+ */
+export declare function unwrapUniforms<D extends UniformLayoutDesc>(values: UniformValues<D>): UniformValues<D>;
 /**
  * 创建 uniform 数值容器，字段可直接当属性访问。
  *

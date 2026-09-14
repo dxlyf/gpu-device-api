@@ -8,7 +8,7 @@
  */
 import { type Texture } from '../core/resources/Texture.js';
 import type { TextureView } from '../core/resources/TextureView.js';
-import type { FrameTarget, CanvasConfig, CanvasContext } from '../core/CanvasContext.js';
+import { type FrameTarget, type CanvasConfig, type CanvasContext, type CanvasPassDescriptor, type CanvasPassOptions } from '../core/CanvasContext.js';
 import type { WebGL2Device } from './WebGL2Device.js';
 /** 标记：这个 view 代表默认帧缓冲。 */
 export interface DefaultFramebufferView extends TextureView {
@@ -30,6 +30,10 @@ export declare class WebGL2CanvasContext implements CanvasContext {
     private _pixelRatio;
     private _width;
     private _height;
+    /** 默认帧缓冲的深度位数；0 表示这次 context 根本没有深度缓冲。 */
+    private depthBits;
+    /** `configure()` 里是否明确要求了深度；`undefined` 表示没表态（不校验）。 */
+    private depthRequested;
     constructor(options: WebGL2CanvasContextOptions);
     get device(): WebGL2Device | null;
     get deviceRef(): WebGL2Device | null;
@@ -46,7 +50,25 @@ export declare class WebGL2CanvasContext implements CanvasContext {
     setPixelRatio(ratio: number): void;
     resize(): boolean;
     getCurrentFrameTarget(): FrameTarget;
+    /**
+     * 生成画布渲染通道的附件列表。
+     *
+     * 默认帧缓冲**自带深度缓冲**（只要创建 context 时 `contextAttributes.depth` 没关掉），
+     * 所以这里如实把深度附件报出去 —— 有了它，渲染通道的 `depthFormat` 才不是 `null`，
+     * `resolveRenderState()` 才不会把 `DEPTH_TEST` 关掉（关掉之后画布渲染会退化成画家算法）。
+     *
+     * 深度附件是一张「虚拟深度纹理」：它没有 GL 对象，只表示「framebuffer 0 的深度缓冲」，
+     * 渲染通道据此走 `beginDefaultFramebufferPass()` 并用 `gl.clear(DEPTH_BUFFER_BIT)` 清深度。
+     */
+    createPassDescriptor(options?: CanvasPassOptions): CanvasPassDescriptor;
     dispose(): void;
+    /**
+     * 默认帧缓冲的深度附件。
+     *
+     * `depthRequested === false`（调用方明确不要深度）或这次 context 根本没有深度缓冲时返回 `null` ——
+     * 上层会据此如实关掉深度测试，而不是让它「看起来开着」。
+     */
+    private createDepthAttachment;
     private applyBackingSize;
 }
 //# sourceMappingURL=WebGL2CanvasContext.d.ts.map

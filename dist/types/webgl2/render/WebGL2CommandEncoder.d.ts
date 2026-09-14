@@ -43,6 +43,10 @@ export declare class WebGL2CommandEncoder implements CommandEncoder {
     clearBuffer(buffer: {
         readonly size: number;
     }, offset?: number, size?: number): void;
+    /** 调试分组：WebGL2 靠 `EXT_debug_marker`，扩展不可用时是空操作（见 utils/debugMarkers.ts）。 */
+    pushDebugGroup(label: string): void;
+    popDebugGroup(): void;
+    insertDebugMarker(label: string): void;
     finish(): WebGL2CommandBuffer;
     private assertOpen;
 }

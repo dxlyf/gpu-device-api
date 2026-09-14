@@ -40,9 +40,18 @@ export declare class GlStateCache {
     private scissorEnabled;
     private viewport;
     private scissor;
+    /** `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 的记忆值（设备常量，见同名方法）。 */
+    private uniformAlignment;
     constructor(gl: WebGL2RenderingContext);
     /** GL 上下文（便于调用方在需要时直接操作）。 */
     get context(): WebGL2RenderingContext;
+    /**
+     * `UNIFORM_BUFFER_OFFSET_ALIGNMENT`（动态偏移的对齐要求）。
+     *
+     * 它是**设备常量**，但 `getParameter` 是一次同步的 GL 查询：每 draw 每个动态 uniform block
+     * 都问一次，在几千 draw 的场景里就是几千次同步查询。这里按 context 记一次。
+     */
+    uniformBufferOffsetAlignment(): number;
     /**
      * 把全部缓存标记为未知，下一次设置会无条件写回 GL。
      * 外部通过 `device.native` 改过状态、或切换了 framebuffer 之后都应调用它。

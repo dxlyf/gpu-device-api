@@ -6,7 +6,12 @@
  * uniform arena、按材质缓存管线、相机与轨道控制、几何体生成。
  *
  * ```ts
- * import { Renderer, PerspectiveCamera, OrbitControls, shapes, materials } from 'gpu-device-api/gfx';
+ * import { Renderer, PerspectiveCamera, OrbitControls, shapes, materials } from 'gpu-device-api';
+ * ```
+ *
+ * 注意**从包根导入**：gfx 与 core / shaders / factories / utils 一起由 `src/index.ts` 统一导出。
+ * （这里原先写的是 `gpu-device-api/gfx`，但 `package.json` 的 `exports` 只声明了 `"."`，
+ * 照那个写法会解析失败。）
  *
  * const renderer = await Renderer.create({ canvas });
  * const camera = new PerspectiveCamera({ position: [0, 1.2, 3] });

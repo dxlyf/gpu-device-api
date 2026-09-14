@@ -34,6 +34,10 @@ export declare class WebGPUCommandEncoder implements CommandEncoder {
     copyTextureToTexture(source: TextureCopyView, destination: TextureCopyView, copySize: Extent3D): void;
     /** 将 buffer 的一段范围清零。`size` 省略时清到末尾，但必须是 4 的倍数。 */
     clearBuffer(buffer: BufferLike, offset?: number, size?: number): void;
+    /** 调试分组：直接转发给原生的 `GPUCommandEncoder`。 */
+    pushDebugGroup(label: string): void;
+    popDebugGroup(): void;
+    insertDebugMarker(label: string): void;
     /**
      * 结束录制并返回 command buffer。
      *

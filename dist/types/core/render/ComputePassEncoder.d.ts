@@ -19,6 +19,12 @@ export interface ComputePassEncoder {
     setBindGroup(index: number, bindGroup: BindGroup | null, dynamicOffsets?: readonly number[]): void;
     dispatchWorkgroups(workgroupCountX: number, workgroupCountY?: number, workgroupCountZ?: number): void;
     dispatchWorkgroupsIndirect(indirect: DispatchIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+    /** 打一个调试分组（对应 WebGPU 的 `pushDebugGroup`）。只影响抓帧工具的分组显示。 */
+    pushDebugGroup(label: string): void;
+    /** 结束最近一次 {@link pushDebugGroup}。 */
+    popDebugGroup(): void;
+    /** 插入一个瞬时标记（不配对）。 */
+    insertDebugMarker(label: string): void;
     end(): void;
 }
 //# sourceMappingURL=ComputePassEncoder.d.ts.map

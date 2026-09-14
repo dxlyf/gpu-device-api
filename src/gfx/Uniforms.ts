@@ -462,6 +462,21 @@ function makeAccessor(
 }
 
 /**
+ * 一个 uniform 字段的写入器。**所有实例都走同一个工厂**，因此形状一致（单态），
+ * `UniformValues.set()` 里的 `writer.kind` / `writer.offset` 访问不会退化成字典查找。
+ */
+interface FieldWriter {
+  /** 0 = f32 连续块，1 = i32，2 = u32，3 = 非连续（用 accessor）。 */
+  kind: 0 | 1 | 2 | 3;
+  /** 连续块在整块视图里的**元素**偏移。 */
+  offset: number;
+  /** 字段的元素个数（矩阵按列展开），用于越界保护。 */
+  length: number;
+  /** 非连续字段的访问器；连续块为 `null`。 */
+  accessor: UniformFieldAccessor<AnyTypedArray> | null;
+}
+
+/**
  * 一个 uniform 块的 CPU 侧数值容器。
  *
  * 用 {@link createUniforms} 创建，它会用 Proxy 把字段挂成直接可访问的属性：
@@ -479,6 +494,22 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
   private readonly fieldValues: Record<string, UniformFieldValue<UniformFieldType>>;
   /** {@link bytes} 的缓存视图；`buffer` 终生不重新分配，所以视图可以一直复用。 */
   private readonly bytesView: Uint8Array;
+  /**
+   * 字段名 → 写入器，供 {@link set} 走单态快路径。
+   *
+   * 为什么需要它：最直觉的写法（`fieldValues[name]` 查表后 `.set(value)`）会让同一个调用点
+   * 看到 4 种以上的接收者形状（Float32Array / Int32Array / Uint32Array / 访问器对象），
+   * V8 只能走 megamorphic 泛型路径。实测（Node 24）每次 `set` 约 0.9 µs，而等价的
+   * 「单态 typed-array 拷贝 + 查表」只要 0.03 µs —— 40k draw 的场景下这就是每帧几百毫秒。
+   *
+   * 做法：按组件类型把「连续块」字段映射到**整块**视图（f32/i32/u32 各一个）加一个元素偏移，
+   * 这样三个 `.set` 调用点各自只见到一种接收者；只有非连续的字段（mat3x3f、f32[4]…）
+   * 才回退到访问器。
+   */
+  private readonly writers = new Map<string, FieldWriter>();
+  private f32View: Float32Array | null = null;
+  private i32View: Int32Array | null = null;
+  private u32View: Uint32Array | null = null;
   /** 每次修改自增；渲染器据此跳过没必要的上传。 */
   version = 1;
 
@@ -491,8 +522,30 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
     // 在 40k draw 的场景里就是 40k 个短命对象。
     this.bytesView = new Uint8Array(this.buffer, 0, this.layout.byteLength);
     const values: Record<string, UniformFieldValue<UniformFieldType>> = {};
-    for (const field of this.layout.fields) values[field.name] = this.createFieldValue(field);
+    for (const field of this.layout.fields) {
+      values[field.name] = this.createFieldValue(field);
+      this.writers.set(field.name, this.createFieldWriter(field, values[field.name]!));
+    }
     this.fieldValues = values;
+  }
+
+  /** 为字段建一个形状统一的写入器（见 {@link writers} 的说明）。 */
+  private createFieldWriter(
+    field: UniformFieldLayout,
+    value: UniformFieldValue<UniformFieldType>,
+  ): FieldWriter {
+    const length = field.count * field.info.components;
+    if (field.packed) {
+      const kind = field.info.componentType === 'i32' ? 1 : field.info.componentType === 'u32' ? 2 : 0;
+      return { kind, offset: field.byteOffset / 4, length, accessor: null };
+    }
+    void value;
+    return {
+      kind: 3,
+      offset: 0,
+      length,
+      accessor: value as unknown as UniformFieldAccessor<AnyTypedArray>,
+    };
   }
 
   private createFieldValue(field: UniformFieldLayout): UniformFieldValue<UniformFieldType> {
@@ -532,24 +585,49 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
     return this.fieldValues[name] as UniformFieldValue<D[K]>;
   }
 
-  /** 写一个字段。标量收 `number`，其余收紧凑数组。 */
+  /**
+   * 写一个字段。标量收 `number`，其余收紧凑数组。
+   *
+   * 走 {@link writers} 里的单态快路径（见那里的实测数字），并且保留「数组写超长就报错」的行为：
+   * 连续块现在是整块视图，写超长会溢到下一个字段，所以这里显式挡一下。
+   */
   set<K extends keyof D & string>(name: K, value: UniformInput<D[K]>): this {
-    const target = this.fieldValues[name];
-    if (target === undefined) {
-      this.layout.field(name);
+    const writer = this.writers.get(name);
+    if (writer === undefined) {
+      this.layout.field(name); // 不存在的字段：抛出带「现有字段」列表的错误
       return this;
     }
+
     if (typeof value === 'number') {
-      if (!ArrayBuffer.isView(target)) {
+      if (writer.kind === 3) {
         throw new TypeError(
           `[gpu-device-api] uniform 字段「${name}」不是标量，请传数字数组而不是单个数字。`,
         );
       }
-      (target as AnyTypedArray)[0] = value;
-    } else if (ArrayBuffer.isView(target)) {
-      (target as AnyTypedArray).set(value as ArrayLike<number>);
+      if (writer.kind === 0) {
+        (this.f32View ??= new Float32Array(this.buffer))[writer.offset] = value;
+      } else if (writer.kind === 1) {
+        (this.i32View ??= new Int32Array(this.buffer))[writer.offset] = value;
+      } else {
+        (this.u32View ??= new Uint32Array(this.buffer))[writer.offset] = value;
+      }
     } else {
-      (target as UniformFieldAccessor).set(value as ArrayLike<number>);
+      const array = value as ArrayLike<number>;
+      if (array.length > writer.length) {
+        throw new RangeError(
+          `[gpu-device-api] uniform 字段「${name}」只接受 ${writer.length} 个元素，` +
+            `收到 ${array.length} 个。写超长会覆盖后面的字段，所以这里直接拦下。`,
+        );
+      }
+      if (writer.kind === 0) {
+        (this.f32View ??= new Float32Array(this.buffer)).set(array, writer.offset);
+      } else if (writer.kind === 1) {
+        (this.i32View ??= new Int32Array(this.buffer)).set(array, writer.offset);
+      } else if (writer.kind === 2) {
+        (this.u32View ??= new Uint32Array(this.buffer)).set(array, writer.offset);
+      } else {
+        writer.accessor!.set(array);
+      }
     }
     this.version += 1;
     return this;
@@ -586,16 +664,50 @@ export class UniformValues<D extends UniformLayoutDesc = UniformLayoutDesc> {
 export type Uniforms<D extends UniformLayoutDesc> = UniformValues<D> & UniformFieldValues<D>;
 
 const proxyCache = new WeakMap<UniformValues, UniformValues>();
+/** 反向表：Proxy → 原始对象，供 {@link unwrapUniforms} 使用。 */
+const rawCache = new WeakMap<object, object>();
+
+/**
+ * 把 {@link createUniforms} 返回的 Proxy 还原成原始对象（不是 Proxy 时原样返回）。
+ *
+ * 渲染器的每 draw 写入路径用它：直接操作 raw 对象可以完全避开 Proxy 陷阱
+ * （`has`/`field`/`set` 每次调用仍会多花 0.2–0.4 µs，40k draw 就是每帧十几毫秒）。
+ * 字段式访问（`u.model.set(...)`）是给使用者写的代码用的，不在热路径上。
+ */
+export function unwrapUniforms<D extends UniformLayoutDesc>(values: UniformValues<D>): UniformValues<D> {
+  return (rawCache.get(values as object) as UniformValues<D> | undefined) ?? values;
+}
 
 function wrapWithFieldAccess<D extends UniformLayoutDesc>(values: UniformValues<D>): Uniforms<D> {
   const cached = proxyCache.get(values);
   if (cached) return cached as Uniforms<D>;
+
+  /*
+   * 方法一律**预先绑定到 raw 对象**再交出去。
+   *
+   * 为什么必须这样：`proxy.set(...)` 的 `this` 是 Proxy，于是方法体里每一次 `this.xxx`
+   * （writers / version / buffer / bytesView…）都要再走一遍 get 陷阱。实测每次 `set()` 因此
+   * 多花约 1 µs —— 40k draw 的场景下就是每帧几十毫秒的纯开销。绑定之后方法体直接操作 raw
+   * 对象，陷阱只在「按字段名取值」时触发（那正是这个 Proxy 存在的意义）。
+   */
+  const boundMethods = new Map<string | symbol, unknown>();
   const proxy = new Proxy(values, {
     get(target, property, receiver) {
       if (typeof property === 'string' && target.has(property)) {
         return target.field(property as keyof D & string);
       }
-      return Reflect.get(target, property, receiver);
+      // receiver 传 target：访问器（例如 `bytes`）也在 raw 对象上求值，不再穿一层陷阱。
+      const value = Reflect.get(target, property, target);
+      if (typeof value === 'function') {
+        let bound = boundMethods.get(property);
+        if (bound === undefined) {
+          bound = (value as (...args: unknown[]) => unknown).bind(target);
+          boundMethods.set(property, bound);
+        }
+        return bound;
+      }
+      void receiver;
+      return value;
     },
     has(target, property) {
       if (typeof property === 'string' && target.has(property)) return true;
@@ -610,6 +722,7 @@ function wrapWithFieldAccess<D extends UniformLayoutDesc>(values: UniformValues<
     },
   });
   proxyCache.set(values, proxy);
+  rawCache.set(proxy, values);
   return proxy as Uniforms<D>;
 }
 

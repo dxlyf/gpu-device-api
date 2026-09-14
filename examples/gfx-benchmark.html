@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — gfx 层每 draw CPU 开销基准</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: #0b0e13;
+        color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #view { flex: 1 1 auto; width: 100%; display: block; min-height: 180px; }
+      #panel { border-top: 1px solid #1d2530; background: #0f141b; padding: 10px 12px; max-height: 62vh; overflow: auto; }
+      .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 8px; }
+      label { display: inline-flex; align-items: center; gap: 6px; color: #9fb3c8; }
+      input[type='number'], button {
+        background: #16202b; color: #d7dde5; border: 1px solid #26333f; border-radius: 4px;
+        padding: 3px 6px; font: inherit;
+      }
+      button { cursor: pointer; }
+      button:hover { border-color: #3f7bd8; }
+      button:disabled { cursor: progress; color: #55677a; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid #1a2430; white-space: nowrap; }
+      th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
+      thead th { color: #8fa3b8; font-weight: 600; }
+      tbody tr.done td { color: #d7dde5; }
+      tbody tr.pending td { color: #55677a; }
+      tbody tr.skipped td { color: #c8a06a; }
+      tbody tr.bad td { color: #ff8b8b; }
+      .hint { color: #7f8fa4; margin-top: 8px; }
+      .hint code { color: #b9c7d6; }
+      #out {
+        margin: 10px 0 0; padding: 8px 10px; background: #0b1017; border: 1px solid #1a2430; border-radius: 4px;
+        color: #b9c7d6; white-space: pre-wrap; min-height: 1.5em;
+      }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .grow { flex: 1; }
+      #stats { color: #7f8fa4; }
+      a { color: #6fa8ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .error { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <section id="panel">
+      <div class="controls">
+        <label>每档测量帧数 <input id="frames" type="number" min="1" max="200" step="1" value="10" /></label>
+        <button id="rerun">重新测量</button>
+        <span id="progress" class="hint"></span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>物体数</th><th>draw calls</th><th>三角形/帧</th><th>帧耗时(CPU 均值)</th>
+            <th>最小</th><th>最大</th><th>每次 draw</th><th>draws/s</th><th>管线切换</th>
+            <th>含等待后端(均值)</th><th>说明</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <pre id="out">正在启动…</pre>
+      <p class="hint">
+        这一页和 <a href="./benchmark.html">core 层基准</a> 测的是**同一件事的两个层次**：core 基准手写
+        着色器/缓冲/bind group/管线/通道，所以它看不到便捷层的开销；本页只用 <code>src/gfx</code>，
+        每个物体一次 <code>renderer.draw()</code>，每次 draw 都要走：相机 uniform、自己的
+        <code>model</code>、自动计算的法线矩阵（<code>lambert</code> 声明了 <code>normalMatrix</code>）、
+        uniform arena + 动态偏移、bind group，以及按材质属性逐个绑定顶点缓冲（3 个属性 = 3 次
+        <code>setVertexBuffer</code>）。两页同档的「帧耗时(CPU 均值)」可以直接相减，差值就是便捷层的净开销。
+      </p>
+      <p class="hint">
+        计时只算 <code>beginFrame → 逐 draw → endFrame</code> 的 CPU 时间（<code>frames</code> 是每档测量的帧数，
+        先空跑几帧热身）。帧与帧之间只 <code>await device.queue.onSubmittedWorkDone()</code>，
+        **故意不做** core 基准那个 1×1 <code>readPixels</code> 强制同步 —— 那个技巧是为了把 GPU 时间算进帧耗时，
+        代价是每帧把 GPU 串行化；本页要的是 CPU 成本，所以另给一列「含等待后端」作参考。
+        每档都打印 <code>renderer.stats</code>，用来确认这些 draw 真的发生了。
+      </p>
+    </section>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span class="grow"></span>
+      <span id="stats"></span>
+      <span><a href="./gallery.html">示例汇总</a> · <a href="./benchmark.html">core 基准</a> · <a href="./batch.html">批量</a> · <a href="./index.html">demo</a></span>
+    </footer>
+    <script type="module" src="./gfx-benchmark.ts"></script>
+  </body>
+</html>

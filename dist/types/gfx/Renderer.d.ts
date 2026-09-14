@@ -43,6 +43,13 @@ export interface RendererOptions {
     alpha?: boolean;
     /** 是否创建深度缓冲。默认 `true`。 */
     depth?: boolean;
+    /**
+     * canvas 的 MSAA 采样数（1 或 4）。
+     *
+     * WebGPU：会用这个采样数 `configure()` canvas，并在画布渲染通道里做 MSAA resolve；
+     * WebGL2：canvas 的采样数由创建 context 时的 `antialias` 决定、离屏目标不支持 MSAA，
+     * 所以这里传 `> 1` 会直接抛 `ValidationError`（不会静默忽略）。
+     */
     sampleCount?: number;
     pixelRatio?: number;
     powerPreference?: 'low-power' | 'high-performance';
@@ -50,6 +57,7 @@ export interface RendererOptions {
     clearColor?: ColorInput;
     camera?: Camera;
     logger?: Logger;
+    /** WebGL2 的 context 属性覆盖项（覆盖上面几个选项推导出来的默认值）。 */
     contextAttributes?: WebGLContextAttributes;
 }
 /** 便捷层接受的颜色写法（就是 core 的 `Color`，这里给个更友好的别名）。 */
@@ -156,6 +164,14 @@ export declare class Renderer {
      * 必须在 `beginFrame()` 之后调用。
      */
     beginPass(options?: FrameOptions): void;
+    /**
+     * 「画到离屏 target」与「画到 canvas」走同一段代码，只是附件来源不同。
+     *
+     * 两条路径都返回同一形状的 {@link RenderPassDescriptor}（colorAttachments + depthStencilAttachment），
+     * 所以深度附件不会被某一条路径漏掉 —— 之前的缺陷正是「画布路径自己拼 color attachment、
+     * 从不传 depth attachment」，于是后端的状态解析器如实关掉了 DEPTH_TEST。
+     */
+    private createPassDescriptor;
     /** 绘制一个几何体。 */
     draw(geometry: Geometry, options?: DrawOptions): void;
     /** 一次画多个实例（需要材质配合 `perInstance` 属性）。 */
@@ -170,8 +186,21 @@ export declare class Renderer {
     destroy(): void;
     get disposed(): boolean;
     private acquirePipeline;
-    /** 把相机矩阵写进 uniform（字段名存在才写，材质可以不用相机）。 */
+    /**
+     * 把相机矩阵写进 uniform（字段名存在才写，材质可以不用相机）。
+     *
+     * 这里**不再**调用 `camera.update()`：相机矩阵每帧只需要算一次（见 {@link updateCamera}）。
+     * 原先每 draw 都重算 lookAt + 两套 perspective + 一次乘法，40k draw 的场景下光这一步就是
+     * 几十毫秒/帧的纯 CPU 开销，而且结果完全一样。
+     */
     private applyCameraUniforms;
+    /**
+     * 按当前画布宽高比与后端深度约定刷新相机矩阵。
+     *
+     * `beginFrame()` 与 `setCamera()` 会自动调用；**在帧中间改了相机参数**（position/target/fov…）
+     * 之后想立刻生效，就自己调一次这个方法 —— 否则改动会在下一帧的 `beginFrame()` 才反映出来。
+     */
+    updateCamera(): void;
     /**
      * 由当前 `model` 计算法线矩阵。
      *

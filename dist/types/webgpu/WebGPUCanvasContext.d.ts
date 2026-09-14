@@ -6,16 +6,14 @@
  * {@link FrameTarget}，并把「同一帧返回同一个 target」做实：`getCurrentTexture()` 在 present
  * 之前会一直返回同一个 `GPUTexture`，因此按原生对象身份做缓存就够了。
  *
- * **超出 core 的扩展**：core 的 `FrameTarget` 没有地方表达 MSAA 的多重采样 attachment，
- * `RenderPassDescriptor` 又只能给 attachment 列表。因此这里额外提供
- * {@link WebGPUCanvasContext.createPassDescriptor} 与 {@link WebGPUCanvasContext.multisampleView}：
- * 配置了 `sampleCount > 1` 时会创建一张同尺寸的多重采样 texture，并把它作为 `view`、
- * 把 canvas 纹理作为 `resolveTarget`。
+ * **超出 core 的扩展**：core 的 `FrameTarget` 没有地方表达 MSAA 的多重采样 attachment 与
+ * canvas 的深度附件，`RenderPassDescriptor` 又只能给 attachment 列表。因此
+ * {@link WebGPUCanvasContext.createPassDescriptor} 一次把三件事说清楚：
+ * `sampleCount > 1` 时创建/复用一张同尺寸的多重采样 texture（canvas 纹理作为 `resolveTarget`）；
+ * 需要深度时创建/复用一张同尺寸的 `depth24plus` texture（尺寸变化时重建）；
+ * 两者都不需要时就是一张普通的 canvas 纹理。
  */
-import type { CanvasConfig, CanvasContext, FrameTarget } from '../core/CanvasContext.js';
-import type { Color, ColorAttachment } from '../core/render/RenderTarget.js';
-import type { LoadOp } from '../core/enums/LoadOp.js';
-import type { StoreOp } from '../core/enums/StoreOp.js';
+import type { CanvasConfig, CanvasContext, CanvasPassDescriptor, CanvasPassOptions, FrameTarget } from '../core/CanvasContext.js';
 import type { TextureFormat } from '../core/enums/TextureFormat.js';
 import type { Device } from '../core/Device.js';
 import type { WebGPUTextureView } from './resources/WebGPUTextureView.js';
@@ -25,12 +23,8 @@ export interface WebGPUCanvasContextOptions {
     /** 自动为 back buffer 追加 `CopySrc` usage（截图 / readback 用）。 */
     copySrc?: boolean;
 }
-/** {@link WebGPUCanvasContext.createPassDescriptor} 的选项。 */
-export interface WebGPUCanvasPassOptions {
-    loadOp?: LoadOp;
-    storeOp?: StoreOp;
-    clearValue?: Color;
-}
+/** `createPassDescriptor()` 的选项别名；正式类型是 core 的 {@link CanvasPassOptions}。 */
+export type WebGPUCanvasPassOptions = CanvasPassOptions;
 export declare class WebGPUCanvasContext implements CanvasContext {
     readonly canvas: HTMLCanvasElement | OffscreenCanvas;
     private readonly options;
@@ -41,6 +35,7 @@ export declare class WebGPUCanvasContext implements CanvasContext {
     private alphaModeValue;
     private colorSpaceValue;
     private sampleCountValue;
+    private depthRequestedValue;
     private widthValue;
     private heightValue;
     private pixelRatioValue;
@@ -51,6 +46,8 @@ export declare class WebGPUCanvasContext implements CanvasContext {
     private frameTarget;
     private multisampleTexture;
     private multisampleViewValue;
+    private depthTexture;
+    private depthViewValue;
     private _disposed;
     constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options?: WebGPUCanvasContextOptions);
     get width(): number;
@@ -67,6 +64,8 @@ export declare class WebGPUCanvasContext implements CanvasContext {
     get frameTextureView(): WebGPUTextureView | null;
     /** 配置了 MSAA 且已取过一次帧时，当前帧的多重采样 view；否则为 `null`。 */
     get multisampleView(): WebGPUTextureView | null;
+    /** 已创建（且已取过一次帧）的 canvas 深度 view；没有深度附件时为 `null`。 */
+    get depthStencilView(): WebGPUTextureView | null;
     get disposed(): boolean;
     /** 把 context 配置到某个 device 上。会丢弃当前帧的缓存。 */
     configure(config: CanvasConfig): void;
@@ -86,20 +85,31 @@ export declare class WebGPUCanvasContext implements CanvasContext {
      */
     getCurrentFrameTarget(): FrameTarget;
     /**
-     * 生成可以直接交给 `beginRenderPass` 的 color attachment 列表。
+     * 生成可以直接交给 `beginRenderPass` 的附件列表。
      *
-     * `sampleCount > 1` 时会创建/复用一个同尺寸的多重采样 texture，把它作为 `view`，
-     * 而把 canvas 纹理作为 `resolveTarget`。
+     * - `sampleCount > 1` 时创建/复用一个同尺寸的多重采样 texture，把它作为 `view`，
+     *   而把 canvas 纹理作为 `resolveTarget`；
+     * - 需要深度时（`CanvasConfig.depth`，默认 `true`）创建/复用一个同尺寸的 `depth24plus`
+     *   texture。**canvas 纹理本身没有深度附件**，不像 WebGL2 的默认帧缓冲那样自带深度缓冲，
+     *   所以这里必须显式给出来，否则渲染通道的 `depthFormat` 会是 `null`，
+     *   pipeline 会解析成「没有深度状态」的变体，深度测试被静默关掉。
+     *   多重采样时深度 texture 的 sampleCount 必须与颜色附件一致，这里共用 `sampleCountValue`。
      */
-    createPassDescriptor(options?: WebGPUCanvasPassOptions): {
-        colorAttachments: readonly ColorAttachment[];
-        depthStencilAttachment: null;
-    };
+    createPassDescriptor(options?: CanvasPassOptions): CanvasPassDescriptor;
     /** 释放 context 相关资源。幂等。 */
     dispose(): void;
     private ensureMultisampleTarget;
     private releaseFrame;
     private releaseMultisampleTarget;
+    /**
+     * 取得（必要时创建）canvas 深度的 view。
+     *
+     * canvas 纹理没有深度附件，所以深度由本库自己维护：按尺寸缓存，尺寸变化时重建
+     *（`setSize()` / `configure()` 里已经先 release 掉了旧的）。sampleCount 与颜色附件一致，
+     * 否则 WebGPU 会因为「附件采样数不一致」让整条 command buffer 失效。
+     */
+    private ensureDepthTarget;
+    private releaseDepthTarget;
 }
 /** 该对象是否为 WebGPU 后端的 canvas context。 */
 export declare function isWebGPUCanvasContext(value: unknown): value is WebGPUCanvasContext;
