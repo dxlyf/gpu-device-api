@@ -57,20 +57,41 @@ renderer.endFrame();
 - **实例化与批量的两条路都通**：每实例属性（`stepMode: 'instance'`）一条 draw call 画出上万实例；
   或者每个物体一次 draw call、各自带自己的 model 与 uniform，共用一条管线。见
   [示例与自检](#示例与自检)。
+- **带实测数字的性能基准**：`examples/benchmark.html` 只用 core 层（不经过 gfx），在
+  2000 / 5000 / 10000 / 20000 / 40000 个图形下逐档测帧耗时、CPU 提交与每秒三角形，两个后端可直接对比。
 - **可观测**：`device.onError()` 统一上报（WebGPU 的 `onuncapturederror`、WebGL2 的 `getError()`，
   以及本库内部校验失败）；`device.limits` / `device.features` 两个后端都能无差别读取。
 - **逃生口**：`device.native` 是原生的 `GPUDevice` 或 `WebGL2RenderingContext`；`examples/smoke.ts`
   就是用它读回 canvas 像素的。
+- **自带一套数学库**：`vec2/3/4`、`mat3/4`、`quat`、`euler`、`plane`、`ray`、`box3`、`frustum`、
+  `color`、`raycaster`，不依赖设备、可单独 import；`frustum` 直接吃投影视图矩阵做剔除，
+  `raycaster` 支持从 NDC 反投影拾取。见 [目录结构](#目录结构)。
 - **严格 TypeScript**：`strict` + `noUnusedLocals` + 不使用 `any`；注释用简体中文，技术名词保留英文。
 
 ## 快速开始
 
+已发布到 npm（公共包，`@dxyl` scope）：
+
+```bash
+npm i @dxyl/gpu-device-api
+```
+
+```ts
+import { createDevice, BufferUsage, vec3, mat4, quat } from '@dxyl/gpu-device-api';
+```
+
+上面的便捷层示例按**源码路径**导入（`./src/gfx/index.js`），是因为仓库里的示例直接跑源码、
+改一行就能看到效果；作为依赖使用时换成 `@dxyl/gpu-device-api` 即可（`gfx` 层目前还没单独开一个
+子入口，见 [能力边界](#能力边界诚实清单)）。
+
+在仓库里开发：
+
 ```bash
 pnpm install
 
-pnpm dev          # 启动示例站（vite dev server），打开 /examples/index.html
+pnpm dev          # 启动示例站（vite dev server），打开 /examples/gallery.html
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（6 个文件 / 119 条用例，node 环境）
+pnpm test         # vitest run（6 个文件 / 166 条用例，node 环境）
 pnpm build        # 产出 dist/gpu-device-api.js（ESM）+ dist/types
 pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```
@@ -84,7 +105,7 @@ import {
   ValidationError,                                         // core：错误类型
   registerShader, compileShaderStage,                      // shaders：源码管理与编译
   mat4, vec3, degToRad, createLogger, disposeAll,          // utils：数学、日志、批量释放
-} from 'gpu-device-api';
+} from '@dxyl/gpu-device-api';
 ```
 
 便捷层在 `src/gfx/index.ts`（示例按源码路径导入；若要作为独立入口发布，需要扩展
@@ -105,9 +126,45 @@ src/
 ├── factories/  后端探测与选择：detectBackend / createDevice / createDeviceWithAdapter / BackendRegistry
 ├── gfx/        便捷绘制层：Renderer、Geometry、Material、Uniforms、UniformArena、Camera、
 │               OrbitControls、shapes、materials、Texture
-├── utils/      与后端无关的工具：断言、位标志、TypedArray、id、logger、math（vec2/3/4、mat3/4）
+├── utils/      与后端无关的工具：断言、位标志、TypedArray、id、logger、
+│               math（vec2/3/4、mat3/4、quat、euler、plane、ray、box3、frustum、color、raycaster）
 └── types/      @webgpu/types 引用与内部共享类型
 ```
+
+`utils/math` 是独立可用的一层（不依赖设备，可单独 import）：文件名与导出命名空间都是小写 ——
+`vec3` / `mat4` / `quat` / `euler` / `plane` / `ray` / `box3` / `frustum` / `color` / `raycaster`。
+统一约定是 **out 参数在最前**、运算对象都是 `Float32Array`（`color` 例外，用 `ColorValue` 对象），
+所以热路径上不产生临时分配；`euler` / `box3` / `frustum` / `raycaster` 这几类带自身状态的用对象：
+
+```ts
+import { vec3, mat4, quat, euler, ray, box3, frustum, color, raycaster } from 'gpu-device-api';
+
+// Euler(弧度) → 四元数 → 模型矩阵：每一步都把结果写进已有对象
+const q = euler.toQuaternion(quat.create(), euler.set(euler.create(), 0, Math.PI / 4, 0));
+const model = mat4.fromRotationTranslationScale(
+  mat4.create(), Math.PI / 4, vec3.fromValues(0, 1, 0), vec3.fromValues(0, 1, 0), vec3.fromValues(1, 1, 1),
+);
+
+// 射线与盒求交：返回最近的正向命中距离，未命中为 null
+const box = box3.setFromCenterAndSize(box3.create(), vec3.create(), vec3.fromValues(1, 1, 1));
+const r = ray.set(ray.create(), vec3.fromValues(0, 0, 5), vec3.normalize(vec3.create(), vec3.fromValues(-0.3, -0.2, -1)));
+const t = ray.intersectBox(r, box);
+const hit = t === null ? null : ray.at(vec3.create(), r, t);
+
+// 视锥剔除 / 拾取：projView 是「投影 × 视图」矩阵
+const f = frustum.create();
+frustum.setFromProjectionView(f, projView);
+const visible = frustum.intersectsBox(f, box);
+const rc = raycaster.set(raycaster.create(), vec3.fromValues(0, 0, 5), vec3.fromValues(0, 0, -1));
+const pickT = raycaster.intersectBox(rc, box);
+
+// 颜色：内部是 0..1 的 RGBA，setStyle 接受 CSS 字符串
+const c = color.setStyle(color.create(), '#ff8800');
+const linear = color.convertSRGBToLinear(color.create(), c);
+```
+
+对应的测试在 `test/math.test.ts`（44 条用例，覆盖退化输入：零长度向量、退化矩阵、gimbal lock、
+射线与盒子平行等）。
 
 `docs/需求.md` 保留了最初规划的目录树，可与现状对照。
 
@@ -362,12 +419,28 @@ u.set('bones', boneMatrices);
 
 | 页面 | 内容 |
 | --- | --- |
+| `examples/gallery.html` | **示例汇总**：所有示例的分类索引（core 层 / gfx 层），含每个页面的说明与查询参数 |
 | `examples/index.html` | gfx 层的完整 demo：lil-gui 调参、切换后端、几何体/材质/光照切换 |
 | `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
+| `examples/benchmark.html` | **性能基准**：只用 core 层（不经过 gfx），在 2000 / 5000 / 10000 / 20000 / 40000 个图形下逐帧计时 |
 | `examples/smoke.html` | core 层的浏览器内冒烟测试：15 项检查，含像素级断言（canvas 中央、离屏目标角落） |
 
-**实例化 vs 批量**（两个示例正好是一对）：
+**core 层示例**（同样只用 `src/index.ts`，**不经过 gfx 便捷层**，用来对照「便捷层到底替你做了什么」）：
+
+| 页面 | 内容 |
+| --- | --- |
+| `examples/core-triangle.html` | 最小的一次绘制：交织顶点缓冲、`layout: 'auto'`，没有 uniform / bind group |
+| `examples/core-box.html` | 3D 必备件：投影与视图矩阵、uniform 块的字节打包、bind group layout、带深度的管线 |
+| `examples/core-texture.html` | `createTexture` + `queue.writeTexture` + `createSampler`；sampler 按 `<纹理名>_sampler` 配对 |
+| `examples/core-instancing.html` | 每实例属性（`stepMode: 'instance'`）：1 次 draw call 画 N 个实例，`?count=` 调数量 |
+| `examples/core-batch.html` | N 次 draw call + **动态偏移** uniform（`hasDynamicOffset` + `setBindGroup(1, bg, [offset])`） |
+
+这五个页面共用 `examples/core-shared.ts`（设备创建、离屏像素自检、帧循环、uniform 绑定等样板），
+每个页面的 `.ts` 顶部注释都写明了它要演示什么、以及对应的 core API 调用点。
+它们也会把结论写进 `data-<名字>-lit / -pixel / -distinct / -error`。
+
+**实例化 vs 批量**（两组示例正好是一对）：
 
 | | 实例化（`instancing.html`） | 批量（`batch.html`） |
 | --- | --- | --- |
@@ -376,16 +449,53 @@ u.set('bones', boneMatrices);
 | 适合 | 同一网格的海量副本（草、粒子、体素） | 物体各自有独立参数/材质变体，数量在千级以内 |
 | 上限 | 实例数可以上万 | 受 draw call 与 uniform 带宽限制 |
 
-三个页面都支持 `?backend=webgl2|webgpu|auto`；`instancing.html` 另支持 `&count=`、`batch.html` 支持 `&side=`、
-两者都支持 `&spin=0` 与 `&verify=1`。加 `verify=1` 会额外把场景画进一张离屏目标并读回像素（复用
-`examples/offscreen-verify.ts`），把结论写在 `<html>` 的 `data-*` 上：
+四个页面都支持 `?backend=webgl2|webgpu|auto`；`instancing.html` 另支持 `&count=`、`batch.html` 支持 `&side=`、
+`benchmark.html` 支持 `&mode=instanced|draws&frames=&counts=`；前三个都支持 `&verify=1`。加 `verify=1` 会额外把
+场景画进一张离屏目标并读回像素（复用 `examples/offscreen-verify.ts`），把结论写在 `<html>` 的 `data-*` 上：
 
 - `index.html` → `data-demo-pixel / -pixel-corner / -pixel-lit / -error`
 - `instancing.html` → `data-instancing-backend / -count / -drawcalls / -instances / -pixel / -lit-pixels / -distinct / -lit / -error`
 - `batch.html` → `data-batch-backend / -items / -drawcalls / -pipeline-switches / -pixel / -lit-pixels / -distinct / -lit / -error`
+- `benchmark.html` → `data-benchmark-backend / -adapter / -mode / -frames / -results / -done / -lit / -error`
+  （`-results` 是 `2000:frame=6.35ms,fps=157.5,cpu=0.41ms,draws=1,tris=16000;…` 这样的紧凑串）
 
 其中 `-lit` 的判据不只是「有像素被光栅化」，还要求画面上出现**多种颜色**：只剩一种颜色通常意味着
 每实例数据没生效、或者每次 draw 的 uniform 串到了同一段内存（这两个后端的两种典型故障）。
+
+### 性能基准（`benchmark.html`）
+
+这个页面**只用 `src/index.ts`**（core + factories + utils）：着色器、顶点/实例缓冲、uniform 块的字节打包、
+bind group、管线、通道、提交与 GPU 同步全部手写 —— 可以当成「不带便捷层时这个库长什么样」的参考。
+它对 2000 / 5000 / 10000 / 20000 / 40000 个图形逐档测量，两种模式：
+
+- `instanced`（默认）：1 次 draw call 画 N 个图形；
+- `draws`：每个图形一次 draw call（用 `setVertexBuffer` 的偏移指向自己那份实例数据），
+  单帧探测超过 500ms 就跳过该档，避免把页面卡死。
+
+计时口径：每档先空跑几帧热身，再逐帧 `performance.now()`，并且**等到这一帧真的画完才停表** ——
+WebGPU 用 `queue.onSubmittedWorkDone()`；WebGL2 用一次 1×1 的 `readPixels` 强制同步，因为
+**`gl.finish()` 在 WebGL 里并不保证 GPU 已完成**（规范只要求把命令送出去，实测在 ANGLE 上几乎立即返回，
+那样测到的只是 CPU 录制时间，而且驱动队列会越积越多、数字完全不可比）。
+`cpu` 列是「录制 + 提交」，`frame` 列是「从开始录制到画完」。
+
+本机实测（同一份代码，两行是同一台机器上的两个后端）：
+
+| 图形数 | WebGL2 / SwiftShader（软件光栅化）帧耗时 | WebGPU / Intel（真实 GPU）帧耗时 | CPU 提交（实例化） |
+| --- | --- | --- | --- |
+| 2000 | 37.3 ms（27 FPS） | 6.35 ms（158 FPS） | ≈ 4 ms（WebGL2）/ 0.4 ms（WebGPU） |
+| 5000 | 92.0 ms | 3.93 ms（255 FPS） | — |
+| 10000 | 189.8 ms | 4.60 ms | — |
+| 20000 | 286.1 ms | 4.87 ms（205 FPS） | — |
+| 40000 | 583.9 ms（1.7 FPS） | 7.39 ms（135 FPS） | ≈ 3.3 ms / 0.2 ms |
+
+两个结论：**帧耗时的增长几乎全在 GPU 侧**（实例化下 CPU 提交基本恒定，40000 个图形也只有几毫秒），
+以及**软件光栅化与真实 GPU 差两个数量级** —— 所以页面上会把 adapter 名字一并显示出来
+（`data-benchmark-adapter`），看到 `SwiftShader` 就别把 FPS 当真实性能。
+同一份 `draws` 模式在 SwiftShader 上则是 2000 次 draw 就吃掉 23.7ms CPU、10000 次 268ms，
+正好反过来印证「实例化省的是 draw call 与 CPU 提交」。
+
+⚠️ 跑这个页面**不要加 `--virtual-time-budget`**：虚拟时间会让 `performance.now()` 跟着跳，
+测出来的数字没有意义（无头环境请用真实时间等它跑完，页面会把进度写进 `data-*` 与 `#progress`）。
 
 `examples/index.html` 的查询参数：`?backend=webgl2|webgpu|auto&shape=box&material=unlit&grid=0&verify=1`。
 `verify=1` 的结果写在 `<html data-demo-pixel / data-demo-pixel-corner / data-demo-pixel-lit / data-demo-error>` 上 ——
@@ -411,14 +521,17 @@ Start-Process $chrome -NoNewWindow -Wait -RedirectStandardOutput "$env:TEMP\dom.
 
 dump 出来的 HTML 里，`<html>` 上的 `data-*` 就是结论：`data-smoke-result="pass"`、
 `data-demo-pixel-lit="true"`、`data-demo-error`（为空表示启动没报错）。
+`benchmark.html` 与带 `verify=1` 的 `instancing.html` / `batch.html` 也各自把结论写在同一处。
 
-三个踩过的坑，写在这里省得重复踩：
+四个踩过的坑，写在这里省得重复踩：
 
 1. **不要同时加 `--use-angle=swiftshader` 与 `--enable-unsafe-webgpu`** —— 这个组合下
    `requestAdapter()` 会返回 null；测 WebGPU 时去掉 GL 的软件光栅化开关，测 WebGL2 时再加回来。
 2. **`--virtual-time-budget` 会抢跑 WebGPU 的异步返回**（虚拟时间瞬间耗尽，GPU 回调还没到）。
    要么用 `--dump-dom` 只测 WebGL2，要么让页面在**真实时间**里轮询结果再自行汇报。
-3. **Chrome 是 GUI 子系统程序**，`& $chrome ...` 抓不到 stdout，必须用
+3. **性能基准绝对不能加 `--virtual-time-budget`**：虚拟时间会让 `performance.now()` 跟着一起跳，
+   测出来的帧耗时没有意义。请让页面在真实时间里跑完（它会自己把结果写进 `data-benchmark-*`）。
+4. **Chrome 是 GUI 子系统程序**，`& $chrome ...` 抓不到 stdout，必须用
    `Start-Process -RedirectStandardOutput`。
 
 ## 两个后端的硬约束（踩过的坑）
@@ -448,6 +561,24 @@ WebGPU 提交时生效、WebGL2 立即生效。**不要在同一帧内对同一 
 **⑤ 一张 canvas 只能绑定一种 context 类型。**
 已经 `getContext('webgl2')` 过的 canvas 再 `getContext('webgpu')` 一定返回 null，
 `destroy()` 也解不开。**切换后端必须换一张 canvas 元素**（demo 里的 `replaceCanvas()` 就是干这个的）。
+
+**⑥ WebGL2 的 `gl.finish()` 不是「等 GPU 做完」。**
+WebGL 规范只要求它把命令送出去；实测在 ANGLE/SwiftShader 上几乎立即返回。
+要真的等到这一帧画完（例如做性能测量），得用一次 1×1 的 `readPixels` 强制同步 ——
+`benchmark.html` 就是这么做的（走 `device.native` 逃生口）。
+
+**⑦ `queue.writeBuffer` 的 `dataOffset` / `size` 单位是「字节」。**
+WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早期实现里 WebGPU 后端误按
+元素个数转发，于是同一份代码在 WebGL2 上正确、在 WebGPU 上偏移错位或报
+`Number of bytes to write is too large`。现在两个后端统一按字节解释：内部按
+`BYTES_PER_ELEMENT` 换算（`DataView` 按 1 字节），不是整元素倍数时直接抛 `ValidationError`，
+而不是让数据悄悄错位。写 `Float32Array` 时记得 `offset * 4`。
+
+**⑧ WebGPU 的 `copyTextureToBuffer` 要求 `bytesPerRow` 是 256 的倍数。**
+想读回一张纹理做像素断言时，宽 96、RGBA8 的图按 384 字节/行会被拒绝
+（`bytesPerRow (384) is not a multiple of 256`）。做法是向上取整到 256 的倍数、
+再把每行前 `width * 4` 字节搬到紧凑缓冲里（`core-shared.ts` / `offscreen-verify.ts` 里的
+`verifyOffscreen` 就是这套；WebGL2 的 `readPixels` 没有这个限制，所以只有 WebGPU 会暴露）。
 
 ## 能力边界（诚实清单）
 
@@ -488,20 +619,22 @@ WebGPU 提交时生效、WebGL2 立即生效。**不要在同一帧内对同一 
 
 ### 测试构成
 
-`test/` 下 6 个文件、122 条用例，全部跑在 **node** 环境（不需要浏览器）：
+`test/` 下 6 个文件、166 条用例，全部跑在 **node** 环境（不需要浏览器）：
 
 | 文件 | 覆盖 |
 | --- | --- |
-| `test/gfx.test.ts` | uniform 布局与代码生成、`Material` 声明注入、`Geometry` 数据打包与校验 |
+| `test/gfx.test.ts` | uniform 布局与代码生成、`Material` 声明注入、`Geometry` 数据打包与校验、实例化属性 |
 | `test/shaders.test.ts` | 源码注册表、按后端选语言、GLSL/WGSL 反射 |
-| `test/math.test.ts` | 向量 / 矩阵 |
+| `test/math.test.ts` | 向量 / 矩阵 / 四元数 / Euler / Plane / Ray / Box3 / Frustum / Color / Raycaster（含退化输入） |
 | `test/enums.test.ts` | 枚举取值与位标志 |
 | `test/utils.test.ts` | 断言、TypedArray、位标志、logger |
 | `test/factories.test.ts` | 后端探测、回退与错误路径 |
 
-**像素级**的验证放在浏览器里：`examples/smoke.html`（core 层 15 项）、
-`examples/index.html?verify=1`（gfx 层）以及 `examples/instancing.html?verify=1` /
-`examples/batch.html?verify=1`（实例化与批量各自的像素自检）。改动渲染路径后请都跑一遍，两个后端都要看。
+**像素级**的验证放在浏览器里，入口是 `examples/gallery.html`（汇总页，列出下面全部示例）：
+`examples/smoke.html`（core 层 15 项）、`examples/index.html?verify=1`（gfx 层）、
+`examples/instancing.html?verify=1` / `examples/batch.html?verify=1`（实例化与批量各自的像素自检），
+以及 `core-*.html` 五个 core 层示例（`?verify=1` 会打印像素结论）。
+改动渲染路径后请都跑一遍，两个后端都要看。
 
 ### 代码约定
 

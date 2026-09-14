@@ -19,11 +19,31 @@ export * as vec3 from './vec3.js';
 export * as vec4 from './vec4.js';
 export * as mat3 from './mat3.js';
 export * as mat4 from './mat4.js';
+export * as quat from './quaternion.js';
+export * as euler from './euler.js';
+export * as plane from './plane.js';
+export * as ray from './ray.js';
+export * as box3 from './box3.js';
+export * as frustum from './frustum.js';
+export * as color from './color.js';
+export * as raycaster from './raycaster.js';
 export type { Vec2 } from './vec2.js';
 export type { Vec3 } from './vec3.js';
 export type { Vec4 } from './vec4.js';
 export type { Mat3 } from './mat3.js';
 export type { Mat4 } from './mat4.js';
+export type { Quat } from './quaternion.js';
+export type { Euler, EulerOrder } from './euler.js';
+export type { Plane } from './plane.js';
+export type { Ray } from './ray.js';
+export type { Box3 } from './box3.js';
+export type { Frustum } from './frustum.js';
+/**
+ * 颜色的数值容器。名字不叫 `Color` 是因为包入口已经有一个 `Color`（core 的颜色输入联合类型），
+ * 两个 `export *` 同名会冲突；它的结构正好是那个联合类型里的对象成员，可以直接当颜色输入用。
+ */
+export type { ColorValue } from './color.js';
+export type { Raycaster, RaycastHit } from './raycaster.js';
 /** 浮点比较默认容差。 */
 export declare const EPSILON = 0.000001;
 /** 角度转弧度的系数。 */

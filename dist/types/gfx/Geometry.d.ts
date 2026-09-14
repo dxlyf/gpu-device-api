@@ -13,6 +13,7 @@
  */
 import { type IndexFormat } from '../core/enums/IndexFormat.js';
 import { type VertexFormat } from '../core/enums/VertexFormat.js';
+import type { VertexStepMode } from '../core/enums/VertexStepMode.js';
 import type { PrimitiveTopology } from '../core/enums/PrimitiveTopology.js';
 import type { Buffer } from '../core/resources/Buffer.js';
 import type { Device } from '../core/Device.js';
@@ -61,6 +62,13 @@ export declare class Geometry {
     readonly indexBuffer: Buffer | null;
     readonly indexFormat: IndexFormat | null;
     readonly indexCount: number;
+    /**
+     * 按实例步进的属性能提供多少个实例（取各实例属性里最少的那个）；没有实例属性时为 `null`。
+     *
+     * 它和 `vertexCount` 是两回事：实例属性的元素个数可以比顶点数少（典型情况：
+     * 一个盒子的 36 个顶点 + 1000 份实例数据），所以两者分开推断、也分开校验。
+     */
+    readonly instanceCount: number | null;
     private _disposed;
     private constructor();
     /** 上传几何体数据到 GPU。 */
@@ -68,10 +76,16 @@ export declare class Geometry {
     get disposed(): boolean;
     /** 实际的绘制顶点/索引数。 */
     get drawCount(): number;
-    /** 检查几何体是否提供了材质需要的所有属性，格式是否匹配。 */
+    /**
+     * 检查几何体是否提供了材质需要的所有属性，格式与步进模式是否匹配。
+     *
+     * `stepMode` 必须与数据上传时的 `perInstance` 一致：步进模式对不上时，
+     * 顶点缓冲会按错误的节奏被读取（画出来是乱码而不是报错），所以这里直接拦下。
+     */
     validateAgainst(required: readonly {
         name: string;
         format: VertexFormat;
+        stepMode?: VertexStepMode;
     }[], materialName: string): void;
     destroy(): void;
 }

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — 示例汇总</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        background: #0b0e13;
+        color: #d7dde5;
+        font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: 24px clamp(16px, 6vw, 72px) 48px;
+      }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      h2 { font-size: 14px; margin: 28px 0 10px; color: #9fb3c8; font-weight: 600; }
+      p.lead { color: #8fa3b8; margin: 0 0 8px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+      a.card {
+        display: block;
+        padding: 12px 14px;
+        border: 1px solid #1d2530;
+        border-radius: 6px;
+        background: #0f141b;
+        color: inherit;
+        text-decoration: none;
+      }
+      a.card:hover { border-color: #3f7bd8; background: #121a24; }
+      .title { color: #d7dde5; font-weight: 600; }
+      .tag {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 0 6px;
+        border-radius: 999px;
+        font-size: 11px;
+        border: 1px solid #26333f;
+        color: #8fa3b8;
+        vertical-align: 1px;
+      }
+      .tag.core { border-color: #2f5a3f; color: #7fd39a; }
+      .tag.gfx { border-color: #3d4a6b; color: #9db6ff; }
+      .desc { color: #8fa3b8; margin-top: 4px; }
+      code { color: #b9c7d6; }
+      .note { margin-top: 28px; color: #7f8fa4; border-top: 1px solid #1d2530; padding-top: 12px; }
+      .note b { color: #9fb3c8; }
+    </style>
+  </head>
+  <body>
+    <h1>gpu-device-api 示例汇总</h1>
+    <p class="lead">
+      同一个库的两种用法：<span class="tag gfx">gfx</span> 便捷层（声明式材质/几何体/相机），
+      与 <span class="tag core">core</span> 只用手写 API（着色器、缓冲、管线、通道全部自己来）。
+      两个后端都一样：用 <code>?backend=webgl2|webgpu|auto</code> 切换，默认 <code>auto</code>（优先 WebGPU，失败回退 WebGL2）。
+    </p>
+
+    <h2>core 层示例（不使用 gfx 便捷层）</h2>
+    <div class="grid">
+      <a class="card" href="./core-triangle.html">
+        <span class="title">三角形</span><span class="tag core">core</span>
+        <div class="desc">
+          最小的一次绘制：交织顶点缓冲（position 2 + color 3，步长 20）、<code>layout: 'auto'</code>、
+          没有 uniform 也没有 bind group。<code>?verify=1</code> 做像素自检。
+        </div>
+      </a>
+      <a class="card" href="./core-box.html">
+        <span class="title">立方体</span><span class="tag core">core</span>
+        <div class="desc">
+          3D 必备件：投影/视图矩阵、uniform 块的字节打包（std140 与 WGSL uniform）、
+          bind group layout、带深度的管线。两个 stage 都要自己声明 uniform 块。
+        </div>
+      </a>
+      <a class="card" href="./core-texture.html">
+        <span class="title">贴图</span><span class="tag core">core</span>
+        <div class="desc">
+          <code>createTexture</code> + <code>queue.writeTexture</code> + <code>createSampler</code>，
+          纹理/采样器/uniform 放在同一个 bind group；采样器名字要按 <code>&lt;纹理名&gt;_sampler</code> 配对。
+        </div>
+      </a>
+      <a class="card" href="./core-instancing.html?count=4096">
+        <span class="title">实例化</span><span class="tag core">core</span>
+        <div class="desc">
+          每实例属性（<code>stepMode: 'instance'</code>）：一个网格、<strong>1 次 draw call</strong> 画 N 个实例。
+          <code>?count=2000…20000</code> 调数量。
+        </div>
+      </a>
+      <a class="card" href="./core-batch.html?side=5">
+        <span class="title">批量</span><span class="tag core">core</span>
+        <div class="desc">
+          N 个物体各一次 draw call、共用一条管线；每个物体用自己的 <strong>动态偏移</strong> 读 uniform
+          （<code>hasDynamicOffset: true</code> + <code>setBindGroup(1, bg, [offset])</code>）。
+        </div>
+      </a>
+      <a class="card" href="./benchmark.html">
+        <span class="title">性能基准</span><span class="tag core">core</span>
+        <div class="desc">
+          2000 / 5000 / 10000 / 20000 / 40000 个图形逐档计时（帧耗时、CPU 提交、每秒三角形），
+          实例化与「逐个 draw」两种模式对照。别加 <code>--virtual-time-budget</code>。
+        </div>
+      </a>
+    </div>
+
+    <h2>gfx 便捷层示例</h2>
+    <div class="grid">
+      <a class="card" href="./index.html">
+        <span class="title">场景 demo</span><span class="tag gfx">gfx</span>
+        <div class="desc">
+          五行画出东西的完整场景：lil-gui 调参、切换后端、几何体/材质/光照切换、
+          <code>?verify=1</code> 像素自检。
+        </div>
+      </a>
+      <a class="card" href="./instancing.html?count=4096">
+        <span class="title">实例化</span><span class="tag gfx">gfx</span>
+        <div class="desc">
+          用 <code>{ format, stepMode: 'instance' }</code> 声明实例属性 + <code>drawInstanced()</code>，
+          与 core 版对照可以看到便捷层省掉了哪些样板。
+        </div>
+      </a>
+      <a class="card" href="./batch.html?side=5">
+        <span class="title">批量</span><span class="tag gfx">gfx</span>
+        <div class="desc">
+          每个物体一次 <code>draw()</code>，各自的 model 与 uniform 由 <strong>uniform arena</strong>
+          自动分配区间并做动态偏移。
+        </div>
+      </a>
+      <a class="card" href="./smoke.html">
+        <span class="title">冒烟测试</span><span class="tag gfx">gfx + core</span>
+        <div class="desc">
+          15 项检查：设备创建、管线交叉校验、canvas 与离屏目标的像素级断言、以及各类错误路径。
+          结果写在 <code>data-smoke-result</code>。
+        </div>
+      </a>
+    </div>
+
+    <div class="note">
+      <p>
+        <b>无头验证</b>：每个页面都会把自己那次的结论写进 <code>&lt;html data-*&gt;</code>，
+        无头浏览器 <code>--dump-dom</code> 抓一下就知道有没有画出来 —— 例如
+        <code>data-triangle-lit</code>、<code>data-texture-distinct</code>、
+        <code>data-batch-lit</code>、<code>data-benchmark-results</code>。
+      </p>
+      <p>
+        <b>两个坑</b>：<code>--virtual-time-budget</code> 会让 <code>performance.now()</code> 跟着虚拟时间跳，
+        <b>性能基准千万不要加</b>；测 WebGPU 时不要同时加 <code>--use-angle=swiftshader</code>
+        （那个组合下 <code>requestAdapter()</code> 会返回 null）。
+      </p>
+      <p>
+        源码与用法见仓库根目录的 <code>README.md</code>；每个示例的 <code>core-*.ts</code> 顶部注释都写了
+        这一页要演示什么、以及对应的 core API 调用点。
+      </p>
+    </div>
+  </body>
+</html>

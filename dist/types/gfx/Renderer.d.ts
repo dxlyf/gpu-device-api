@@ -84,6 +84,12 @@ export interface RendererStats {
     drawCalls: number;
     triangles: number;
     instances: number;
+    /**
+     * 本帧真正发生的**管线切换**次数：相邻两次 draw 用了不同管线才计数。
+     *
+     * 注意它不是「setPipeline 调用次数」—— 同一个材质连续画 N 个物体共用一条管线，
+     * 切换次数应该是 1（这正是「批量绘制用一条管线」的价值所在，也是这行统计的意义）。
+     */
     pipelineSwitches: number;
     /** 上一帧的 CPU 提交耗时（毫秒）。 */
     frameTime: number;
@@ -110,6 +116,8 @@ export declare class Renderer {
     private pass;
     private commandBuffers;
     private currentMaterial;
+    /** 上一次 draw 用的管线，用来统计真正的「管线切换」次数（每个通道开头清空）。 */
+    private currentPipeline;
     private defaultTexture;
     private frameStart;
     /** 计算法线矩阵时复用的暂存区，避免每帧分配。 */
@@ -152,6 +160,13 @@ export declare class Renderer {
     draw(geometry: Geometry, options?: DrawOptions): void;
     /** 一次画多个实例（需要材质配合 `perInstance` 属性）。 */
     drawInstanced(geometry: Geometry, instances: number, options?: DrawOptions): void;
+    /**
+     * 实例数与几何体提供的实例数据是否匹配。
+     *
+     * 实例属性的元素个数就是「最多能画多少个实例」：要多了，WebGL2 会静默地读到缓冲区之外的数据
+     *（画面出错但不报错），WebGPU 会在 draw 时报校验错误 —— 两种都不好定位，所以这里提前拦下。
+     */
+    private assertInstanceCount;
     destroy(): void;
     get disposed(): boolean;
     private acquirePipeline;

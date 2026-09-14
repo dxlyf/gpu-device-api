@@ -312,6 +312,7 @@ async function createScene(): Promise<Scene> {
   });
 
   statusEl.textContent = `后端：${created.backend}　设备：${describeAdapter(created.adapter.info)}`;
+  setData('benchmarkAdapter', describeAdapter(created.adapter.info));
 
   const shape = buildOctahedron();
   const instances = buildInstanceData();
@@ -473,8 +474,34 @@ function updateProjection(active: Scene): void {
 }
 
 /* ------------------------------------------------------------------------------------------------ */
-/* 一帧的录制                                                                                          */
+/* 一帧的录制与「等到真的画完」                                                                          */
 /* ------------------------------------------------------------------------------------------------ */
+
+/** 强制同步用的 1 像素读回缓冲。 */
+const pixelScratch = new Uint8Array(4);
+
+/**
+ * 等到这一帧真的画完，再返回。
+ *
+ * - WebGPU：`queue.onSubmittedWorkDone()` 就是队列排空，语义正确；
+ * - WebGL2：**`gl.finish()` 在 WebGL 里并不保证 GPU 已经做完**（规范只要求把命令送出去），
+ *   实测在 ANGLE/SwiftShader 上几乎立即返回 —— 那样测出来的就只是 CPU 录制时间，
+ *   而且驱动队列会越积越多，数字完全不可比。所以这里用一次 1×1 的 `readPixels`
+ *   强制同步：它是同步阻塞的，读回时这一帧的绘制必然已经完成。
+ *
+ * `readPixels` 走的是 core 的逃生口 `device.native`，这也是一个「core 层做不到、
+ * 必须落到原生 API」的例子。
+ */
+async function syncFrame(): Promise<void> {
+  const active = scene!;
+  if (active.device.backend === 'webgpu') {
+    await active.device.queue.onSubmittedWorkDone();
+    return;
+  }
+  const gl = active.device.native as WebGL2RenderingContext;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixelScratch);
+}
 
 function drawFrame(count: number): void {
   const active = scene;
@@ -536,17 +563,16 @@ function mean(values: readonly number[]): number {
 }
 
 async function measure(count: number): Promise<Measurement | { count: number; skipped: string }> {
-  const active = scene!;
   const warmup = mode === 'instanced' ? 5 : 2;
 
   for (let i = 0; i < warmup; i++) drawFrame(count);
-  await active.device.queue.onSubmittedWorkDone();
+  await syncFrame();
 
   if (mode === 'draws') {
     // 先探一帧：逐 draw 模式在大数量下可能非常慢，超过阈值就跳过，别把页面卡住。
     const probeStart = performance.now();
     drawFrame(count);
-    await active.device.queue.onSubmittedWorkDone();
+    await syncFrame();
     const probeMs = performance.now() - probeStart;
     if (probeMs > SLOW_FRAME_LIMIT_MS) {
       return { count, skipped: `单帧探测 ${probeMs.toFixed(0)}ms > ${SLOW_FRAME_LIMIT_MS}ms，跳过` };
@@ -561,9 +587,9 @@ async function measure(count: number): Promise<Measurement | { count: number; sk
     const start = performance.now();
     drawFrame(count);
     const submitted = performance.now();
-    await active.device.queue.onSubmittedWorkDone();
+    await syncFrame();
     const finished = performance.now();
-    // cpu = 录制 + 提交；frame = 从开始录制到 GPU 真正做完（含同步等待）。
+    // cpu = 录制 + 提交；frame = 从开始录制到这一帧真的画完（含同步等待）。
     cpuSamples.push(submitted - start);
     frameSamples.push(finished - start);
     progressEl.textContent = `测量中：${count}（${i + 1}/${measuredFrames}）`;

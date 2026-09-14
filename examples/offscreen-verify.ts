@@ -74,7 +74,11 @@ export async function verifyOffscreen(
   draw: () => void,
 ): Promise<PixelStats> {
   const { device } = renderer;
-  const byteLength = width * height * 4;
+  // WebGPU 要求 `copyTextureToBuffer` 的 bytesPerRow 是 **256 的倍数**（一行像素只有 width*4 字节），
+  // 所以按 256 对齐申请，读回后逐行去掉填充。WebGL2 没这条限制，同样的写法也能用。
+  const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+  const rowBytes = width * 4;
+  const byteLength = bytesPerRow * height;
   const target = device.createRenderTarget({
     label: 'verify-target',
     width,
@@ -96,17 +100,22 @@ export async function verifyOffscreen(
   const encoder = device.createCommandEncoder({ label: 'verify-readback' });
   encoder.copyTextureToBuffer(
     { texture: target.colors[0]!, origin: { x: 0, y: 0 } },
-    { buffer: readback, offset: 0, bytesPerRow: width * 4 },
+    { buffer: readback, offset: 0, bytesPerRow },
     { width, height, depthOrArrayLayers: 1 },
   );
   device.queue.submit([encoder.finish()]);
 
   await readback.mapAsync('read', 0, byteLength);
   // unmap 之后映射内存就失效了，所以先把像素拷出来。
-  const pixels = new Uint8Array(readback.getMappedRange(0, byteLength)).slice();
+  const raw = new Uint8Array(readback.getMappedRange(0, byteLength)).slice();
   readback.unmap();
   readback.destroy();
   target.destroy();
+
+  const pixels = new Uint8Array(rowBytes * height);
+  for (let y = 0; y < height; y++) {
+    pixels.set(raw.subarray(y * bytesPerRow, y * bytesPerRow + rowBytes), y * rowBytes);
+  }
 
   const background = toBytes(clear);
   const counts = new Map<number, number>();

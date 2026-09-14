@@ -1,9 +1,9 @@
 {
-  "name": "gpu-device-api",
+  "name": "@dxyl/gpu-device-api",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
   "description": "Unified low-level WebGL2 / WebGPU abstraction library for easy drawing on either backend.",
+  "type": "module",
+  "sideEffects": false,
   "main": "./dist/gpu-device-api.js",
   "module": "./dist/gpu-device-api.js",
   "types": "./dist/types/index.d.ts",
@@ -14,9 +14,28 @@
     }
   },
   "files": [
-    "dist",
-    "src"
+    "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dxlyf/gpu-device-api.git"
+  },
+  "homepage": "https://github.com/dxlyf/gpu-device-api#readme",
+  "bugs": {
+    "url": "https://github.com/dxlyf/gpu-device-api/issues"
+  },
+  "keywords": [
+    "webgl2",
+    "webgpu",
+    "graphics",
+    "gpu",
+    "renderer",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build && tsc -p tsconfig.build.json && node scripts/postbuild.mjs",

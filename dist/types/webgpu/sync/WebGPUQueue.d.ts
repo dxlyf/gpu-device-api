@@ -24,6 +24,12 @@ export declare class WebGPUQueue implements Queue {
      * 这与 WebGL2 后端的立即模式语义不同（那边只有之后录制的命令能看到新数据），需要
      * 「改 uniform → draw → 再改 → 再 draw」时请使用 uniform arena + dynamic offset
      * （`setBindGroup(index, bindGroup, [dynamicOffset])`），两个后端的结果才一致。
+     *
+     * **单位换算（容易踩）**：core 的契约里 `dataOffset` / `size` 是**字节**
+     * （WebGL2 后端就是这么实现的），而 WebGPU 原生接口在 `data` 是 TypedArray 时按**元素**计
+     * （`Float32Array` 的 `size = 4` 表示 4 个 float = 16 字节）。这里统一换算成元素再下发，
+     * 否则同一个调用在两个后端会写入不同的范围 —— 通常表现为
+     * `Number of bytes to write is too large`。
      */
     writeBuffer(buffer: Buffer, bufferOffset: number, data: ArrayBufferView, dataOffset?: number, size?: number): void;
     /** 将主机端像素上传到 texture。多行/多层拷贝必须给 `layout.bytesPerRow`（WebGPU 会校验）。 */

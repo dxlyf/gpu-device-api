@@ -22,8 +22,16 @@ export interface Queue {
      * （每次 draw 分配独立的 256 字节对齐区间，配合 `bindBufferRange` /
      * `setBindGroup(..., [dynamicOffset])`），两个后端的结果就完全一致 —— 这也是
      * `gfx` 便捷层的做法。
+     *
+     * **`dataOffset` / `size` 的单位是字节**（与 WebGL2 的 `bufferSubData` 一致）。
+     * WebGPU 原生接口在 `data` 是 TypedArray 时按**元素**计，本库的 WebGPU 后端会替你换算，
+     * 因此两个后端的语义一致。
      */
-    writeBuffer(buffer: Buffer, bufferOffset: number, data: ArrayBufferView, dataOffset?: number, size?: number): void;
+    writeBuffer(buffer: Buffer, bufferOffset: number, data: ArrayBufferView, 
+    /** 从 `data` 的第几个**字节**开始读，默认 0。 */
+    dataOffset?: number, 
+    /** 写入多少**字节**，默认写到 `data` 末尾。 */
+    size?: number): void;
     /** 将主机端像素上传到 texture（`texSubImage2D` 在 WebGPU 中的对应接口）。 */
     writeTexture(destination: TextureCopyView, data: ArrayBufferView, layout: TexelCopyBufferLayout, size: Extent3D): void;
     /** 直接上传图像来源；支持 WebGPU 无法以其他方式表达的 `flipY`。 */
