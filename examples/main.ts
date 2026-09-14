@@ -81,7 +81,7 @@ applyQueryOverrides();
 
 /* ------------------------------------------------------------------------------------------------ */
 
-const canvas = document.getElementById('view') as HTMLCanvasElement;
+let canvas = document.getElementById('view') as HTMLCanvasElement;
 const statusEl = document.getElementById('status') as HTMLElement;
 const statsEl = document.getElementById('stats') as HTMLElement;
 
@@ -183,7 +183,20 @@ async function boot(): Promise<void> {
   renderer = null;
   geometries.clear();
   materialCache.clear();
+  gridCache = null;
 
+  // 每次启动都换一张全新的 canvas。
+  //
+  // 为什么必须换：**一张 canvas 只能绑定一种 context 类型** —— 已经 `getContext('webgl2')`
+  // 过的 canvas 再 `getContext('webgpu')` 一定返回 null（反之亦然）。所以「切换后端」
+  // 必须整体换掉 canvas 元素，而不是在同一个 canvas 上重建 context。
+  replaceCanvas();
+
+  // 清掉上一次启动留下的结论，避免切换后端后 DOM 上还挂着旧结果。
+  delete document.documentElement.dataset.demoResult;
+  delete document.documentElement.dataset.demoBackend;
+  delete document.documentElement.dataset.demoError;
+  statusEl.className = '';
   statusEl.textContent = `正在创建 ${params.backend} 渲染器…`;
 
   const created = await Renderer.create({
@@ -210,6 +223,27 @@ async function boot(): Promise<void> {
   // 立刻画一帧再进入 rAF 循环：这样即使环境里 rAF 不触发（无头浏览器、
   // 页面在后台标签页），第一帧也已经画出来了，截图/校验不会拿到空画布。
   frame(0);
+}
+
+/** 用一张全新的 canvas 替换当前这张（保留 id 与样式，继承属性）。 */
+function replaceCanvas(): void {
+  const next = canvas.cloneNode(false) as HTMLCanvasElement;
+  canvas.replaceWith(next);
+  canvas = next;
+}
+
+/** 启动失败时的统一处理：状态栏 + DOM 标记（便于无头浏览器抓取原因）。 */
+function reportBootFailure(error: unknown): void {
+  const message = (error as Error).message;
+  statusEl.textContent = `启动失败：${message}`;
+  statusEl.className = 'error';
+  document.documentElement.dataset.demoResult = 'fail';
+  document.documentElement.dataset.demoError = message;
+}
+
+/** 重新启动（lil-gui 切换后端用）：失败也走状态栏，不能抛成未处理的 promise rejection。 */
+function restart(): void {
+  void boot().catch(reportBootFailure);
 }
 
 function describeDevice(candidate: Renderer): string {
@@ -392,8 +426,7 @@ function buildGui(): void {  gui = new GUI({ title: 'gpu-device-api demo' });
     .add(params, 'backend', ['auto', 'webgl2', 'webgpu'])
     .name('backend')
     .onChange(() => {
-      gridCache = null;
-      void boot();
+      restart();
     });
 
   const sceneFolder = gui.addFolder('场景');
@@ -433,10 +466,4 @@ boot()
     }
     return undefined;
   })
-  .catch((error: unknown) => {
-    const message = (error as Error).message;
-    statusEl.textContent = `启动失败：${message}`;
-    statusEl.className = 'error';
-    // 把失败标记写到 DOM 上，便于无头浏览器抓取。
-    document.documentElement.dataset.demoResult = 'fail';
-  });
+  .catch(reportBootFailure);
