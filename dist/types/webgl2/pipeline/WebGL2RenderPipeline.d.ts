@@ -24,6 +24,14 @@ export interface ResolvedVariant {
     readonly renderState: ResolvedRenderState;
     readonly depthFormat: string | null;
     readonly sampleCount: number;
+    /**
+     * 该形态使用的顶点布局。
+     *
+     * 之所以放进变体而不是只读描述里的：便捷层会为同一个材质服务多个几何体，
+     * 属性集合不同则布局不同。放在变体里，`acquireVertexArray` 才会用**本次实际使用的**布局，
+     * 否则会拿描述里的旧布局去建 VAO，属性指针就全错了。
+     */
+    readonly vertexLayouts: readonly VertexBufferLayout[];
     /** 该形态下已经建好的 VAO，键里含顶点缓冲组合。 */
     readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
 }

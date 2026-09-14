@@ -57,6 +57,18 @@ export declare class GlStateCache {
      */
     invalidateBufferBindings(): void;
     bindVertexArray(vertexArray: WebGLVertexArrayObject | null): void;
+    /**
+     * 在「默认 VAO」上执行一段操作，结束后恢复原来绑定的 VAO。
+     *
+     * 为什么需要它：`ELEMENT_ARRAY_BUFFER` 的绑定是 **VAO 状态**的一部分（见 {@link bindIndexBuffer}）。
+     * 给索引缓冲分配空间 / 上传数据 / 读回数据时都必须先绑到 `ELEMENT_ARRAY_BUFFER`，
+     * 如果直接在当前 VAO 上绑定，就会悄悄改掉那个 VAO 记录的索引缓冲，
+     * 之后的 draw 会拿错误的索引去解引用顶点。
+     *
+     * 这里不动 `state.vertexArray` 之外的状态：结束时会把它恢复成进入前的值，
+     * 并把缓冲绑定缓存作废，所以缓存与实际 GL 状态始终一致。
+     */
+    withDefaultVertexArray<T>(action: () => T): T;
     /** 绑定 `ARRAY_BUFFER`（顶点属性与 `bufferSubData` 上传都走它）。 */
     bindArrayBuffer(buffer: WebGLBuffer | null): void;
     /** 绑定 `ELEMENT_ARRAY_BUFFER`（会被 VAO 记录，所以绑定 VAO 后必须重新调用）。 */
@@ -73,6 +85,8 @@ export declare class GlStateCache {
     bindUniformBuffer(index: number, buffer: WebGLBuffer | null, offset?: number, size?: number): void;
     /** 清掉某个 binding 点的 uniform buffer 记录（缓冲区被销毁时调用）。 */
     forgetUniformBuffer(buffer: WebGLBuffer): void;
+    /** 忘掉 `ELEMENT_ARRAY_BUFFER` 的记录（索引缓冲被销毁时调用）。 */
+    forgetIndexBuffer(buffer: WebGLBuffer): void;
     /** 忘掉某个纹理的所有单元记录（纹理被销毁时调用）。 */
     forgetTexture(texture: WebGLTexture): void;
     /**

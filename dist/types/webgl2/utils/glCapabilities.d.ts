@@ -33,7 +33,9 @@ export interface GlLimits {
 export declare function queryGlLimits(gl: WebGL2RenderingContext): GlLimits;
 /**
  * 把 GL 上限与保守默认值合成一份完整的 {@link DeviceLimits}。
- * `MAX_ELEMENT_INDEX` 会限制 32 位索引实际能寻址的顶点数，所以 `maxBufferSize` 也据此收敛。
+ *
+ * `maxBufferSize` 没有跟着 `MAX_ELEMENT_INDEX` 收敛：后者限制的是**索引值**能寻址的顶点序号，
+ * 不是 buffer 的字节数，混用会让上限凭空变小（而且 WebGL2 反正也查不到它）。
  */
 export declare function buildDeviceLimits(gl: WebGL2RenderingContext): DeviceLimits;
 /** WebGL2 后端支持的特性名（与 WebGPU 的 feature 名保持一致，便于上层统一判断）。 */

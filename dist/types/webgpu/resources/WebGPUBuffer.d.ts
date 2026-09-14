@@ -15,6 +15,16 @@ export declare class WebGPUBuffer implements Buffer {
     private readonly device;
     private _disposed;
     private _mapped;
+    /**
+     * `mapAsync` 交给上层的映射视图。
+     *
+     * 必须记下来：WebGPU 规定同一个映射范围只能被 `getMappedRange` 取一次
+     *（第二次会以「与已返回的范围重叠」报错），而 core 的 `Buffer` 契约是
+     * 「`mapAsync` 以映射范围 resolve，`getMappedRange` 再取当前映射范围」——
+     * 也就是两个方法都要能用（WebGL2 后端就是这样）。所以这里自己记着已经交出去的视图，
+     * 第二次调用直接复用，不再往原生对象上问一遍。
+     */
+    private mappedRange;
     constructor(device: WebGPUDevice, descriptor: BufferDescriptor);
     get disposed(): boolean;
     get mapped(): boolean;
@@ -27,7 +37,12 @@ export declare class WebGPUBuffer implements Buffer {
      * 调用 `getMappedRange(offset, size)`，把上层真正想拿到的视图返回出去。
      */
     mapAsync(mode: MapMode, offset?: number, size?: number): Promise<ArrayBuffer>;
-    /** 当前已映射的范围；buffer 未映射时抛错。 */
+    /**
+     * 当前已映射的范围（偏移量相对于映射起点，与 WebGL2 后端一致）。
+     *
+     * 不再直接问原生 `GPUBuffer`：同一个范围只能被取一次，重复取会报
+     * 「overlaps with previously returned range」。
+     */
     getMappedRange(offset?: number, size?: number): ArrayBuffer;
     /**
      * 结束映射：`'write'` 映射会在此把 CPU 侧的改动刷给 GPU，`'read'` 映射在此释放映射内存。
