@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — core 层探针：scissor / viewport 的 Y 原点</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex; flex-direction: column;
+        background: #0b0e13; color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      /* 固定 256×256 显示尺寸（备份缓冲固定 64×64，由脚本 setSize 决定），
+         保证截图里 canvas 的坐标是确定的。 */
+      .stage { padding: 12px; }
+      #view { display: block; width: 256px; height: 256px; image-rendering: pixelated; border: 1px solid #1d2530; }
+      #out {
+        margin: 0; padding: 8px 12px; flex: 1 1 auto; overflow: auto;
+        border-top: 1px solid #1d2530; background: #0f141b; color: #b8c6d6;
+        font-size: 12px; line-height: 1.45; white-space: pre;
+      }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .error { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <div class="stage"><canvas id="view" width="64" height="64"></canvas></div>
+    <pre id="out">正在启动…</pre>
+    <footer>
+      <span id="status">正在启动…</span>
+    </footer>
+    <script type="module" src="./scissor-origin.ts"></script>
+  </body>
+</html>

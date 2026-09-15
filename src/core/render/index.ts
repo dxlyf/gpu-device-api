@@ -27,3 +27,9 @@ export {
   type RenderPassEncoder,
 } from './RenderPassEncoder.js';
 export { type ComputePassDescriptor, type ComputePassEncoder } from './ComputePassEncoder.js';
+export {
+  toNativeScissorRect,
+  toNativeViewportRect,
+  type NativeRect,
+  type ScissorImageOrigin,
+} from './ScissorOrigin.js';
