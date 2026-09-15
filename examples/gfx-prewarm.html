@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — gfx 便利层示例：Renderer.prewarm() 异步管线预热</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex; flex-direction: column; align-items: flex-start;
+        background: #0b0e13; color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      /* 尺寸写死在 CSS 里：`beginFrame()` 里的 resize() 是按 CSS 尺寸算后备缓冲的，
+         固定住它才能让"每像素代价"这个变量在冷/热两次测量之间完全不变。 */
+      #view {
+        display: block; width: 128px; height: 96px;
+        margin: 10px 12px 0; border: 1px solid #1d2530; background: #101418;
+      }
+      #out {
+        margin: 0; padding: 8px 12px; max-height: 44vh; overflow: auto;
+        border-top: 1px solid #1d2530; background: #0f141b; color: #b8c6d6;
+        font-size: 12px; line-height: 1.45; white-space: pre;
+      }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .grow { flex: 1; }
+      #stats { color: #7f8fa4; }
+      a { color: #6fa8ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .error { color: #ff8b8b; }
+      .ok { color: #8bd98b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="out">正在启动…</pre>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span class="grow"></span>
+      <span id="stats"></span>
+      <span><a href="./gallery.html">示例汇总</a> · <a href="./core-prewarm.html">core 版预热</a></span>
+    </footer>
+    <script type="module" src="./gfx-prewarm.ts"></script>
+  </body>
+</html>

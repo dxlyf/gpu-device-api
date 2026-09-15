@@ -106,7 +106,10 @@ export {
   type ColorInput,
   type DrawOptions,
   type FrameOptions,
+  type MaterialPrewarmResult,
   type RendererOptions,
+  type RendererPrewarmOptions,
+  type RendererPrewarmResult,
   type RendererStats,
 } from './Renderer.js';
 

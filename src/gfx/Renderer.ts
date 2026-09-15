@@ -20,23 +20,37 @@
  * 2. **管线按材质缓存** —— 一条材质一条管线，几何体多带属性也不影响；
  * 3. **顶点缓冲槽位映射** —— 按材质声明的属性顺序绑定几何体的对应属性；
  * 4. **bind group 缓存** —— uniform 的 bind group 由 arena 管，纹理的按「材质 + 纹理集合」缓存；
- * 5. **相机 uniform** —— `projectionView` 按后端自动选用 GL 或 ZO 的深度约定。
+ * 5. **相机 uniform** —— `projectionView` 按后端自动选用 GL 或 ZO 的深度约定；
+ * 6. **管线预热** —— `prewarm()` 把一批材质的编译/链接挪出渲染循环，两个后端同一段代码
+ *    （见 {@link Renderer.prewarm} 与 {@link Renderer.compilationInfo}）。
  */
 
 import { ValidationError } from '../core/errors/ValidationError.js';
 import { createDeviceWithAdapter } from '../factories/createDevice.js';
 import { createLogger, type Logger } from '../utils/logger.js';
 import { mat3, mat4, vec3, type Mat4, type Vec3 } from '../utils/math/index.js';
+import {
+  createCompilationInfo,
+  createCompilationMessage,
+  nowMs,
+  type CompilationInfo,
+  type PrewarmMode,
+  type PrewarmOptions,
+} from '../core/pipeline/CompilationInfo.js';
 import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasContext } from '../core/CanvasContext.js';
 import type { Device } from '../core/Device.js';
+import type { TextureFormat } from '../core/enums/TextureFormat.js';
 import type { CommandEncoder, CommandBuffer } from '../core/render/CommandEncoder.js';
 import type { PassTimestampWrites } from '../core/resources/QuerySet.js';
 import type { RenderPassDescriptor, RenderPassEncoder } from '../core/render/RenderPassEncoder.js';
 import type { RenderTarget, Color } from '../core/render/RenderTarget.js';
-import type { RenderPipeline } from '../core/pipeline/RenderPipeline.js';
+import type { TextureView } from '../core/resources/TextureView.js';
+import type { RenderPipeline, RenderPipelineDescriptor, RenderPipelineVariant } from '../core/pipeline/RenderPipeline.js';
 import type { BindGroup } from '../core/binding/BindGroup.js';
 import type { PipelineLayout } from '../core/binding/PipelineLayout.js';
+import { prewarmWebGL2RenderPipeline } from '../webgl2/pipeline/Prewarm.js';
+import { prewarmWebGPURenderPipeline } from '../webgpu/pipeline/Prewarm.js';
 import { Material, defineMaterial, type MaterialDesc } from './Material.js';
 import { Geometry, type GeometryDesc } from './Geometry.js';
 import { GfxTexture, type TextureDesc } from './Texture.js';
@@ -196,12 +210,121 @@ export interface RendererStats {
 }
 
 /**
+ * 一条材质的预热结果。
+ *
+ * 字段与 core 的 `PrewarmResult` 对齐（`ok` / `mode` / `reason` / `durationMs` / `info`），
+ * 另外带上材质本体、解析出来的管线，以及「这次是不是被跳过了」。
+ */
+export interface MaterialPrewarmResult {
+  readonly material: Material;
+  /** 管线 label（材质描述里生成的是 `<材质名>:pipeline`），方便在日志里对上号。 */
+  readonly label: string;
+  /** 这条材质的管线现在能不能用（`true` 表示编译/链接没有报错、也没有超时）。 */
+  readonly ok: boolean;
+  /**
+   * `true` 表示这条材质的管线**早就建好了**，这次没有重复预热，直接复用了它。
+   * 这时 {@link MaterialPrewarmResult.mode} 恒为 `null` —— 没有发生任何编译/链接。
+   */
+  readonly skipped: boolean;
+  /**
+   * 这次预热是**等出来**的还是**同步做掉**的；被跳过时为 `null`（没有发生编译）。
+   *
+   * `'sync'` 不是失败：它表示「编译确实做了，但占着调用线程做的」，具体缺什么在 `reason` 里。
+   */
+  readonly mode: PrewarmMode | null;
+  /**
+   * 为什么不是真异步、或者为什么没成功。
+   *
+   * 真异步且成功时为 `null`；同步降级（WebGL2 缺 `KHR_parallel_shader_compile`、
+   * WebGPU 缺 `createRenderPipelineAsync`）与编译失败时都会给出具体原因；
+   * 被跳过时说明「已建过管线，没有重复预热」。
+   */
+  readonly reason: string | null;
+  /** 这条材质花掉的时间（毫秒），包含等待。 */
+  readonly durationMs: number;
+  /** 这条材质的编译诊断（真实行号在这里）。 */
+  readonly info: CompilationInfo;
+  /** 可直接用于绘制的管线；预热失败时为 `null`（被跳过时是那条已经存在的管线）。 */
+  readonly pipeline: RenderPipeline | null;
+  /** 这次用的管线变体（与真正绘制时解析出的那一份逐字段一致）；被跳过时为 `null`。 */
+  readonly variant: RenderPipelineVariant | null;
+}
+
+/** `renderer.prewarm()` 的选项。 */
+export interface RendererPrewarmOptions {
+  /**
+   * 要预热的材质；省略时预热这个渲染器**已经登记过的全部材质**
+   *（`createMaterial()` / `setMaterial()` / 任何一次带该材质的 `draw()` 都会登记）。
+   *
+   * 清单里没登记过的材质会被自动登记（与 `draw()` 的行为一致）。
+   */
+  materials?: readonly Material[];
+  /**
+   * 这次预热针对哪个渲染目标：省略表示 **canvas**（与 `beginFrame()` 的默认路径一致）。
+   *
+   * 它决定管线变体里的 `colorFormats` / `sampleCount` / `depthFormat`（见
+   * {@link Renderer.prewarm}）。之后要画进离屏目标就传那个 `RenderTarget`，
+   * 否则预热到的是另一个变体 —— 预热会白做（不会出错，只是首次绘制仍然要付编译开销）。
+   */
+  target?: RenderTarget;
+  /** 等待编译/链接完成的最长时间（毫秒）。省略用后端的默认值（30 秒）。 */
+  timeoutMs?: number;
+  /**
+   * 出现 `error` 级诊断时是否抛 `ValidationError`。**默认 `false`**：
+   * 预热是「尽量提前把活干掉」的路径，不该让渲染挂掉 —— 失败信息会放进每条结果的
+   * `reason` / `info` 里返回，由调用方决定怎么办。
+   */
+  throwOnError?: boolean;
+}
+
+/** `renderer.prewarm()` 的汇总结果（同时给出每条材质的明细）。 */
+export interface RendererPrewarmResult {
+  readonly backend: BackendKind;
+  /**
+   * 这次实际预热用的管线变体；**没有任何材质被真正预热**（清单为空、或全部已跳过）时为 `null`。
+   *
+   * `colorFormats` / `sampleCount` / `depthFormat` 对所有材质是同一份（同一个通道）；
+   * `vertexLayouts` 是第一条被预热的材质自己的（每条管线的顶点槽位可以不同），
+   * 每条材质的完整变体在 `results[i].variant` 里。
+   */
+  readonly variant: RenderPipelineVariant | null;
+  /**
+   * 这次预热整体的等待方式：
+   * `'async'` = 每条被预热的材质都是真异步等出来的；`'sync'` = 至少有一条是同步降级做的
+   *（`reason` 给出第一个降级原因）；没有材质被预热时为 `null`。
+   */
+  readonly mode: PrewarmMode | null;
+  /**
+   * 汇总层面的补充说明：**失败时**是第一个失败原因；没有失败但发生了同步降级时，
+   * 是第一个降级原因（例如 WebGL2 缺 `KHR_parallel_shader_compile`）；
+   * 真异步且全部成功、以及没有材质被真正预热时为 `null`。逐条的原因在 `results[i].reason` 里。
+   */
+  readonly reason: string | null;
+  /** 所有被预热的材质都成功（`ok`）才是 `true`；空清单与被跳过的材质不影响它。 */
+  readonly ok: boolean;
+  /** 本次真正做了预热的材质数。 */
+  readonly prewarmed: number;
+  /** 因为管线已经存在而跳过的材质数（没有重复预热）。 */
+  readonly skipped: number;
+  /** 预热失败的材质数（`ok` 为 false）。 */
+  readonly failed: number;
+  /** 整次调用花掉的时间（毫秒）。 */
+  readonly durationMs: number;
+  /** 每条材质的明细，顺序与 `materials` 一致。 */
+  readonly results: readonly MaterialPrewarmResult[];
+}
+
+/**
  * 共享的单位矩阵：`draw()` 没给 `options.model` 时写它。
  *
  * 它只会被 `UniformValues.set()` 拷进 uniform buffer，从不暴露给调用方，所以整个进程共用
  * 一份是安全的 —— 而每 draw `mat4.create()` 会白白产生 40k 个 Float32Array(16)/帧。
  */
 const IDENTITY_MAT4 = mat4.create();
+
+/** 已有管线的材质被跳过时给调用方的说明（`prewarm()` 的结果里会带它）。 */
+const SKIPPED_PREWARM_REASON =
+  'the pipeline of this material was already built; prewarm skipped it so the compiled program is reused as-is';
 
 interface MaterialState {
   readonly material: Material;
@@ -587,6 +710,193 @@ export class Renderer {
     this.statsValue.gpuFrameTime = null;
   }
 
+  /* ------------------------------------------------------ 预热 / 编译诊断 ---------------------- */
+
+  /**
+   * 预编译一批材质的管线变体，把编译/链接开销挪出渲染循环。
+   *
+   * ```ts
+   * const renderer = await Renderer.create({ canvas });
+   * const lamberts = [...];                       // 一批材质
+   * const report = await renderer.prewarm({ materials: lamberts });
+   * if (!report.ok) console.warn(report.results.map((r) => r.reason));
+   * // 之后第一帧用这些材质绘制时，管线已经好了
+   * ```
+   *
+   * ## 两个后端同一段代码
+   *
+   * 调用方**不需要**写「`this.backend === 'webgl2' ? ... : ...`」的分支：这里按
+   * {@link Renderer.backend} 分派到后端的设备级入口
+   *（`prewarmWebGL2RenderPipeline` / `prewarmWebGPURenderPipeline`）。
+   * 两个后端的**顺序差异**（WebGPU 先建管线对象再 `await prewarm(variant)`；
+   * WebGL2 先把 program 链接好再建管线）封在 helper 里，这里只负责
+   * 「算出与绘制时一致的 variant」和「把 helper 返回的管线交回给绘制路径」。
+   *
+   * ## 为什么预热到的就是绘制时用的那一条
+   *
+   * 两个后端的编译成果都挂在**管线对象自己**的缓存上（WebGPU 的 variant 缓存、
+   * WebGL2 的 program 缓存）。所以预热成功后这里会把 helper 返回的管线存进该材质的状态，
+   * 之后 `draw()` → `acquirePipeline()` 直接复用它 —— 另建一条等于白预热。
+   *
+   * variant 的推导见 {@link Renderer.pipelineVariantFor}：它复用绘制路径的
+   * `createPipelineDescriptor()` 与 `createPassDescriptor()`，不另写一套。
+   *
+   * ## 不重复预热、也不会让渲染挂掉
+   *
+   * - 已经有管线的材质**直接跳过**（结果里 `skipped: true`，`reason` 说明原因），
+   *   只把已有管线的诊断读回来；
+   * - 预热失败（着色器编译错误、超时）**不抛错**：结果里 `ok: false`、`pipeline: null`、
+   *   详细诊断在 `reason` / `info` 里。想直接抛错请显式传 `{ throwOnError: true }`；
+   * - WebGL2 缺 `KHR_parallel_shader_compile` 时会退化成同步（`mode: 'sync'`）并**如实说明**
+   *   —— 这时它仍然有价值：同一段同步工作被提前到了调用 `prewarm()` 的时候。
+   *
+   * 建议在帧外（加载阶段、切场景之前）调用；在 `beginFrame()` 与 `endFrame()` 之间调用也能跑，
+   * 但 `await` 期间整帧会挂在那里。
+   */
+  async prewarm(options: RendererPrewarmOptions = {}): Promise<RendererPrewarmResult> {
+    const started = nowMs();
+    const requested = options.materials ?? [...this.materials.keys()];
+    const passOptions: FrameOptions = options.target ? { target: options.target } : {};
+    const prewarmOptions: PrewarmOptions = {
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.throwOnError !== undefined ? { throwOnError: options.throwOnError } : {}),
+    };
+
+    const results: MaterialPrewarmResult[] = [];
+    let variant: RenderPipelineVariant | null = null;
+    let prewarmed = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const material of requested) {
+      const state = this.materialState(material);
+
+      // 已经建过管线：跳过，不重复预热（再热一次不会更快，只会白建一条）。
+      if (state.pipeline) {
+        skipped += 1;
+        results.push(await this.skippedPrewarmResult(state));
+        continue;
+      }
+
+      const descriptor = this.pipelineDescriptorFor(state);
+      const materialVariant = this.pipelineVariantFor(descriptor, passOptions);
+      variant ??= materialVariant;
+
+      const outcome =
+        this.backend === 'webgl2'
+          ? await prewarmWebGL2RenderPipeline(this.device, descriptor, prewarmOptions)
+          : await prewarmWebGPURenderPipeline(this.device, descriptor, materialVariant, prewarmOptions);
+
+      /*
+       * 把 helper 返回的管线存回材质状态：绘制时 `acquirePipeline()` 直接复用它，
+       * 编译成果（WebGPU 的 variant 缓存 / WebGL2 的 program 缓存）才不会被丢掉。
+       * 失败时 `outcome.pipeline` 是 null，状态保持为空 —— 之后 `draw()` 会照常自己建一条。
+       */
+      if (outcome.pipeline) state.pipeline = outcome.pipeline;
+      if (outcome.ok) prewarmed += 1;
+      else failed += 1;
+
+      results.push({
+        material,
+        label: outcome.label,
+        ok: outcome.ok,
+        skipped: false,
+        mode: outcome.mode,
+        reason: outcome.reason,
+        durationMs: outcome.durationMs,
+        info: outcome.info,
+        pipeline: outcome.pipeline,
+        variant: materialVariant,
+      });
+    }
+
+    return {
+      backend: this.backend,
+      variant,
+      ...this.summarizePrewarm(results, prewarmed, skipped, failed),
+      durationMs: nowMs() - started,
+      results,
+    };
+  }
+
+  /**
+   * 某个材质的管线编译诊断（每条 message 带 `type` / `lineNum` / `linePos` / `stage`）。
+   *
+   * `CompilationInfo` 是 core 的公共结构，这里原样透出 —— WebGL2 的 `lineNum` 来自
+   * `getShaderInfoLog()` / `getProgramInfoLog()` 的原文解析（`linePos` 恒为 `null`），
+   * WebGPU 来自 `GPUShaderModule.getCompilationInfo()`（行列都有）。
+   *
+   * 诊断挂在管线上，所以这条材质**还没建过管线**时这里会走一次 `prewarm()`
+   *（等价于 `(await this.prewarm({ materials: [material] })).results[0].info`）：
+   *
+   * - 编译成功：管线被留下，之后 `draw()` 直接用它（不白跑）；
+   * - 编译失败：**不抛错**，把带真实行号的诊断交回 —— 这正是「着色器写错了想知道错在哪一行」
+   *   最需要的路径（WebGL2 上 program 链接失败时 `acquirePipeline()` 会抛，所以这里不能走它）。
+   *
+   * 想自己控制超时/抛错行为就直接调 `prewarm()`。
+   */
+  async compilationInfo(material: Material): Promise<CompilationInfo> {
+    const state = this.materialState(material);
+    if (state.pipeline) return this.readCompilationInfo(state.pipeline);
+    const report = await this.prewarm({ materials: [material] });
+    return report.results[0]!.info;
+  }
+
+  /** 由逐条明细汇总出的整体结论（`mode` / `reason` / `ok` 的口径见各自的类型注释）。 */
+  private summarizePrewarm(
+    results: readonly MaterialPrewarmResult[],
+    prewarmed: number,
+    skipped: number,
+    failed: number,
+  ): Pick<RendererPrewarmResult, 'mode' | 'reason' | 'ok' | 'prewarmed' | 'skipped' | 'failed'> {
+    const attempted = results.filter((result) => !result.skipped);
+    let mode: PrewarmMode | null = null;
+    if (attempted.length > 0) {
+      mode = attempted.every((result) => result.mode === 'async') ? 'async' : 'sync';
+    }
+    // 失败优先于降级：调用方最需要先看到的是「为什么没成功」，而不是「为什么不是异步」。
+    const failedReason = attempted.find((result) => !result.ok && result.reason !== null)?.reason ?? null;
+    const syncReason =
+      mode === 'sync' ? (attempted.find((result) => result.mode === 'sync')?.reason ?? null) : null;
+    return { mode, reason: failedReason ?? syncReason, ok: failed === 0, prewarmed, skipped, failed };
+  }
+
+  /** 已建过管线时的结果：不重新预热，只把诊断读回来（结果形状与真预热一致）。 */
+  private async skippedPrewarmResult(state: MaterialState): Promise<MaterialPrewarmResult> {
+    const started = nowMs();
+    const pipeline = state.pipeline!;
+    const info = await this.readCompilationInfo(pipeline);
+    return {
+      material: state.material,
+      label: pipeline.label,
+      ok: !info.hasErrors,
+      skipped: true,
+      mode: null,
+      reason: SKIPPED_PREWARM_REASON,
+      durationMs: nowMs() - started,
+      info,
+      pipeline,
+      variant: null,
+    };
+  }
+
+  /** 读一条管线的诊断；后端没提供这个能力时**如实说明**（而不是假装「编译干净」）。 */
+  private async readCompilationInfo(pipeline: RenderPipeline): Promise<CompilationInfo> {
+    if (typeof pipeline.getCompilationInfo === 'function') return pipeline.getCompilationInfo();
+    return createCompilationInfo({
+      label: pipeline.label,
+      backend: this.backend,
+      messages: [
+        createCompilationMessage({
+          type: 'info',
+          label: pipeline.label,
+          backend: this.backend,
+          message: 'this pipeline does not expose getCompilationInfo(); no diagnostics are available',
+        }),
+      ],
+    });
+  }
+
   /* ------------------------------------------------------------------ 帧 --------------------- */
 
   beginFrame(options: FrameOptions = {}): void {
@@ -745,7 +1055,7 @@ export class Renderer {
         '[gpu-device-api] draw() 之前必须先 setMaterial()，或在 draw() 里传 material。',
       );
     }
-    const state = this.materials.get(material) ?? (this.createMaterial(material), this.materials.get(material)!);
+    const state = this.materialState(material);
 
     geometry.validateAgainst(material.attributes, material.name);
     this.assertInstanceCount(geometry, options.instances);
@@ -952,11 +1262,96 @@ export class Renderer {
 
   /* ------------------------------------------------------------------ 内部 ------------------- */
 
+  /**
+   * 登记（必要时）并取出一个材质的状态。
+   *
+   * `draw()` / `setMaterial()` / `prewarm()` / `compilationInfo()` 都走这里，
+   * 「材质第一次出现时登记什么」只有一份实现。
+   */
+  private materialState(material: Material): MaterialState {
+    const existing = this.materials.get(material);
+    if (existing) return existing;
+    this.createMaterial(material);
+    return this.materials.get(material)!;
+  }
+
   private acquirePipeline(state: MaterialState): RenderPipeline {
     if (state.pipeline) return state.pipeline;
-    const { descriptor } = state.material.createPipelineDescriptor(this.device);
-    state.pipeline = this.device.createRenderPipeline(descriptor);
+    state.pipeline = this.device.createRenderPipeline(this.pipelineDescriptorFor(state));
     return state.pipeline;
+  }
+
+  /**
+   * 一条材质要交给 `device.createRenderPipeline()` 的描述。
+   *
+   * `acquirePipeline()`（真正绘制时）与 `prewarm()` 走的是**同一个方法**，
+   * 所以预热用的 `vertexLayouts` 就是从这份描述的 `vertex.buffers` 来的，
+   * 不会出现「预热一套布局、绘制另一套」。
+   */
+  private pipelineDescriptorFor(state: MaterialState): RenderPipelineDescriptor {
+    return state.material.createPipelineDescriptor(this.device).descriptor;
+  }
+
+  /**
+   * 一条管线在**真正绘制时**会被解析出的 variant。
+   *
+   * 这里刻意不另写一套推导，每个字段都与绘制路径同源：
+   *
+   * - `vertexLayouts`：来自 {@link pipelineDescriptorFor}，也就是 `acquirePipeline()` 交给
+   *   `createRenderPipeline()` 的那份描述（材质声明几个属性就是几个槽位，顺序也一样）；
+   * - `colorFormats` / `depthFormat` / `sampleCount`：来自 {@link createPassDescriptor} 的
+   *   附件列表 —— 与 `beginFrame()` 调用的是同一个方法，附件来源同样是 canvas
+   *   或 `options.target`。
+   *
+   * `sampleCount` 两个后端的解析口径不同，这里照抄各自的渲染通道解析器，而不是取「看起来对」的值：
+   * WebGPU 取附件纹理的采样数（画布 MSAA 会体现在这里），WebGL2 取渲染目标声明的采样数、
+   * canvas 路径恒为 1（见 `WebGL2RenderPassEncoder` 的 `variantShape`）。
+   *
+   * 附件的 `colorFormats` / `depthFormat` 对 WebGPU 是「variant 描述 target 的附件」，与管线自己
+   * 是否使用深度无关（那是 `descriptor.depthStencil` 的事）—— 两处都按这个语义传。
+   */
+  private pipelineVariantFor(descriptor: RenderPipelineDescriptor, options: FrameOptions): RenderPipelineVariant {
+    const pass = this.createPassDescriptor(options, this._clearColor);
+    // `RenderPassDescriptor` 允许某个颜色附件是 null（跳过那个 attachment），格式列表要把它们去掉。
+    const colorFormats: TextureFormat[] = [];
+    for (const attachment of pass.colorAttachments) {
+      if (attachment) colorFormats.push(this.attachmentFormat(attachment.view));
+    }
+    const depthView = pass.depthStencilAttachment?.view ?? null;
+    return {
+      colorFormats,
+      sampleCount:
+        this.backend === 'webgl2' ? this.webgl2SampleCountFor(options) : this.webgpuSampleCountFor(pass),
+      depthFormat: depthView ? this.attachmentFormat(depthView) : null,
+      vertexLayouts: descriptor.vertex.buffers ?? [],
+    };
+  }
+
+  /**
+   * 附件的实际格式。
+   *
+   * 两个后端的口径不同（照抄各自的渲染通道解析器）：WebGPU 的 view 可以重解释格式，
+   * 所以 `view.descriptor.format` 优先；WebGL2 的附件格式就是纹理格式。
+   */
+  private attachmentFormat(view: TextureView): TextureFormat {
+    return this.backend === 'webgpu' ? (view.descriptor.format ?? view.texture.format) : view.texture.format;
+  }
+
+  /** WebGPU 的 variant `sampleCount`：这个通道所有附件纹理的采样数（WebGPU 要求它们一致）。 */
+  private webgpuSampleCountFor(pass: RenderPassDescriptor): number {
+    for (const attachment of pass.colorAttachments) {
+      if (attachment) return attachment.view.texture.sampleCount;
+    }
+    return pass.depthStencilAttachment?.view.texture.sampleCount ?? 1;
+  }
+
+  /**
+   * WebGL2 的 variant `sampleCount`：只有**画进多重采样渲染目标**时才是目标的采样数，
+   * 其余情况（含 canvas 默认帧缓冲）是 1 —— 与 `WebGL2RenderPassEncoder` 的
+   * `this.renderTarget?.sampleCount ?? 1` 一致。
+   */
+  private webgl2SampleCountFor(options: FrameOptions): number {
+    return options.target ? options.target.sampleCount : 1;
   }
 
   /**
