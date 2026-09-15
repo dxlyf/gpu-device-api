@@ -345,8 +345,6 @@ describe('优化后 #30：copyTextureToBuffer 的 FBO 复用与收窄的失效',
   it('外部直接改过 framebuffer 绑定之后，缓存里的记录不能当成事实', () => {
     const recording = createRecordingGl();
     const state = new GlStateCache(recording.gl);
-    const encoder = new WebGL2CommandEncoder({ label: 'final' }, recording.gl, state, {} as WebGL2RenderPassOptions);
-    const buffer = fakeBuffer(recording, 64);
     const target = recording.make<object>('user-fbo') as unknown as WebGLFramebuffer;
     const other = recording.make<object>('other-fbo') as unknown as WebGLFramebuffer;
 
