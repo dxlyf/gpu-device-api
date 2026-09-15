@@ -19,6 +19,12 @@ import type {
   RenderPipelineDescriptor,
   RenderPipelineVariant,
 } from '../../core/pipeline/RenderPipeline.js';
+import type {
+  CompilationInfo,
+  PrewarmOptions,
+  PrewarmResult,
+} from '../../core/pipeline/CompilationInfo.js';
+import { nowMs } from '../../core/pipeline/CompilationInfo.js';
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
 import { assertNonNegativeInteger } from '../../utils/assert.js';
 import { nextId } from '../../utils/id.js';
@@ -68,6 +74,11 @@ export interface WebGL2RenderPipelineOptions {
   gl: WebGL2RenderingContext;
   state: GlStateCache;
   limits: { maxVertexAttributes: number; maxVertexBufferArrayStride: number };
+  /**
+   * 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+   * （见 `WebGL2Device.untrack`）。不传时为空操作，管线仍可独立使用。
+   */
+  onDispose?: (pipeline: WebGL2RenderPipeline) => void;
 }
 
 export class WebGL2RenderPipeline implements RenderPipeline {
@@ -79,6 +90,7 @@ export class WebGL2RenderPipeline implements RenderPipeline {
   private readonly gl: WebGL2RenderingContext;
   private readonly state: GlStateCache;
   private readonly limits: WebGL2RenderPipelineOptions['limits'];
+  private readonly onDispose: ((pipeline: WebGL2RenderPipeline) => void) | null;
   private readonly program: CompiledProgram;
   private readonly plan: WebGLBindingPlan | null;
   private readonly topologyMode: number;
@@ -105,6 +117,7 @@ export class WebGL2RenderPipeline implements RenderPipeline {
     this.gl = options.gl;
     this.state = options.state;
     this.limits = options.limits;
+    this.onDispose = options.onDispose ?? null;
     this.program = program;
     this.plan = layout === 'auto' ? null : ((layout as WebGL2PipelineLayout).bindingPlan ?? null);
     this.topologyMode = GL_PRIMITIVE_MODES[descriptor.primitive?.topology ?? 'triangle-list'];
@@ -153,7 +166,17 @@ export class WebGL2RenderPipeline implements RenderPipeline {
       for (const layout of vertexLayouts) validateVertexBufferLayout(layout, this.limits);
     }
     const declaredLocations = new Set(vertexLayouts.flatMap((layout) => layout.attributes.map((a) => a.shaderLocation)));
-    const programLocations = new Set(this.program.reflection.attributes.map((attribute) => attribute.location));
+    /*
+     * 反射结果里 `location < 0` 的条目必须排除：ANGLE 会把 `gl_VertexID` / `gl_InstanceID`
+     * 这类内建变量也报成 active attribute，而 `getAttribLocation()` 对它们返回 -1。
+     * 它们本来就不需要（也无法）绑定顶点缓冲，如果当成「缺布局的属性」，
+     * 「用 gl_VertexID 生成全屏三角形、不声明任何顶点属性」这种完全合法的写法会被误报。
+     */
+    const programLocations = new Set(
+      this.program.reflection.attributes
+        .map((attribute) => attribute.location)
+        .filter((location) => location >= 0),
+    );
     for (const location of programLocations) {
       if (!declaredLocations.has(location)) {
         throw new ValidationError(
@@ -182,6 +205,53 @@ export class WebGL2RenderPipeline implements RenderPipeline {
   /** core 接口要求的 `resolve`；WebGL2 下它只做一次形态缓存查询。 */
   resolve(variant: Partial<RenderPipelineVariant> = {}): unknown {
     return this.resolveVariant(variant).renderState;
+  }
+
+  /**
+   * 预热报告。
+   *
+   * WebGL2 的编译 + 链接发生在 `createRenderPipeline()` 里（`ProgramCache.acquire()`），
+   * 所以**管线对象存在时 program 一定已经链接完了**，这里没有东西可以再等 —— 能做的是
+   * 如实汇报它是怎么等出来的，以及带上诊断（真实行号）。
+   *
+   * | 情况 | `mode` | 说明 |
+   * | --- | --- | --- |
+   * | 事先调用过 `ProgramCache.compileAsync()`（`KHR_parallel_shader_compile` 可用） | `'async'` | 链接真异步完成，管线创建时零 GL 调用 |
+   * | 扩展缺失，`compileAsync()` 退化成同步 | `'sync'` | `reason` 说明缺扩展 |
+   * | 直接 `device.createRenderPipeline()`（没预热过） | `'sync'` | `reason` 提示先在创建管线前调 `compileAsync()` |
+   *
+   * **真想异步就调 `prewarmWebGL2RenderPipeline(device, descriptor)`**（`src/webgl2/pipeline/Prewarm.ts`）：
+   * 它在创建管线**之前**先把 program 链接好，之后 `createRenderPipeline()` 的 `acquire()` 直接命中缓存。
+   */
+  async prewarm(
+    _variant: Partial<RenderPipelineVariant> = {},
+    _options: PrewarmOptions = {},
+  ): Promise<PrewarmResult> {
+    const started = nowMs();
+    if (this._disposed) {
+      throw new ValidationError(`[gpu-device-api] RenderPipeline "${this.label}" has been disposed.`);
+    }
+    const info = this.program.compilationInfo;
+    const mode = this.program.linkMode;
+    return {
+      label: this.label,
+      backend: 'webgl2',
+      ok: !info.hasErrors,
+      mode,
+      reason: mode === 'async' ? null : this.program.linkReason,
+      durationMs: nowMs() - started,
+      info,
+    };
+  }
+
+  /**
+   * 编译诊断：WebGL2 走的是 `getShaderInfoLog()` / `getProgramInfoLog()` 的原文，
+   * 在 program 编译/链接的那一刻就解析好并挂在 `CompiledProgram.compilationInfo` 上。
+   * `lineNum` 是真实的（从 GL 日志里解析出来的行号，指向**包好前言之后的最终源码**），
+   * `linePos` 恒为 `null`（GL 的日志只有行号，没有列号）。
+   */
+  async getCompilationInfo(): Promise<CompilationInfo> {
+    return this.program.compilationInfo;
   }
 
   /** 把该管线的固定功能状态写入 GL 状态缓存。 */
@@ -288,6 +358,9 @@ export class WebGL2RenderPipeline implements RenderPipeline {
       variant.vertexArrayLookup = null;
     }
     this.variantCache.clear();
+    // 幂等：上面的 `_disposed` 早退保证通知只发生一次。
+    // 不通知的话，`WebGL2Device.resources` 会一直强引用已经释放的管线对象。
+    this.onDispose?.(this);
   }
 }
 

@@ -23,6 +23,30 @@ export {
 } from './RenderState.js';
 export { cacheKey, createPipelineCache, type PipelineCache } from './PipelineCache.js';
 export {
+  compilationStageName,
+  createCompilationInfo,
+  createCompilationMessage,
+  DEFAULT_PREWARM_TIMEOUT_MS,
+  describeCompilationInfo,
+  emptyCompilationInfo,
+  formatCompilationMessage,
+  isCompilationInfo,
+  mergeCompilationInfo,
+  nowMs,
+  parseGlCompilationLog,
+  withTimeout,
+  yieldToEventLoop,
+  type CompilationInfo,
+  type CompilationMessage,
+  type CompilationMessageType,
+  type ComputePipelinePrewarmResult,
+  type PipelinePrewarmResult,
+  type PrewarmMode,
+  type PrewarmOptions,
+  type PrewarmResult,
+  type RenderPipelinePrewarmResult,
+} from './CompilationInfo.js';
+export {
   type FragmentState,
   type RenderPipeline,
   type RenderPipelineDescriptor,

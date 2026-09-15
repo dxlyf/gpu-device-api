@@ -20,8 +20,11 @@ import type {
   ShaderSource,
 } from '../../core/resources/ShaderModule.js';
 import type { ShaderStage } from '../../core/enums/ShaderStage.js';
+import type { CompilationInfo, CompilationMessageType } from '../../core/pipeline/CompilationInfo.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
+import { ShaderStage as ShaderStageEnum } from '../../core/enums/ShaderStage.js';
+import { createCompilationInfo, createCompilationMessage } from '../../core/pipeline/CompilationInfo.js';
 import { resolveShaderSource } from '../../core/resources/ShaderModule.js';
 import { compileShaderStage } from '../../shaders/ShaderCompiler.js';
 import { describeUnknown } from './WebGPUBuffer.js';
@@ -35,6 +38,8 @@ export class WebGPUShaderModule implements ShaderModule {
 
   private readonly device: WebGPUDevice;
   private readonly modulesByStage = new Map<ShaderStage, GPUShaderModule>();
+  /** 原生模块 → 诊断。`getCompilationInfo()` 一次就够，编译结果不变，缓存下来避免重复查询。 */
+  private readonly compilationInfos = new Map<GPUShaderModule, CompilationInfo>();
   private _disposed = false;
 
   constructor(device: WebGPUDevice, descriptor: ShaderModuleDescriptor) {
@@ -119,8 +124,69 @@ export class WebGPUShaderModule implements ShaderModule {
   dispose(): void {
     this._disposed = true;
     this.modulesByStage.clear();
+    this.compilationInfos.clear();
     this.device.untrack(this);
   }
+
+  /**
+   * 编译诊断：直接转发 `GPUShaderModule.getCompilationInfo()`，并把 `GPUCompilationMessage`
+   * 归一成后端无关的 {@link CompilationInfo}。
+   *
+   * 两条「如实说明」的规则：
+   * 1. `GPUCompilationMessage.lineNum` / `linePos` 用 **0 表示未知**，这里归一成 `null`，
+   *    免得和「第 0 行」混淆；
+   * 2. 实现没有暴露 `getCompilationInfo()` 时返回一条 `info` 级 message 说明原因，
+   *    而不是返回「0 条诊断」让人误以为编译干净。
+   */
+  async getCompilationInfo(stage: ShaderStage = ShaderStageEnum.Vertex): Promise<CompilationInfo> {
+    const module = this.compile(stage);
+    const cached = this.compilationInfos.get(module);
+    if (cached) return cached;
+
+    const native = module as { getCompilationInfo?: () => Promise<GPUCompilationInfo> };
+    if (typeof native.getCompilationInfo !== 'function') {
+      const info = createCompilationInfo({
+        label: this.label,
+        backend: 'webgpu',
+        messages: [
+          createCompilationMessage({
+            type: 'info',
+            message:
+              'this WebGPU implementation does not expose GPUShaderModule.getCompilationInfo(); ' +
+              'shader diagnostics are unavailable on this backend',
+            label: this.label,
+            backend: 'webgpu',
+          }),
+        ],
+      });
+      this.compilationInfos.set(module, info);
+      return info;
+    }
+
+    const compiled = await native.getCompilationInfo();
+    const info = createCompilationInfo({
+      label: this.label,
+      backend: 'webgpu',
+      messages: compiled.messages.map((message) =>
+        createCompilationMessage({
+          type: normalizeMessageType(message.type),
+          message: message.message,
+          lineNum: message.lineNum,
+          linePos: message.linePos,
+          label: this.label,
+          backend: 'webgpu',
+          stage,
+        }),
+      ),
+    });
+    this.compilationInfos.set(module, info);
+    return info;
+  }
+}
+
+/** `GPUCompilationMessageType` → 本库的诊断级别。未知取值按 `info` 处理，不丢消息。 */
+function normalizeMessageType(type: string): CompilationMessageType {
+  return type === 'error' || type === 'warning' || type === 'info' ? type : 'info';
 }
 
 /** 该对象是否为 WebGPU 后端的 shader module。 */

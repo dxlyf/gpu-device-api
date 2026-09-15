@@ -11,7 +11,6 @@
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { nextId } from '../../utils/id.js';
-import { alignTo } from '../../utils/typedArray.js';
 import { glFormat } from '../utils/glFormatMap.js';
 import type {
   BufferCopyView,
@@ -174,11 +173,30 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     const gl = this.gl;
     const texture = source.texture as WebGL2Texture;
     const info = glFormat(texture.format);
-    const bytesPerRow = alignTo(
-      destination.bytesPerRow ?? copySize.width * info.bytesPerPixel,
-      4,
-    );
+
+    /*
+     * `bytesPerRow` 是**请求的行距**（WebGPU 语义：相邻两行第一个字节之间的距离），
+     * 而 `gl.readPixels` 永远按紧凑行距写入（下面还把 PACK_ALIGNMENT 设成 1）。
+     * 所以这里必须先紧凑读回，再在 JS 里按请求行距重排。
+     *
+     * 之前的实现只用 `bytesPerRow` 给 Uint8Array 定大小、然后直接 readPixels，
+     * 于是任何按 WebGPU 规范传 256 对齐行距的调用方（例如 width=96 传 512）
+     * 都会读到整体错位的数据：读回结果被当成「紧凑 384 字节一行」写进一块按 512 行距解释的缓冲，
+     * 第 1 行之后全部对不上，缓冲后半段只剩 0。
+     *
+     * `rowsPerImage` 不参与：WebGL2 的 readPixels 只支持二维读回，没有「一个 image 几行」的概念。
+     */
+    const tightRowBytes = copySize.width * info.bytesPerPixel;
+    const bytesPerRow = destination.bytesPerRow ?? tightRowBytes;
+    if (!Number.isInteger(bytesPerRow) || bytesPerRow < tightRowBytes) {
+      throw new ValidationError(
+        `[gpu-device-api] copyTextureToBuffer: bytesPerRow must be an integer >= ${tightRowBytes} ` +
+          `(one row of ${copySize.width} "${texture.format}" pixels), got ${String(bytesPerRow)}.`,
+      );
+    }
     const data = new Uint8Array(bytesPerRow * copySize.height);
+    // 紧凑读回的暂存区：行距就是 tightRowBytes，与请求的行距无关。
+    const tight = new Uint8Array(tightRowBytes * copySize.height);
 
     // 用 framebuffer 把纹理当附件读回：WebGL2 没有直接的 getTexImage。
     const framebuffer = gl.createFramebuffer();
@@ -202,13 +220,27 @@ export class WebGL2CommandEncoder implements CommandEncoder {
 
     gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
     const { x: readX, y: readY } = resolveOrigin(source.origin);
-    gl.readPixels(readX, readY, copySize.width, copySize.height, info.format, info.type, data);
+    gl.readPixels(readX, readY, copySize.width, copySize.height, info.format, info.type, tight);
     gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
     gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
     gl.deleteFramebuffer(framebuffer);
     // 这条读回路径临时切了 framebuffer：framebuffer 绑定不在状态缓存里（见 WebGL2RenderTarget.attach），
     // 所以保留整体作废。它不在每 draw 的热路径上，不必为它冒状态失准的风险。
     this.state.invalidate();
+
+    // 按请求的行距重排。行距等于紧凑行距时就是一次整体拷贝，不需要逐行。
+    // 填充字节保持 0（`new Uint8Array` 的初值）：WebGPU 不写这些字节，但给出确定的值
+    // 比留下上一次读回的残留更好排查，也与本方法修复前的行为一致。
+    if (bytesPerRow === tightRowBytes) {
+      data.set(tight);
+    } else {
+      for (let row = 0; row < copySize.height; row += 1) {
+        data.set(
+          tight.subarray(row * tightRowBytes, (row + 1) * tightRowBytes),
+          row * bytesPerRow,
+        );
+      }
+    }
 
     const buffer = destination.buffer as WebGL2Buffer;
     // 走 buffer 自己的目标写回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。

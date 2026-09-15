@@ -8,9 +8,23 @@
 
 import type { ComputePipeline, ComputePipelineDescriptor } from '../../core/pipeline/ComputePipeline.js';
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
+import type {
+  CompilationInfo,
+  PrewarmMode,
+  PrewarmOptions,
+  PrewarmResult,
+} from '../../core/pipeline/CompilationInfo.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { ShaderStage } from '../../core/enums/ShaderStage.js';
+import {
+  DEFAULT_PREWARM_TIMEOUT_MS,
+  createCompilationMessage,
+  describeCompilationInfo,
+  emptyCompilationInfo,
+  nowMs,
+  withTimeout,
+} from '../../core/pipeline/CompilationInfo.js';
 import { asGPUPipelineLayout } from '../binding/WebGPUPipelineLayout.js';
 import { asWebGPUShaderModule } from '../resources/WebGPUShaderModule.js';
 
@@ -53,18 +67,7 @@ export class WebGPUComputePipeline implements ComputePipeline {
       throw new ValidationError(`[gpu-device-api] ComputePipeline "${this.label}" has been disposed.`);
     }
     if (this._native) return this._native;
-    const module = asWebGPUShaderModule(
-      this.descriptor.compute.module,
-      `ComputePipeline "${this.label}".compute.module`,
-    );
-    this._native = this.device.native.createComputePipeline({
-      label: this.label,
-      layout: asGPUPipelineLayout(this.layout, `ComputePipeline "${this.label}"`),
-      compute: {
-        module: module.compile(ShaderStage.Compute),
-        entryPoint: this.descriptor.compute.entryPoint ?? DEFAULT_COMPUTE_ENTRY_POINT,
-      },
-    });
+    this._native = this.device.native.createComputePipeline(this.toGPUComputePipelineDescriptor());
     return this._native;
   }
 
@@ -74,6 +77,129 @@ export class WebGPUComputePipeline implements ComputePipeline {
     this._disposed = true;
     this._native = null;
     this.device.untrack(this);
+  }
+
+  /**
+   * 异步预热：优先 `createComputePipelineAsync()`。
+   *
+   * 预热结果写进与 `resolve()` 相同的 `_native` 字段，所以之后第一次真正使用这条 compute
+   * 管线时不再触发 GPU 编译。实现缺失 `createComputePipelineAsync` 时退化成同步创建，
+   * `mode` 为 `'sync'`、`reason` 说明原因。失败不抛错（除非 `throwOnError`），诊断在 `info` 里。
+   */
+  async prewarm(options: PrewarmOptions = {}): Promise<PrewarmResult> {
+    const started = nowMs();
+    if (this._disposed) {
+      throw new ValidationError(`[gpu-device-api] ComputePipeline "${this.label}" has been disposed.`);
+    }
+    if (this._native !== null) {
+      const info = await this.getCompilationInfo();
+      return {
+        label: this.label,
+        backend: 'webgpu',
+        ok: !info.hasErrors,
+        mode: 'async',
+        reason: null,
+        durationMs: nowMs() - started,
+        info,
+      };
+    }
+
+    const descriptor = this.toGPUComputePipelineDescriptor();
+    const device = this.device.native as GPUDevice & {
+      createComputePipelineAsync?: (descriptor: GPUComputePipelineDescriptor) => Promise<GPUComputePipeline>;
+    };
+    const createAsync = device.createComputePipelineAsync;
+
+    let mode: PrewarmMode = 'async';
+    let reason: string | null = null;
+    let created: GPUComputePipeline | null = null;
+    let failure: string | null = null;
+
+    if (typeof createAsync !== 'function') {
+      mode = 'sync';
+      reason =
+        'this WebGPU implementation does not expose GPUDevice.createComputePipelineAsync(), ' +
+        'so the pipeline was created synchronously and the compile cost stayed on the calling thread';
+    }
+
+    try {
+      if (typeof createAsync === 'function') {
+        created = await withTimeout(
+          createAsync.call(device, descriptor),
+          options.timeoutMs ?? DEFAULT_PREWARM_TIMEOUT_MS,
+          `createComputePipelineAsync("${this.label}")`,
+        );
+      } else {
+        created = this.device.native.createComputePipeline(descriptor);
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+      if (reason === null) reason = failure;
+    }
+
+    if (created !== null && this._native === null) this._native = created;
+
+    const info = await this.collectCompilationInfo(failure);
+    const ok = created !== null && failure === null;
+    const result: PrewarmResult = {
+      label: this.label,
+      backend: 'webgpu',
+      ok,
+      mode,
+      reason: ok ? (mode === 'sync' ? reason : null) : (failure ?? 'shader compilation reported errors'),
+      durationMs: nowMs() - started,
+      info,
+    };
+    if (!result.ok && options.throwOnError) {
+      throw new ValidationError(describeCompilationInfo(info));
+    }
+    return result;
+  }
+
+  /** 编译诊断：转发 `GPUShaderModule.getCompilationInfo()`。 */
+  async getCompilationInfo(): Promise<CompilationInfo> {
+    return this.collectCompilationInfo(null);
+  }
+
+  /** 组装 `GPUComputePipelineDescriptor`（预热与 `resolve()` 走同一份，避免两处漂移）。 */
+  private toGPUComputePipelineDescriptor(): GPUComputePipelineDescriptor {
+    const module = asWebGPUShaderModule(
+      this.descriptor.compute.module,
+      `ComputePipeline "${this.label}".compute.module`,
+    );
+    return {
+      label: this.label,
+      layout: asGPUPipelineLayout(this.layout, `ComputePipeline "${this.label}"`),
+      compute: {
+        module: module.compile(ShaderStage.Compute),
+        entryPoint: this.descriptor.compute.entryPoint ?? DEFAULT_COMPUTE_ENTRY_POINT,
+      },
+    };
+  }
+
+  private async collectCompilationInfo(failure: string | null): Promise<CompilationInfo> {
+    const module = asWebGPUShaderModule(
+      this.descriptor.compute.module,
+      `ComputePipeline "${this.label}".compute.module`,
+    );
+    const base =
+      typeof module.getCompilationInfo === 'function'
+        ? await module.getCompilationInfo(ShaderStage.Compute)
+        : emptyCompilationInfo(this.label, 'webgpu');
+    if (failure === null) return base;
+    return {
+      ...base,
+      messages: [
+        ...base.messages,
+        createCompilationMessage({
+          type: 'error',
+          message: failure,
+          label: this.label,
+          backend: 'webgpu',
+        }),
+      ],
+      hasErrors: true,
+    };
   }
 }
 

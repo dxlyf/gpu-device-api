@@ -28,11 +28,26 @@ import type {
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
 import type { VertexBufferLayout } from '../../core/pipeline/VertexLayout.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
+import type { ShaderModule } from '../../core/resources/ShaderModule.js';
+import type {
+  CompilationInfo,
+  PrewarmMode,
+  PrewarmOptions,
+  PrewarmResult,
+} from '../../core/pipeline/CompilationInfo.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import type { PipelineCache } from './PipelineCache.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { ShaderStage } from '../../core/enums/ShaderStage.js';
 import { cacheKey } from '../../core/pipeline/PipelineCache.js';
+import {
+  DEFAULT_PREWARM_TIMEOUT_MS,
+  createCompilationMessage,
+  describeCompilationInfo,
+  mergeCompilationInfo,
+  nowMs,
+  withTimeout,
+} from '../../core/pipeline/CompilationInfo.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { asGPUPipelineLayout } from '../binding/WebGPUPipelineLayout.js';
 import { asWebGPUShaderModule } from '../resources/WebGPUShaderModule.js';
@@ -157,6 +172,158 @@ export class WebGPURenderPipeline implements RenderPipeline {
   /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
   get compiledVariants(): readonly string[] {
     return this.cache.keys();
+  }
+
+  /**
+   * 异步预热一个 variant：优先 `createRenderPipelineAsync()`。
+   *
+   * 为什么这不只是「再调用一次 resolve()」：`createRenderPipeline` 是**同步**返回的，
+   * 驱动在后台编译，第一次真正使用这条管线的那一帧要为编译付掉卡顿；
+   * `createRenderPipelineAsync` 会等到编译完成才 resolve，于是这段等待落在预热调用里
+   *（可以在加载界面、下一帧之前、甚至 `requestIdleCallback` 里做），而不是落在渲染循环里。
+   *
+   * 预热出来的原生管线会**写进与 `resolve()` 相同的 variant 缓存**，所以首次使用该 variant 时
+   * `resolve()` 直接命中、不再产生任何 GPU 编译调用。
+   *
+   * 实现缺失 `createRenderPipelineAsync` 时退化成同步创建，`mode` 为 `'sync'` 且 `reason`
+   * 说明原因 —— 不会假装异步。编译失败同样不抛错（除非 `throwOnError`），诊断在 `info` 里。
+   */
+  async prewarm(
+    variant: Partial<RenderPipelineVariant> = EMPTY_VARIANT,
+    options: PrewarmOptions = {},
+  ): Promise<PrewarmResult> {
+    const started = nowMs();
+    if (this._disposed) {
+      throw new ValidationError(`[gpu-device-api] RenderPipeline "${this.label}" has been disposed.`);
+    }
+    // `resolveVariant` 的报错是「描述本身不合法」（缺 colorFormat、格式不认识），
+    // 那属于调用方的编程错误，和「着色器编译失败」不是一回事，所以这里让它原样抛出去。
+    const resolved = this.resolveVariant(variant);
+    const key = renderPipelineCacheKey(resolved);
+
+    if (this.cache.has(key)) {
+      // 已经编译过了：预热退化成「把诊断取回来」，不产生新的 GPU 调用。
+      const info = await this.getCompilationInfo();
+      return {
+        label: this.label,
+        backend: 'webgpu',
+        ok: !info.hasErrors,
+        mode: 'async',
+        reason: null,
+        durationMs: nowMs() - started,
+        info,
+      };
+    }
+
+    const nativeDescriptor = this.toGPURenderPipelineDescriptor(resolved);
+    const device = this.device.native as GPUDevice & {
+      createRenderPipelineAsync?: (descriptor: GPURenderPipelineDescriptor) => Promise<GPURenderPipeline>;
+    };
+    const createAsync = device.createRenderPipelineAsync;
+
+    let mode: PrewarmMode = 'async';
+    let reason: string | null = null;
+    let created: GPURenderPipeline | null = null;
+    let failure: string | null = null;
+
+    if (typeof createAsync !== 'function') {
+      mode = 'sync';
+      reason =
+        'this WebGPU implementation does not expose GPUDevice.createRenderPipelineAsync(), ' +
+        'so the pipeline was created synchronously and the compile cost stayed on the calling thread';
+    }
+
+    try {
+      if (typeof createAsync === 'function') {
+        created = await withTimeout(
+          createAsync.call(device, nativeDescriptor),
+          options.timeoutMs ?? DEFAULT_PREWARM_TIMEOUT_MS,
+          `createRenderPipelineAsync("${this.label}")`,
+        );
+      } else {
+        created = this.device.native.createRenderPipeline(nativeDescriptor);
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+      if (reason === null) reason = failure;
+    }
+
+    if (created !== null && !this.cache.has(key)) {
+      // 并发预热同一个 variant 时以先到者为准：缓存里已有就不再覆盖。
+      this.cache.set(key, created);
+    }
+
+    const info = await this.collectCompilationInfo(failure);
+    const ok = created !== null && failure === null;
+    const result: PrewarmResult = {
+      label: this.label,
+      backend: 'webgpu',
+      ok,
+      mode,
+      // 成功且是真异步时没有需要解释的东西；退化路径与失败路径都必须给出原因。
+      reason: ok ? (mode === 'sync' ? reason : null) : (failure ?? 'shader compilation reported errors'),
+      durationMs: nowMs() - started,
+      info,
+    };
+    if (!result.ok && options.throwOnError) {
+      throw new ValidationError(describeCompilationInfo(info));
+    }
+    return result;
+  }
+
+  /**
+   * 编译诊断：把 vertex / fragment 两个 `GPUShaderModule` 的 `getCompilationInfo()` 合起来。
+   *
+   * WGSL 一份源码包含所有 entry point，诊断内容与 variant 无关，所以这里不需要 variant 参数
+   *（保留它只是为了与 `resolve()` / `prewarm()` 的签名对齐）。
+   */
+  async getCompilationInfo(_variant: Partial<RenderPipelineVariant> = EMPTY_VARIANT): Promise<CompilationInfo> {
+    return this.collectCompilationInfo(null);
+  }
+
+  /** 取两个阶段的诊断并合并；`failure` 是 `createRenderPipelineAsync` 抛出的原文。 */
+  private async collectCompilationInfo(failure: string | null): Promise<CompilationInfo> {
+    const infos: CompilationInfo[] = [];
+    // WGSL 是「一个 module 含全部 entry point」，同一个 module 同时给 vertex / fragment 用时
+    // 只报一次 —— 否则同一批诊断会被重复列两遍（`GPUShaderModule.getCompilationInfo()` 是
+    // 按 module 而不是按 stage 计算的）。
+    const collected = new Set<ShaderModule>();
+    const collect = async (module: ShaderModule, stage: ShaderStage, context: string): Promise<void> => {
+      if (collected.has(module)) return;
+      collected.add(module);
+      const shader = asWebGPUShaderModule(module, context);
+      if (typeof shader.getCompilationInfo === 'function') {
+        infos.push(await shader.getCompilationInfo(stage));
+      }
+    };
+
+    await collect(this.descriptor.vertex.module, ShaderStage.Vertex, `RenderPipeline "${this.label}".vertex.module`);
+    const fragmentState = this.descriptor.fragment;
+    if (fragmentState) {
+      await collect(
+        fragmentState.module,
+        ShaderStage.Fragment,
+        `RenderPipeline "${this.label}".fragment.module`,
+      );
+    }
+
+    const merged = mergeCompilationInfo(this.label, 'webgpu', infos);
+    if (failure === null) return merged;
+    // 同步创建失败、或原生 promise 以 `GPUPipelineError` 拒绝时的原文也要留下：
+    // 有些实现把「entry point 不存在」这类错误只放在拒绝原因里，shader 诊断里看不到。
+    return {
+      ...merged,
+      messages: [
+        ...merged.messages,
+        createCompilationMessage({
+          type: 'error',
+          message: failure,
+          label: this.label,
+          backend: 'webgpu',
+        }),
+      ],
+      hasErrors: true,
+    };
   }
 
   /** 释放缓存（`GPURenderPipeline` 没有 destroy）。 */
