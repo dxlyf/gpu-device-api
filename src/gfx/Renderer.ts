@@ -21,7 +21,11 @@
  * 3. **顶点缓冲槽位映射** —— 按材质声明的属性顺序绑定几何体的对应属性；
  * 4. **bind group 缓存** —— uniform 的 bind group 由 arena 管，纹理的按「材质 + 纹理集合」缓存；
  * 5. **相机 uniform** —— `projectionView` 按后端自动选用 GL 或 ZO 的深度约定；
- * 6. **管线预热** —— `prewarm()` 把一批材质的编译/链接挪出渲染循环，两个后端同一段代码
+ * 6. **渲染进纹理的行序** —— WebGL2 的离屏目标原生自下而上（`RenderTarget.rowOrder === 'bottomUp'`），
+ *    这里只在「附件是纹理（不是 canvas）」的通道上把相机投影在裁剪空间 Y 取反、并把 `frontFace`
+ *    一起换过来，于是「渲染到纹理 → 采样上屏」两个后端一致，调用方不用写任何翻转代码
+ *    （见 {@link RendererOptions.rowOrder} 与 `docs/backend-limits.md` 第五节）；
+ * 7. **管线预热** —— `prewarm()` 把一批材质的编译/链接挪出渲染循环，两个后端同一段代码
  *    （见 {@link Renderer.prewarm} 与 {@link Renderer.compilationInfo}）。
  */
 
@@ -40,6 +44,7 @@ import {
 import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasContext } from '../core/CanvasContext.js';
 import type { Device } from '../core/Device.js';
+import type { FrontFace } from '../core/enums/FrontFace.js';
 import type { TextureFormat } from '../core/enums/TextureFormat.js';
 import type { CommandEncoder, CommandBuffer } from '../core/render/CommandEncoder.js';
 import type { PassTimestampWrites } from '../core/resources/QuerySet.js';
@@ -112,6 +117,24 @@ export interface RendererOptions {
   /** WebGL2 的 context 属性覆盖项（覆盖上面几个选项推导出来的默认值）。 */
   contextAttributes?: WebGLContextAttributes;
   /**
+   * 渲染进纹理时的行序策略，默认 `'unified'`（用户无感统一）。
+   *
+   * - `'unified'`：**画到离屏目标**（`FrameOptions.target`）的通道上，如果该目标的后端原生行序是
+   *   `'bottomUp'`（WebGL2 就是这样：GL 的窗口原点在左下，附着到 FBO 上的纹理自下而上存储），
+   *   就把相机投影在裁剪空间做 Y 取反（`mat4.flipClipY`），并把同一条管线的 `frontFace`
+   *   换过来（Y 取反会反转三角绕序，不换会把背面剔除剔错面）。这样「先渲染到纹理、再把这张
+   *   纹理采样上屏」在两个后端得到**逐像素一致**的画面。**画布默认帧缓冲永远不翻** ——
+   *   浏览器合成本来就是对的。
+   * - `'backend'`：如实保留后端的原生行序，本层不做任何翻转。需要自己处理时用
+   *   `target.rowOrder` 判断，配合 `mat4.flipClipY`（翻投影）或读回后反行序。
+   *
+   * ⚠️ 这条自动翻转**只对使用库提供的投影 uniform（`projection` / `projectionView`）的材质有效**
+   * —— 因为翻转发生在「本层往这两个 uniform 里写的矩阵」上。顶点着色器把位置写死
+   * （典型：全屏四边形、blit）的材质不受影响，需要自己在着色器里对 `gl_Position.y` 取反。
+   * 详见 `docs/backend-limits.md` 第五节。
+   */
+  rowOrder?: RowOrderMode;
+  /**
    * 视锥剔除（默认 **开**）：从相机的 view-projection 矩阵抽 6 个平面，绘制物整体在视锥外就跳过。
    *
    * 判定基于几何体的**包围球**（{@link Geometry.boundingSphere}，创建时算一次），是保守的
@@ -137,6 +160,14 @@ export interface RendererOptions {
 
 /** 便捷层接受的颜色写法（就是 core 的 `Color`，这里给个更友好的别名）。 */
 export type ColorInput = Color;
+
+/**
+ * 渲染进纹理时的行序策略（{@link RendererOptions.rowOrder}）。
+ *
+ * - `'unified'`：本层自动把 WebGL2 的离屏目标统一成与 WebGPU 相同的行序（默认，无感）；
+ * - `'backend'`：如实保留后端原生行序，本层不翻。
+ */
+export type RowOrderMode = 'unified' | 'backend';
 
 export interface FrameOptions {
   /** 清屏色；覆盖 renderer 的默认值。 */
@@ -263,8 +294,10 @@ export interface RendererPrewarmOptions {
    * 这次预热针对哪个渲染目标：省略表示 **canvas**（与 `beginFrame()` 的默认路径一致）。
    *
    * 它决定管线变体里的 `colorFormats` / `sampleCount` / `depthFormat`（见
-   * {@link Renderer.prewarm}）。之后要画进离屏目标就传那个 `RenderTarget`，
-   * 否则预热到的是另一个变体 —— 预热会白做（不会出错，只是首次绘制仍然要付编译开销）。
+   * {@link Renderer.prewarm}），也决定要不要用**绕序翻转**的那条管线
+   * （画进 `rowOrder === 'bottomUp'` 的离屏目标时要翻，见 {@link RendererOptions.rowOrder}）。
+   * 之后要画进离屏目标就传那个 `RenderTarget`，否则预热到的是另一个变体 —— 预热会白做
+   * （不会出错，只是首次绘制仍然要付编译开销）。
    */
   target?: RenderTarget;
   /** 等待编译/链接完成的最长时间（毫秒）。省略用后端的默认值（30 秒）。 */
@@ -330,6 +363,16 @@ interface MaterialState {
   readonly material: Material;
   readonly layout: PipelineLayout | 'auto';
   pipeline: RenderPipeline | null;
+  /**
+   * 绕序翻转版的管线：与 {@link MaterialState.pipeline} **同一份着色器**，只把
+   * `primitive.frontFace` 换了一侧（`'ccw'` ↔ `'cw'`）。
+   *
+   * 为什么需要第二条：渲染进「自下而上」的离屏目标时，投影被翻转、绕序跟着反了，
+   * 背面剔除必须按反过来的正面来判。两条管线共用同一个 program（WebGL2 的 `ProgramCache`
+   * 按源码缓存、WebGPU 侧根本不会走到这条路），所以代价只有一份固定功能状态。
+   * 与 `pipeline` 一样按需创建：只在「真的画进了离屏目标」时才建。
+   */
+  pipelineFlipped: RenderPipeline | null;
   /** 该材质的数值容器模板：每次 draw 写进 arena。 */
   values: UniformValues | null;
   /** 排序用的管线序号（同一材质恒定）。 */
@@ -388,6 +431,20 @@ export class Renderer {
   private _width: number;
   private _height: number;
   private _inFrame = false;
+  /** 渲染进纹理时的行序策略；见 {@link RendererOptions.rowOrder}。 */
+  private _rowOrder: RowOrderMode = 'unified';
+  /**
+   * **当前通道**是否需要把相机投影在裁剪空间 Y 取反（并在同一通道内翻转 `frontFace`）。
+   *
+   * 由 `beginFrame()` / `beginPass()` 按该通道的附件决定：附件来自离屏目标且该目标原生行序是
+   * `'bottomUp'`、同时 `rowOrder === 'unified'` 时为 true。它是**逐通道**的状态 ——
+   * 切回画布通道时会被重新算成 false，于是下一个 draw 用的又是没翻过的那条管线。
+   */
+  private passFlipsRows = false;
+  /** `passFlipsRows` 为 true 时用的翻转后投影矩阵（暂存，避免每 draw 分配）。 */
+  private readonly flippedProjectionMatrix = mat4.create();
+  /** `passFlipsRows` 为 true 时用的翻转后投影视图矩阵（暂存）。 */
+  private readonly flippedProjectionViewMatrix = mat4.create();
   private encoder: CommandEncoder | null = null;
   private pass: RenderPassEncoder | null = null;
   private commandBuffers: CommandBuffer[] = [];
@@ -438,6 +495,7 @@ export class Renderer {
     this._height = init.context.height;
     this._culling = init.options.culling ?? true;
     this._sortMode = init.options.sort ?? 'none';
+    this._rowOrder = init.options.rowOrder ?? 'unified';
     this.arenaPool = new UniformArenaPool(init.device);
   }
 
@@ -597,6 +655,7 @@ export class Renderer {
         material: resolved,
         layout: resolved.createPipelineLayout(this.device),
         pipeline: null,
+        pipelineFlipped: null,
         // 还原掉 createUniforms() 的 Proxy：渲染器的每 draw 写入路径直接操作原始对象，
         // 免得每次 set()/has() 都穿一遍 Proxy 陷阱（见 unwrapUniforms 的说明）。
         values: resolved.uniforms ? unwrapUniforms(resolved.createUniforms()) : null,
@@ -618,6 +677,19 @@ export class Renderer {
   setMaterial(material: Material | null): void {
     this.currentMaterial = material;
     if (material) this.createMaterial(material);
+  }
+
+  /**
+   * 渲染进纹理时的行序策略；默认 `'unified'`（本层自动统一，见 {@link RendererOptions.rowOrder}）。
+   *
+   * 改完在**下一个通道**生效（`beginFrame()` / `beginPass()` 会重新判定），当前通道不受影响。
+   */
+  get rowOrder(): RowOrderMode {
+    return this._rowOrder;
+  }
+
+  set rowOrder(value: RowOrderMode) {
+    this._rowOrder = value;
   }
 
   get material(): Material | null {
@@ -757,6 +829,8 @@ export class Renderer {
     const started = nowMs();
     const requested = options.materials ?? [...this.materials.keys()];
     const passOptions: FrameOptions = options.target ? { target: options.target } : {};
+    // 与绘制时同一个判定：画进「自下而上」的离屏目标时，管线要的是绕序翻转的那一条。
+    const flipsWinding = this.flipsRowsFor(passOptions);
     const prewarmOptions: PrewarmOptions = {
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(options.throwOnError !== undefined ? { throwOnError: options.throwOnError } : {}),
@@ -771,14 +845,16 @@ export class Renderer {
     for (const material of requested) {
       const state = this.materialState(material);
 
-      // 已经建过管线：跳过，不重复预热（再热一次不会更快，只会白建一条）。
-      if (state.pipeline) {
+      // 已经建过**这一种绕序**的管线：跳过，不重复预热（再热一次不会更快，只会白建一条）。
+      // 注意画布通道与离屏通道要的是两条不同的管线，所以这里按 `flipsWinding` 分别判断。
+      const existing = flipsWinding ? state.pipelineFlipped : state.pipeline;
+      if (existing) {
         skipped += 1;
-        results.push(await this.skippedPrewarmResult(state));
+        results.push(await this.skippedPrewarmResult(state, existing));
         continue;
       }
 
-      const descriptor = this.pipelineDescriptorFor(state);
+      const descriptor = this.pipelineDescriptorFor(state, flipsWinding);
       const materialVariant = this.pipelineVariantFor(descriptor, passOptions);
       variant ??= materialVariant;
 
@@ -792,7 +868,10 @@ export class Renderer {
        * 编译成果（WebGPU 的 variant 缓存 / WebGL2 的 program 缓存）才不会被丢掉。
        * 失败时 `outcome.pipeline` 是 null，状态保持为空 —— 之后 `draw()` 会照常自己建一条。
        */
-      if (outcome.pipeline) state.pipeline = outcome.pipeline;
+      if (outcome.pipeline) {
+        if (flipsWinding) state.pipelineFlipped = outcome.pipeline;
+        else state.pipeline = outcome.pipeline;
+      }
       if (outcome.ok) prewarmed += 1;
       else failed += 1;
 
@@ -837,7 +916,8 @@ export class Renderer {
    */
   async compilationInfo(material: Material): Promise<CompilationInfo> {
     const state = this.materialState(material);
-    if (state.pipeline) return this.readCompilationInfo(state.pipeline);
+    const existing = state.pipeline ?? state.pipelineFlipped;
+    if (existing) return this.readCompilationInfo(existing);
     const report = await this.prewarm({ materials: [material] });
     return report.results[0]!.info;
   }
@@ -862,9 +942,11 @@ export class Renderer {
   }
 
   /** 已建过管线时的结果：不重新预热，只把诊断读回来（结果形状与真预热一致）。 */
-  private async skippedPrewarmResult(state: MaterialState): Promise<MaterialPrewarmResult> {
+  private async skippedPrewarmResult(
+    state: MaterialState,
+    pipeline: RenderPipeline,
+  ): Promise<MaterialPrewarmResult> {
     const started = nowMs();
-    const pipeline = state.pipeline!;
     const info = await this.readCompilationInfo(pipeline);
     return {
       material: state.material,
@@ -925,6 +1007,8 @@ export class Renderer {
      * canvas 路径的 MSAA resolveTarget 与两个后端的 depth attachment 都在里面，
      * 自己拼会把它们丢掉 —— 那正是「画布渲染没有深度测试」这个缺陷的成因。
      */
+    // 本通道要不要翻行序（只看附件来自哪里，与后面的 draw 用什么材质无关）。
+    this.passFlipsRows = this.flipsRowsFor(options);
     this.pass = this.encoder.beginRenderPass({
       label: 'gfx-pass',
       colorAttachments: descriptor.colorAttachments,
@@ -998,6 +1082,9 @@ export class Renderer {
       throw new ValidationError('[gpu-device-api] 当前通道没有颜色附件。');
     }
 
+    // 逐通道重判：切回 canvas 通道时这里会回到 false，于是下一个 draw 又用没翻过的那条管线
+    // （`frontFace` 也随之恢复，见 `acquirePipeline()`）。
+    this.passFlipsRows = this.flipsRowsFor(options);
     this.pass = encoder.beginRenderPass({
       label: 'gfx-pass',
       colorAttachments: descriptor.colorAttachments,
@@ -1030,6 +1117,25 @@ export class Renderer {
       depthClearValue: options.depth ?? 1,
     };
     return options.target ? options.target.createPassDescriptor(clear) : this.context.createPassDescriptor(clear);
+  }
+
+  /**
+   * 一个通道要不要把相机投影在裁剪空间 Y 取反（并翻转 `frontFace`）。
+   *
+   * 两条判据，缺一不可：
+   *
+   * 1. **附件是纹理，不是 canvas 默认帧缓冲** —— 只有离屏目标才有「纹素行序」这件事，
+   *    画布那一侧浏览器的合成路径本来就是对的（真实合成截图证明两个后端的画布原样一致率
+   *    是 100%），翻了反而上下颠倒。判定用的就是「这个通道有没有传 `target`」。
+   * 2. **该目标的后端原生行序不是 `'topLeft'`** —— 直接读 core 暴露的
+   *    {@link RenderTarget.rowOrder}（WebGPU = `'topLeft'`、WebGL2 = `'bottomUp'`），
+   *    而不是写 `backend === 'webgl2'`：这样后端多一种行序时这里自动跟上。
+   *
+   * `rowOrder: 'backend'` 时恒为 false（调用方明确要求保留原生行序）。
+   */
+  private flipsRowsFor(options: FrameOptions): boolean {
+    if (this._rowOrder !== 'unified') return false;
+    return options.target?.rowOrder === 'bottomUp';
   }
 
   /**
@@ -1238,6 +1344,7 @@ export class Renderer {
     this.gpuTimingValue = null;
     for (const state of this.materials.values()) {
       state.pipeline?.dispose();
+      state.pipelineFlipped?.dispose();
       state.values = null;
     }
     this.materials.clear();
@@ -1275,9 +1382,19 @@ export class Renderer {
     return this.materials.get(material)!;
   }
 
+  /**
+   * 取得（必要时创建）本通道该用的管线。
+   *
+   * 画布通道与「绕序翻转」的离屏通道各有一条，选择只看**当前通道**的 {@link Renderer.passFlipsRows}
+   * —— 于是切回画布通道后第一个 draw 就会用回没翻过的那条，`frontFace` 随之恢复正确
+   * （每条管线的固定功能状态在每个 draw 上都会重新下发，见 `WebGL2RenderPipeline.applyState`）。
+   */
   private acquirePipeline(state: MaterialState): RenderPipeline {
-    if (state.pipeline) return state.pipeline;
-    state.pipeline = this.device.createRenderPipeline(this.pipelineDescriptorFor(state));
+    if (this.passFlipsRows) {
+      state.pipelineFlipped ??= this.device.createRenderPipeline(this.pipelineDescriptorFor(state, true));
+      return state.pipelineFlipped;
+    }
+    state.pipeline ??= this.device.createRenderPipeline(this.pipelineDescriptorFor(state, false));
     return state.pipeline;
   }
 
@@ -1287,9 +1404,19 @@ export class Renderer {
    * `acquirePipeline()`（真正绘制时）与 `prewarm()` 走的是**同一个方法**，
    * 所以预热用的 `vertexLayouts` 就是从这份描述的 `vertex.buffers` 来的，
    * 不会出现「预热一套布局、绘制另一套」。
+   *
+   * `flipWinding` 为 true 时只改一个字段：把 `primitive.frontFace` 换到另一侧。
+   * 渲染进「自下而上」的离屏目标时投影被 Y 取反、三角绕序跟着反了（见 `mat4.flipClipY`），
+   * 所以背面剔除必须按反过来的正面判，否则会被剔除错面。**着色器一个字都不改** ——
+   * 这也是为什么它可以和 `pipeline` 共用同一份 program，而不是第二条编译变体。
    */
-  private pipelineDescriptorFor(state: MaterialState): RenderPipelineDescriptor {
-    return state.material.createPipelineDescriptor(this.device).descriptor;
+  private pipelineDescriptorFor(state: MaterialState, flipWinding = false): RenderPipelineDescriptor {
+    const descriptor = state.material.createPipelineDescriptor(this.device).descriptor;
+    if (!flipWinding) return descriptor;
+    const frontFace: FrontFace = (descriptor.primitive?.frontFace ?? 'ccw') === 'ccw' ? 'cw' : 'ccw';
+    // 浅拷贝：`vertex` / `fragment` 等子对象与里面那份 `vertex.buffers` 数组保持同一个身份，
+    // 预热报告与绘制路径核对 `vertexLayouts` 时仍然对得上。
+    return { ...descriptor, primitive: { ...descriptor.primitive, frontFace } };
   }
 
   /**
@@ -1360,16 +1487,26 @@ export class Renderer {
    * 这里**不再**调用 `camera.update()`：相机矩阵每帧只需要算一次（见 {@link updateCamera}）。
    * 原先每 draw 都重算 lookAt + 两套 perspective + 一次乘法，40k draw 的场景下光这一步就是
    * 几十毫秒/帧的纯 CPU 开销，而且结果完全一样。
+   *
+   * **本通道要翻行序时**（{@link Renderer.passFlipsRows}）写入的是
+   * {@link Renderer.flippedProjectionMatrix} / {@link Renderer.flippedProjectionViewMatrix}
+   * —— 也就是把相机投影在裁剪空间 Y 取反的结果（`camera` 自己的矩阵**不被修改**，
+   * 所以同一帧里画进画布的那部分照旧）。`view` 与 `cameraPosition` 与行序无关，原样写。
+   * 顶点着色器不使用这两个 uniform 的材质不受影响 —— 这就是那条限制的来源。
    */
   private applyCameraUniforms(values: UniformValues, material: Material): void {
     const camera = this.camera;
     if (!camera) return;
+    const flip = this.passFlipsRows;
 
     if (material.uniforms?.has('projectionView')) {
-      values.set('projectionView' as never, camera.projectionViewMatrix as never);
+      values.set(
+        'projectionView' as never,
+        (flip ? this.flippedProjectionViewMatrix : camera.projectionViewMatrix) as never,
+      );
     }
     if (material.uniforms?.has('projection')) {
-      values.set('projection' as never, camera.projectionMatrix as never);
+      values.set('projection' as never, (flip ? this.flippedProjectionMatrix : camera.projectionMatrix) as never);
     }
     if (material.uniforms?.has('view')) {
       values.set('view' as never, camera.viewMatrix as never);
@@ -1433,6 +1570,11 @@ export class Renderer {
     // 两个后端的裁剪空间 z 约定不同，切换后端时投影矩阵要跟着换（相机自己不知道后端）。
     camera.depthRange = this.backend === 'webgpu' ? 'zo' : 'gl';
     camera.update();
+    // 翻行序用的那两份矩阵跟着一起算：它们只依赖相机矩阵，而相机矩阵每帧只算这一次。
+    // 无条件算（两次行取反）比在每个通道开头判断一次要便宜，也让 `applyCameraUniforms`
+    // 永远是「取哪个字段」的纯选择，不再有隐藏状态。
+    mat4.flipClipY(this.flippedProjectionMatrix, camera.projectionMatrix);
+    mat4.flipClipY(this.flippedProjectionViewMatrix, camera.projectionViewMatrix);
     // 视锥用当帧的 P × V 与同一套深度约定：用错约定会把近处的物体误剔除。
     if (this._culling) this.culler.update(camera.projectionViewMatrix, camera.depthRange);
   }

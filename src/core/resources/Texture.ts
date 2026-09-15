@@ -14,11 +14,21 @@
  *   （WebGL2 走 `gl.readPixels`，它就从 `origin.y` 起按纹素行序逐行读出，实现里不做任何翻转）。
  *
  * 这套约定对**上传过的**纹理已经两个后端一致（`examples/core-texture-mipmap.ts` 会把两级 mip
- * 的真实字节在两个后端上读回并逐纹素比对）。**唯一还没对齐的是「渲染进纹理」**：WebGL2 的渲染
- * 目标自下而上存储（GL 的窗口原点在左下），WebGPU 自上而下，于是同一个渲染结果的纹素行序在两个
- * 后端相反 —— 读回与采样都会上下颠倒。正解是在 WebGL2 的渲染路径里按目标类型翻转 Y（只翻渲染进
- * 纹理的那些 pass），在那之前，读回渲染结果的调用方必须自己按后端翻行序
- * （`examples/core-shared.ts` 的 `verifyOffscreen` 就是这么做的，并注明了修好后要删掉）。
+ * 的真实字节在两个后端上读回并逐纹素比对），对 `copyTextureToBuffer` 也一样。
+ *
+ * **唯一不遵循它的地方是「渲染进纹理」**：WebGL2 的渲染目标自下而上存储（GL 的窗口原点在左下），
+ * WebGPU 自上而下 —— 同一个渲染结果的纹素行序在两个后端相反，读回与采样都会上下颠倒。
+ *
+ * core 层**如实暴露、不代劳**：`RenderTarget.rowOrder` 给出该目标的后端原生行序
+ * （WebGPU = `'topLeft'`、WebGL2 = `'bottomUp'`），需要统一时由调用方二选一：
+ *
+ * - 用 `mat4.flipClipY`（`src/utils/math/mat4.ts`）把投影矩阵在裁剪空间做一次 Y 取反（等价于
+ *   `gl_Position.y *= -1`，**并且会反转三角绕序**，开背面剔除时要一起换 `frontFace`）
+ *   —— 这样渲染结果直接符合上面的约定；
+ * - 或者保留原生行序，读回后按 `rowOrder` 自己反一次行序。
+ *
+ * 便捷层 `gfx` 的 `Renderer` 默认自动做第一种（只对**渲染进纹理**的通道、只对 WebGL2、
+ * 只对使用库提供投影 uniform 的材质生效），细节见 `docs/backend-limits.md` 第五节。
  */
 
 import type { Disposable } from '../../utils/Disposable.js';

@@ -2597,7 +2597,6 @@ async function main(): Promise<void> {
       verifyWidth,
       verifyHeight,
       CLEAR,
-      example.backend === 'webgl2',
       (pass) => {
         writeUniforms(fixedTime ?? 0);
         drawScene(pass);
@@ -2663,7 +2662,6 @@ async function main(): Promise<void> {
       verifyWidth,
       verifyHeight,
       CLEAR,
-      example.backend === 'webgl2',
       (pass) => {
         writeUniforms((fixedTime ?? 0) + 6);
         drawScene(pass);
@@ -2789,19 +2787,21 @@ function projectToScreen(
  * 深度用 `depth32float`、读回 buffer 用 `MapRead | CopyDst`，另外 WebGPU 要求
  * `bytesPerRow` 是 256 的倍数（读回后再逐行去掉填充）。
  *
- * `rowsBottomUp` 处理的是**两个后端读回行序不同**这件事：WebGPU 的纹理原点在左上，
- * `copyTextureToBuffer` 读回的第 0 行就是屏幕顶端；而 WebGL2 走的是 `gl.readPixels`，
- * 它的原点在**左下**，读回的第 0 行是屏幕底端。分区探针是按屏幕位置定义的，
- * 所以这里统一翻成屏幕行序 —— 这是 GL 与 WebGPU 两套坐标系的固有差别，
- * 与顶点属性、绑定槽位那些无关（真实截图的合成路径永远是从上往下的那一份，
- * `scripts/analyze-screenshot.mjs` 也按那个口径统计）。
+ * 行序由**公开属性** `RenderTarget.rowOrder` 判定，而不是按后端名猜：WebGPU 的纹理原点在左上
+ * （`'topLeft'`），读回的第 0 行就是画面顶端；WebGL2 的渲染目标自下而上存储（`'bottomUp'`），
+ * 读回的第 0 行是画面底端。分区探针是按屏幕位置定义的，所以这里把 `'bottomUp'` 的那一份统一
+ * 翻成屏幕行序 —— 这是 GL 与 WebGPU 两套坐标系的固有差别，与顶点属性、绑定槽位那些无关
+ * （真实截图的合成路径永远是从上往下的那一份，`scripts/analyze-screenshot.mjs` 也按那个口径统计）。
+ *
+ * core 层不代劳、只如实暴露，所以调用方要自己选一条：这一页走的是「读回侧反行序」
+ *（另一种写法是在**渲染侧**用 `mat4.flipClipY` 翻投影，但本函数拿不到调用方的投影矩阵 ——
+ * 探针的屏幕坐标是用**没翻过**的那份投影算出来的，翻了它就得连探针一起改）。
  */
 async function readOffscreen(
   device: Device,
   width: number,
   height: number,
   clear: readonly [number, number, number, number],
-  rowsBottomUp: boolean,
   draw: (pass: RenderPassEncoder) => void,
 ): Promise<Uint8Array> {
   const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -2848,11 +2848,13 @@ async function readOffscreen(
   const raw = new Uint8Array(readback.getMappedRange(0, byteLength)).slice();
   readback.unmap();
   readback.destroy();
+  // 原生行序要在销毁之前读出来。
+  const rowsBottomUp = target.rowOrder === 'bottomUp';
   target.destroy();
 
   const pixels = new Uint8Array(rowBytes * height);
   for (let row = 0; row < height; row++) {
-    // `rowsBottomUp` 时把读回的第 row 行写到目标缓冲的倒数第 row 行（理由见函数说明）。
+    // 原生自下而上的目标：把读回的第 row 行写到目标缓冲的倒数第 row 行（理由见函数说明）。
     const targetRow = rowsBottomUp ? height - 1 - row : row;
     pixels.set(raw.subarray(row * bytesPerRow, row * bytesPerRow + rowBytes), targetRow * rowBytes);
   }

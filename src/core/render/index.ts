@@ -8,6 +8,7 @@ export {
   type TextureLike,
 } from './CommandEncoder.js';
 export {
+  RowOrder,
   type Color,
   type ColorAttachment,
   type DepthStencilAttachment,

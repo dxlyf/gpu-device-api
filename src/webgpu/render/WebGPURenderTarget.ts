@@ -18,6 +18,7 @@ import type {
   RenderTarget,
   RenderTargetDescriptor,
 } from '../../core/render/RenderTarget.js';
+import { RowOrder } from '../../core/render/RenderTarget.js';
 import type { LoadOp } from '../../core/enums/LoadOp.js';
 import type { StoreOp } from '../../core/enums/StoreOp.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
@@ -123,6 +124,14 @@ export class WebGPURenderTarget implements RenderTarget {
   get mipLevelCount(): number {
     return this.mipLevelCountValue;
   }
+
+  /**
+   * WebGPU 的原生行序：附件纹素 (0, 0) 在**左上角**，与 `Texture.ts` 的纹理约定天然一致。
+   *
+   * 所以这个后端不需要任何补偿；这个只读属性存在的意义是让跨后端代码能按
+   * `target.rowOrder` 判断，而不是写 `backend === 'webgl2'`。
+   */
+  readonly rowOrder: RowOrder = RowOrder.TopLeft;
 
   /** 单采样 color texture（MSAA 时是 resolve 目标）；索引 0 为主 texture。 */
   get colors(): readonly Texture[] {

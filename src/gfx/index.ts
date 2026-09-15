@@ -111,6 +111,7 @@ export {
   type RendererPrewarmOptions,
   type RendererPrewarmResult,
   type RendererStats,
+  type RowOrderMode,
 } from './Renderer.js';
 
 export {

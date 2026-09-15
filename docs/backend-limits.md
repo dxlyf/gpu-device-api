@@ -144,7 +144,7 @@ WebGPU 侧由 `createRenderTarget` 的格式/采样数校验给出同样的效�
 诊断接口：`device.trackedResourceCount`（不属于 core 的 `Device` 接口，仅供诊断与测试）。
 两个后端各有一个回归测试：`test/webgpu-resource-tracking.test.ts`、`test/webgl2-resource-tracking.test.ts`。
 
-## 五、渲染目标的行序（唯一一处还没对齐的纹理差异）
+## 五、渲染目标的行序（分层方案 C：core 显式、gfx 自动）
 
 本库的纹理约定站在 **WebGPU** 这一边：纹素 (0, 0) 在左上角，纹理坐标 `v = 0` 指向纹素第 0 行，
 `queue.writeTexture` 把主机数据的第 0 行原样放进纹素第 0 行（两个后端都不翻转），
@@ -154,21 +154,74 @@ WebGPU 侧由 `createRenderTarget` 的格式/采样数校验给出同样的效�
 且不反行序，缓冲区第 0 行同样是「纹素行 `origin.y`」——这一点由 `examples/core-texture-mipmap.ts`
 在两后端之间逐纹素比对 mip 的真实字节佐证。
 
-**没对齐的是「渲染进纹理」**：GL 的窗口原点在左下角，附着到 FBO 上的纹理因此是自下而上存储的，
-纹素第 0 行是画面**底端**；WebGPU 的附件纹素 (0, 0) 在左上角。两边都按纹素行序如实输出，于是：
+**唯一不遵循这条约定的是「渲染进纹理」**：GL 的窗口原点在左下角，附着到 FBO 上的纹理因此是
+自下而上存储的，纹素第 0 行是画面**底端**；WebGPU 的附件纹素 (0, 0) 在左上角。这不是
+`copyTextureToBuffer` 的错（两个后端都忠实按纹素行序拷贝），而是渲染目标的固有差别。
 
-- 读回一个**渲染出来**的纹理，WebGL2 的结果相对 WebGPU 整体上下颠倒（`examples/core-shared.ts`
-  的 `verifyOffscreen` 目前按后端翻一次行序，并在注释里写明后端修好后要删掉）；
-- 把渲染出来的纹理**当纹理采样**，WebGL2 上也是上下颠倒的（采样走纹理坐标，库层无从插手）。
+**上屏那一侧本来就是一致的**：真实合成截图（`scripts/capture-screenshot.mjs` +
+`scripts/compare-screenshots.mjs`）证明同一画布两个后端的**原样一致率 100.00%**，翻转后只有
+66.31% —— 所以下面的处理只针对「附件是纹理」的渲染通道，**画布默认帧缓冲永远不翻**。
 
-正解只能落在渲染路径：WebGL2 在渲染到非默认帧缓冲时把 Y 翻过来（例如按目标类型给顶点着色器
-注入 `gl_Position.y` 取反的变体；WebGL2 不允许负高度的 `gl.viewport`，所以没有更省事的办法）。
-在那之前，跨后端读回渲染结果的调用方必须自己按 `device.backend === 'webgl2'` 翻一次行序 ——
-`examples/core-landscape.ts` 的 `readOffscreen(..., rowsBottomUp)` 就是这么做的。
+### core 层：如实暴露，不自动转换
 
-跨后端的像素回归检查：`node scripts/verify-texture-parity.mjs --chrome <chrome.exe> --url ...`
-（同一页分别在两个后端跑 `?verify=1&spin=0`，比对 `data-*-pixel` 与 `data-*-lit-pixels`）；
-「上屏结果」的量化判据用 `scripts/capture-screenshot.mjs` 各抓一张合成截图，再交给
-`scripts/compare-screenshots.mjs`（它会给出原样 / 上下翻转 / 左右镜像 / 通道颠倒各自的一致率，
-翻转一致率异常高就是行序反了的决定性证据）。
+`RenderTarget.rowOrder` 给出该目标的**后端原生行序**：WebGPU 恒为 `'topLeft'`，
+WebGL2 恒为 `'bottomUp'`。core 不做任何自动翻转 —— 它不掌握调用方的相机，翻不了，也不假装翻了。
+想统一时调用方二选一：
+
+1. **在渲染侧翻投影**：公开 helper `mat4.flipClipY(out, a)` 接收投影矩阵（或投影视图矩阵），
+   返回在**裁剪空间** Y 取反的结果，等价于在着色器里写 `gl_Position.y *= -1`。
+   ⚠️ 它同时**反转三角绕序**（逆时针变顺时针），开了背面剔除就必须把 `frontFace` 一起换过来。
+   好处是渲染结果直接符合本库约定，后续的**采样与读回都不必再补偿**。
+2. **在读回侧反行序**：保留原生行序，读回后按 `target.rowOrder === 'bottomUp'` 反一次行序。
+   只对「读回」这一条路径有效；把渲染出来的纹理**当纹理采样**时仍然是上下颠倒的。
+
+### gfx 层：自动，用户无感
+
+`Renderer` 的 `rowOrder` 选项默认 `'unified'`：只要**当前通道的附件是纹理**（`FrameOptions.target`）
+**且该目标的 `rowOrder` 不是 `'topLeft'`**，它就会
+
+- 把相机投影在裁剪空间 Y 取反之后才写进 `projection` / `projectionView` uniform
+  （相机自己的矩阵不被修改，所以同一帧里画进画布的部分照旧）；
+- 在同一通道内把该材质的 `frontFace` 换到另一侧（`'ccw'` ↔ `'cw'`），
+  这条管线**与原来那条共用同一份着色器**（WebGL2 的 program 缓存按源码命中，WebGPU 上根本不会
+  走到这条路），所以「预热一个变体 ⇒ 之后零编译」的契约不受影响；
+- 切回画布通道时把两者都恢复（画布通道用回没翻过的那条管线）。
+
+`rowOrder: 'backend'` 可以关掉这条自动行为，如实保留后端原生行序。
+
+### ⚠️ 这条自动翻转的能力边界（务必读）
+
+**它只对使用库提供的投影 uniform（`projection` / `projectionView`）的材质有效** ——
+因为翻转发生在「本层往这两个 uniform 里写的矩阵」上。
+
+顶点着色器把位置写死（`gl_Position = vec4(常量)`，典型是全屏四边形、blit、后处理辅助）的材质
+**不受影响**：那种写法里没有任何投影矩阵可以被外部替换，翻转不生效。处理办法是**在该材质的
+着色器里自己对位置做同样的裁剪空间 Y 取反**（这也同样反转绕序，所以 `frontFace` 要一起换），
+例如：
+
+```glsl
+gl_Position = vec4(quad.x, -quad.y, 0.0, 1.0);   // 只在渲染进纹理的通道上用
+```
+
+core 层用 `mat4.flipClipY` 是同一件事的矩阵写法（`examples/msaa-offscreen.ts` 是 core 侧的示范：
+它把 helper 的结果写进自己的 `u.projection`，于是上屏那一趟两个后端可以共用同一个 uv 公式）。
+
+`gfx` 自己生成/推荐的全部材质（`materials.lambert` / `phong` / `unlit` / `normalDebug` /
+`flatLine` / `vertexColorLine`）用的都是 `u.projectionView * u.model * ...`，
+**没有任何一条路径把位置写死**，所以 gfx 用户按文档写法画东西时不需要关心这条限制。
+
+### 判据与回归
+
+- `examples/rtt-orientation.html` 是主判据页：`?layer=core` 走「core 显式 + helper」，
+  `?layer=gfx` 走「gfx 自动」，两条路径都报出纹素第 0 行 / 最后一行的颜色与 `rttRowOrderOk`
+  （core 路径还报一份**不翻**的对照目标，那就是「加 helper 之前」的表现）。
+  gfx 那一侧的材质刻意用默认的 `cullMode: 'back'`，所以绕序处理错会被剔除规则直接抓到。
+- 单测：`test/rtt-row-order.test.ts`（两个后端的 `rowOrder` 取值、`mat4.flipClipY` 的数学与绕序、
+  gfx 在纹理附件上翻 / 画布不翻 / `rowOrder: 'backend'` / 切通道恢复 / 预热与绘制用同一条管线）。
+- 跨后端像素回归：`node scripts/verify-texture-parity.mjs --chrome <chrome.exe> --url ...`
+  （同一页分别在两个后端跑 `?verify=1&spin=0`，比对 `data-*-pixel` 与 `data-*-lit-pixels`）；
+  「上屏结果」的量化判据用 `scripts/capture-screenshot.mjs` 各抓一张合成截图，再交给
+  `scripts/compare-screenshots.mjs`（它会给出原样 / 上下翻转 / 左右镜像 / 通道颠倒各自的一致率，
+  翻转一致率异常高就是行序反了的决定性证据）。
+
 

@@ -27,26 +27,27 @@
  * 清屏用 WebGL2 的 `clearBufferfv` / `clearBufferfi`，它们可以**按附件下标**清除，
  * 天然支持多颜色附件，不需要来回切 `drawBuffers`。
  *
- * ## 行序：与 WebGPU 尚未对齐的那一处（本文件是「正解」应该落地的地方）
+ * ## 行序：如实上报 `bottomUp`，本层不代劳
  *
  * GL 的窗口原点在**左下**，所以附着到 FBO 上的纹理是**自下而上**存储的：纹理第 0 行是画面**底端**。
- * WebGPU 的纹素原点在左上，同一个渲染结果的纹素行序在两个后端正好相反。
- *
- * 这不是 `copyTextureToBuffer` 的错：两个后端都忠实按「纹素行序」拷贝（缓冲第 0 行 = 纹素行
+ * WebGPU 的纹素原点在左上，同一个渲染结果的纹素行序在两个后端正好相反。这不是
+ * `copyTextureToBuffer` 的错：两个后端都忠实按「纹素行序」拷贝（缓冲第 0 行 = 纹素行
  * `origin.y`，见 `src/core/resources/Texture.ts` 的行序约定）。实测（8x4 目标，上半红、下半蓝，
  * 同一份读回调用）：
  *
  * - WebGPU：缓冲区四行 = `red,黑,黑,blue`（第 0 行是画面顶端）；
  * - WebGL2：缓冲区四行 = `blue,黑,黑,red`（第 0 行是画面底端）。
  *
- * **本轮只做记录，没有改行为**：翻转必须连同「采样」与「读回」两条路径一起改，并且要同步删掉
- * 调用方已经做的补偿（`examples/core-shared.ts` 的 `verifyOffscreen` 按后端翻行序、
- * `examples/core-landscape.ts` 的 `rowsBottomUp`），否则会双重翻转、把现有像素基线全部打翻。
- * 正解是在渲染进纹理的 pass 上翻转 Y（画布默认帧缓冲不要翻，它没有「纹素行序」这个概念）。
+ * 本文件**不做任何翻转**：{@link WebGL2RenderTarget.rowOrder} 如实返回 `'bottomUp'`，
+ * 由调用方决定要不要统一（core 层用 `mat4.flipClipY` 翻投影，或读回后自己反行序；
+ * 便捷层 `Renderer` 默认自动翻投影）。为什么不在这一层翻：GL 不允许负高度的 `viewport`，
+ * 唯一能表达「渲染进纹理时把 Y 翻过来」的地方是**投影矩阵或顶点着色器**，而渲染目标不掌握
+ * 调用方的相机 —— 它翻不了，也不该假装翻了。
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { TextureUsage } from '../../core/enums/TextureUsage.js';
+import { RowOrder } from '../../core/render/RenderTarget.js';
 import { nextId } from '../../utils/id.js';
 import { glFormat } from '../utils/glFormatMap.js';
 import { resolveClearColor } from '../utils/glEnumMap.js';
@@ -117,6 +118,12 @@ export class WebGL2RenderTarget implements RenderTarget {
   readonly depthFormat: TextureFormat | null;
   readonly sampleCount: number;
   readonly mipLevelCount: number;
+  /**
+   * GL 的原生行序：FBO 附着点的原点在左下，纹理自下而上存储，纹素第 0 行是画面底端。
+   *
+   * 本层如实上报，**不做翻转**（要统一请看 `RenderTarget.RowOrder` 的说明）。
+   */
+  readonly rowOrder: RowOrder = RowOrder.BottomUp;
 
   private readonly gl: WebGL2RenderingContext;
   private readonly state: GlStateCache;

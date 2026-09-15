@@ -137,15 +137,16 @@ function toBytes(color: Color): [number, number, number] {
  *   行序**（这正是 WebGPU 的纹素拷贝语义：缓冲第 0 行 = 纹素行 `origin.y`；读回**上传过**的纹理时
  *   两个后端本来就完全一致），于是同一个「渲染进纹理」的画面，WebGL2 读回来会整体上下颠倒。
  *
- * 本函数回答的是「**画面上**中心是什么颜色、有多少像素被点亮」，所以在 WebGL2 上把读回的行序翻成
- * 屏幕行序，两个后端的 `data-*-pixel` / `data-*-lit-pixels` 才能直接对比
- * （`scripts/verify-texture-parity.mjs` 就按这个口径做跨后端断言）。真实合成截图
- * （`scripts/capture-screenshot.mjs`）永远是从上往下的那一份，口径一致。
+ * core 层**如实暴露**这件事而不代劳：`RenderTarget.rowOrder` 就是该目标的后端原生行序
+ * （WebGPU = `'topLeft'`、WebGL2 = `'bottomUp'`）。要统一有两种正规写法：
  *
- * 注意这只补偿了**读回**这一处：「渲染进纹理之后再把这张纹理当纹理采样」在 WebGL2 上仍然是上下
- * 颠倒的（采样走纹理坐标，库层没有插手的余地）。根源在后端渲染路径（GL 的渲染目标自下而上存储），
- * 不是读回路径，已经作为后端缺陷单独反馈。一旦后端把渲染目标的行序修成与 WebGPU 一致，
- * **这里必须删掉这次翻转**，否则会翻两次。
+ * 1. **在渲染侧翻投影**（推荐，`gfx` 的 `Renderer` 默认就是这么做的）：
+ *    `mat4.flipClipY(projection, projection)` 把投影在裁剪空间 Y 取反，渲染结果直接符合本库的
+ *    「纹素 (0,0) 在左上」约定；**代价是它同时反转三角绕序**，开背面剔除时要把 `frontFace`
+ *    一起换过来。本函数拿不到调用方的投影（`draw` 回调自己造矩阵），所以走不了这一条。
+ * 2. **在读回侧反行序**（本函数采用的）：用公开属性 `target.rowOrder` 判断，而不是写
+ *    `device.backend === 'webgl2'` —— 后端多一种行序时这里自动跟上。真实合成截图
+ *    （`scripts/capture-screenshot.mjs`）永远是从上往下的那一份，两者口径一致。
  */
 export async function verifyOffscreen(
   device: Device,
@@ -189,6 +190,9 @@ export async function verifyOffscreen(
   draw(pass);
   pass.end();
 
+  // 读回之前先把原生行序记下来：目标是后面才销毁的。
+  const bottomUp = target.rowOrder === 'bottomUp';
+
   const copyEncoder = device.createCommandEncoder({ label: 'example-copy' });
   copyEncoder.copyTextureToBuffer(
     { texture: target.colors[0]!, origin: { x: 0, y: 0 } },
@@ -203,11 +207,11 @@ export async function verifyOffscreen(
   readback.destroy();
   target.destroy();
 
-  // 去掉每行末尾为 256 对齐加的填充，得到紧凑的像素；WebGL2 上顺便翻成屏幕行序（理由见函数说明）。
-  const flipRows = device.backend === 'webgl2';
+  // 去掉每行末尾为 256 对齐加的填充，得到紧凑的像素；原生自下而上的目标顺便翻成屏幕行序
+  //（判据用公开属性 `rowOrder`，理由见函数说明）。
   const pixels = new Uint8Array(rowBytes * height);
   for (let y = 0; y < height; y++) {
-    const targetRow = flipRows ? height - 1 - y : y;
+    const targetRow = bottomUp ? height - 1 - y : y;
     pixels.set(raw.subarray(y * bytesPerRow, y * bytesPerRow + rowBytes), targetRow * rowBytes);
   }
 

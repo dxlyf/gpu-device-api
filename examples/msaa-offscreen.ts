@@ -17,6 +17,17 @@
  * 页面内的 `readPixels` / `drawImage` 在合成后不可信（`preserveDrawingBuffer: false` 时为黑），
  * 所以这一页**不做**页内读回，也不下任何像素结论 —— 结论只来自截图统计。
  *
+ * ## 行序：这一页顺便演示 **core 层的正规写法**
+ *
+ * 这一页是 core 示例，所以它自己负责行序：`RenderTarget.rowOrder` 如实给出离屏目标的后端原生行序
+ * （WebGL2 = `'bottomUp'`、WebGPU = `'topLeft'`），需要统一时用公开 helper `mat4.flipClipY`
+ * 把投影在裁剪空间 Y 取反 —— 这里就是 `u.projection`：`'bottomUp'` 的目标上它是
+ * `diag(1, -1, 1, 1)`，否则是单位矩阵。于是离屏纹理的纹素行序两个后端一致，
+ * 上屏那一趟（画到 canvas，**不翻**）两个后端可以共用同一个 uv 公式。
+ *
+ * 这也是 gfx 层那条「自动翻转只对使用库提供投影 uniform 的材质有效」限制的 core 层对应写法：
+ * 顶点位置写死（`gl_Position = vec4(常量)`）的着色器没法被外部翻投影，只能自己带上这一步。
+ *
  * ## 查询参数
  *
  * - `?backend=webgl2|webgpu|auto`（默认 `auto`，网页右上角会写明实际后端）
@@ -27,6 +38,7 @@
  * - `data-msaa-result="pass"` —— 渲染完成（无论 MSAA 是否可用）；`unsupported` 表示采样数
  *   不被支持并给出了明确错误；`fail` 表示出现了非预期异常。
  * - `data-msaa-samples` / `data-msaa-actual-samples` / `data-msaa-max-samples` / `data-msaa-error`
+ * - `data-msaa-target-row-order` / `data-msaa-projection-flipped`：本页实际用的行序与是否翻了投影
  */
 
 import { createDeviceWithAdapter } from '../src/factories/index.js';
@@ -34,6 +46,8 @@ import { BufferUsage } from '../src/core/enums/BufferUsage.js';
 import { ShaderStage } from '../src/core/enums/ShaderStage.js';
 import { BindingType } from '../src/core/enums/BindingType.js';
 import { TextureUsage } from '../src/core/enums/TextureUsage.js';
+import { mat4 } from '../src/utils/index.js';
+import { createUniformBinding } from './core-shared.js';
 import type { Device } from '../src/core/Device.js';
 import type { CanvasContext } from '../src/core/CanvasContext.js';
 
@@ -46,13 +60,18 @@ const BAR_COLOR: readonly [number, number, number, number] = [1, 1, 1, 1];
 /** 长条数量：每条都有长斜边，数量越多中间色像素越多，统计越稳。 */
 const BAR_COUNT = 18;
 
+/**
+ * 长条顶点的位置与颜色**都来自顶点缓冲**，但投影来自 `u.projection`（不是写死的裁剪坐标）：
+ * 那样「渲染进纹理时统一行序」才有地方落 —— 见文件头的说明。
+ */
 const VERTEX_GLSL = `
 layout(location = 0) in vec2 position;
 layout(location = 1) in vec4 color;
+layout(std140) uniform SceneUniforms { mat4 projection; } u;
 out vec4 vColor;
 void main() {
   vColor = color;
-  gl_Position = vec4(position, 0.0, 1.0);
+  gl_Position = u.projection * vec4(position, 0.0, 1.0);
 }
 `;
 
@@ -65,6 +84,12 @@ void main() {
 `;
 
 const SCENE_WGSL = `
+struct SceneUniforms {
+  projection: mat4x4f,
+}
+
+@group(0) @binding(0) var<uniform> u: SceneUniforms;
+
 struct VSOut {
   @builtin(position) pos: vec4f,
   @location(0) color: vec4f,
@@ -72,7 +97,7 @@ struct VSOut {
 
 @vertex fn vsMain(@location(0) position: vec2f, @location(1) color: vec4f) -> VSOut {
   var out: VSOut;
-  out.pos = vec4f(position, 0.0, 1.0);
+  out.pos = u.projection * vec4f(position, 0.0, 1.0);
   out.color = color;
   return out;
 }
@@ -91,12 +116,16 @@ struct VSOut {
  * 这里刻意用显式顶点属性而不是 `gl_VertexID`：WebGL2 的顶点属性位置来自 GLSL 的
  * `layout(location = N)`，后端会拿反射结果去和 `vertex.buffers` 交叉校验；
  * 用属性就两边完全一致，也不会踩到「顶点着色器声明了 location -1」这类反射差异。
+ *
+ * **uv 的 v 要取反**：`corner.y = 0` 落在裁剪空间底部（也就是画布底边），而本库的约定是
+ * 「纹素第 0 行 = 图像顶部」，所以这里要取纹素的最后一行。因为离屏那一趟已经把行序统一过
+ * （见文件头），这一步两个后端用**同一个公式**，不再有任何后端分支。
  */
 const BLIT_VERTEX_GLSL = `
 layout(location = 0) in vec2 corner;
 out vec2 vUv;
 void main() {
-  vUv = corner;
+  vUv = vec2(corner.x, 1.0 - corner.y);
   gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 `;
@@ -121,9 +150,9 @@ struct VSOut {
 
 @vertex fn vsMain(@location(0) corner: vec2f) -> VSOut {
   var out: VSOut;
-  out.pos = vec4f(corner * 2.0 - 1.0, 0.0, 1.0);
-  // WebGPU 的纹理原点在左上、裁剪空间 y 向上，所以这里翻转 v 让两个后端画面一致。
+  // 与 GLSL 那边逐字一致（理由见那边）：画布那一趟不翻，两个后端共用同一个 uv 公式。
   out.uv = vec2f(corner.x, 1.0 - corner.y);
+  out.pos = vec4f(corner * 2.0 - 1.0, 0.0, 1.0);
   return out;
 }
 
@@ -244,26 +273,6 @@ async function run(): Promise<void> {
     label: 'scene',
     code: { vs: VERTEX_GLSL, fs: FRAGMENT_GLSL, wgsl: SCENE_WGSL },
   });
-  const scenePipeline = device.createRenderPipeline({
-    label: 'scene',
-    vertex: {
-      module: sceneModule,
-      entryPoint: 'vsMain',
-      buffers: [
-        {
-          arrayStride: VERTEX_STRIDE,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x2' },
-            { shaderLocation: 1, offset: 8, format: 'float32x4' },
-          ],
-        },
-      ],
-    },
-    fragment: { module: sceneModule, entryPoint: 'fsMain' },
-    primitive: { topology: 'triangle-list', cullMode: 'none' },
-    depthStencil: { format: null },
-  });
-
   /* ---- 1. 离屏目标：请求 sampleCount > 1 ------------------------------------------------ */
 
   let target;
@@ -288,6 +297,46 @@ async function run(): Promise<void> {
   }
   setData('msaaActualSamples', String(target.sampleCount));
   diagnostics.push(`actual sampleCount=${target.sampleCount}`);
+
+  /*
+   * 行序：core 不代劳，这一页自己来 —— 目标原生自下而上（WebGL2）时用公开 helper
+   * `mat4.flipClipY` 把投影在裁剪空间 Y 取反，于是渲染结果的纹素行序与 WebGPU 一致。
+   * 上屏那一趟画的是 canvas，**不翻**，两个后端共用同一个 uv 公式（见 BLIT_VERTEX_GLSL）。
+   */
+  const projection = mat4.create();
+  const flipRows = target.rowOrder === 'bottomUp';
+  if (flipRows) mat4.flipClipY(projection, projection);
+  setData('msaaTargetRowOrder', target.rowOrder);
+  setData('msaaProjectionFlipped', String(flipRows));
+  diagnostics.push(
+    `离屏目标原生行序 rowOrder=${target.rowOrder} → 投影${flipRows ? '已' : '未'}在裁剪空间 Y 取反`,
+  );
+
+  const sceneUniforms = createUniformBinding(device, { name: 'SceneUniforms', size: 64 });
+  sceneUniforms.write(projection);
+  const scenePipeline = device.createRenderPipeline({
+    label: 'scene',
+    layout: device.createPipelineLayout({
+      label: 'scene-pipeline-layout',
+      bindGroupLayouts: [sceneUniforms.layout],
+    }),
+    vertex: {
+      module: sceneModule,
+      entryPoint: 'vsMain',
+      buffers: [
+        {
+          arrayStride: VERTEX_STRIDE,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: 'float32x2' },
+            { shaderLocation: 1, offset: 8, format: 'float32x4' },
+          ],
+        },
+      ],
+    },
+    fragment: { module: sceneModule, entryPoint: 'fsMain' },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+    depthStencil: { format: null },
+  });
 
   /* ---- 2. 全屏贴图管线（采样 resolve 出来的纹理）------------------------------------------ */
 
@@ -367,6 +416,7 @@ async function run(): Promise<void> {
     colorAttachments: offscreen.colorAttachments,
   });
   passA.setPipeline(scenePipeline);
+  passA.setBindGroup(0, sceneUniforms.bindGroup);
   passA.setVertexBuffer(0, vertexBuffer, 0, bars.byteLength);
   passA.draw({ vertexCount: bars.length / 6 });
   passA.end(); // WebGL2 在这里 blit resolve；WebGPU 在通道结束时自动 resolve
