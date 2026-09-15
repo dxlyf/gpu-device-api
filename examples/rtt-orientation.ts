@@ -764,13 +764,15 @@ function appendOrientation(lines: string[], prefix: string, title: string, orien
 /** 读回并下结论：`rttResult` 只看**统一后**的那一份。 */
 async function finish(report: LayerReport): Promise<void> {
   const unified = orientationOf(await readRows(report.device, report.unified));
+  const flippedLabel = report.layer === 'gfx' ? 'gfx-auto' : String(report.projectionFlipped);
+  setData('rttProjectionFlipped', flippedLabel);
   const lines: string[] = [
     `layer=${report.layer} backend=${report.device.backend}`,
     `adapter=${report.adapter}`,
     `离屏 ${SIZE}x${SIZE} rgba8unorm → 全屏 1:1 最近邻贴图`,
     `离屏目标原生行序 rowOrder=${report.unified.rowOrder}（core 如实暴露，不自动翻转）`,
-    `rttProjectionFlipped=${
-      report.layer === 'gfx' ? 'gfx-auto（页面没有翻转代码）' : String(report.projectionFlipped)
+    `rttProjectionFlipped=${flippedLabel}${
+      report.layer === 'gfx' ? '（页面没有翻转代码）' : ''
     }`,
     '',
   ];
