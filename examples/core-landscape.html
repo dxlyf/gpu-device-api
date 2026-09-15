@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — core 层示例：风景（天空/太阳/山/树林/河）</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: #0b0e13;
+        color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #view { flex: 1 1 auto; width: 100%; display: block; min-height: 180px; }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .grow { flex: 1; }
+      #stats { color: #7f8fa4; }
+      a { color: #6fa8ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .error { color: #ff8b8b; }
+      /* lil-gui 默认固定在右上角、可能盖住画布：截图统计要看画布区域，所以右移一点
+         并留出页脚高度，尽量落在画布之外（自检本身不依赖 GUI，`?gui=0` 可完全关掉）。 */
+      .lil-gui.root { top: 8px; right: 8px; z-index: 10; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span class="grow"></span>
+      <span id="stats"></span>
+      <span><a href="./gallery.html">示例汇总</a> · <a href="./index.html">demo</a> · <a href="./core-triangle.html">三角形</a> · <a href="./core-box.html">立方体</a> · <a href="./core-texture.html">贴图</a> · <a href="./core-instancing.html">实例化</a> · <a href="./core-batch.html">批量</a> · <a href="./core-landscape.html">风景</a></span>
+    </footer>
+    <script type="module" src="./core-landscape.ts"></script>
+  </body>
+</html>
