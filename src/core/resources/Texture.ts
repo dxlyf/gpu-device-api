@@ -1,4 +1,25 @@
-/** GPU texture 资源。对应 WebGPU 的 `GPUTexture`。 */
+/**
+ * GPU texture 资源。对应 WebGPU 的 `GPUTexture`。
+ *
+ * **纹理坐标与行序约定（两个后端必须一致，这是「换后端就能画」的前提）**
+ *
+ * - 纹理坐标 `v = 0` 对应纹素第 0 行，`v` 增大就是纹素行号增大；纹素 (0, 0) 在**左上角**。
+ *   也就是说本库站在 **WebGPU 那一边**（`v = 0` 是图像顶部），而不是 GL 教科书里的「左下」。
+ * - `Queue.writeTexture` / `CommandEncoder.copyBufferToTexture` **不翻转**：主机数据的第 0 行
+ *   写进纹素第 0 行。WebGL2 的实现是 `texSubImage2D`（只设置 `UNPACK_ALIGNMENT` / `UNPACK_ROW_LENGTH`，
+ *   从不设置 `UNPACK_FLIP_Y_WEBGL`），WebGPU 是原生 `writeTexture`，两边天然一致。
+ * - `Queue.copyExternalImageToTexture(..., flipY)` 的 `flipY` 在两个后端语义相同：
+ *   WebGL2 设 `UNPACK_FLIP_Y_WEBGL`，WebGPU 传原生 `flipY` 选项，默认都是 `false`。
+ * - `CommandEncoder.copyTextureToBuffer` 的缓冲区第 0 行 = 纹素行 `origin.y`，两个后端一致
+ *   （WebGL2 走 `gl.readPixels`，它就从 `origin.y` 起按纹素行序逐行读出，实现里不做任何翻转）。
+ *
+ * 这套约定对**上传过的**纹理已经两个后端一致（`examples/core-texture-mipmap.ts` 会把两级 mip
+ * 的真实字节在两个后端上读回并逐纹素比对）。**唯一还没对齐的是「渲染进纹理」**：WebGL2 的渲染
+ * 目标自下而上存储（GL 的窗口原点在左下），WebGPU 自上而下，于是同一个渲染结果的纹素行序在两个
+ * 后端相反 —— 读回与采样都会上下颠倒。正解是在 WebGL2 的渲染路径里按目标类型翻转 Y（只翻渲染进
+ * 纹理的那些 pass），在那之前，读回渲染结果的调用方必须自己按后端翻行序
+ * （`examples/core-shared.ts` 的 `verifyOffscreen` 就是这么做的，并注明了修好后要删掉）。
+ */
 
 import type { Disposable } from '../../utils/Disposable.js';
 import type { TextureFormat } from '../enums/TextureFormat.js';

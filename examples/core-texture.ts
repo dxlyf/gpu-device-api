@@ -10,6 +10,18 @@
  * `BindGroupLayoutEntry.name` 一致，而 sampler 要按「`<纹理名>_sampler`」或
  * 「纹理 binding + 1」与纹理配对 —— 这里用的是 `albedo` + `albedo_sampler`。
  *
+ * **纹理的 Y 方向约定（本页最容易看错的地方）**：
+ *
+ * - 纹理坐标 `v = 0` 指向纹素第 0 行；`buildCheckerPixels()` 写出来的**第 0 行就是数据的第 0 行**。
+ * - `queue.writeTexture()` 两个后端**都不翻转**：WebGPU 的纹素 (0, 0) 在左上，GL 的纹素 (0, 0) 在
+ *   「数据第一行」，两者落到同一个 `v = 0` 上，所以同一份像素在两个后端画出来是一样的。
+ * - 本页的四边形按「图像式」UV 铺（`buildQuadMesh` 把 `v = 0` 放在屏幕上方），因此画面上方显示的
+ *   就是数据第 0 行。逐像素实测两个后端的画布截图一致率 99.97%（容差 ±8），详见
+ *   `scripts/verify-texture-parity.mjs`。
+ * - 图像来源（`HTMLImageElement` / `ImageBitmap` 之类）要走 `copyExternalImageToTexture`，它的
+ *   `flipY` 参数在两个后端语义相同：WebGL2 用 `UNPACK_FLIP_Y_WEBGL`，WebGPU 用原生 `flipY` 选项。
+ *   gfx 便捷层（`src/gfx/Texture.ts`）默认给图像翻转、给裸像素不翻转。
+ *
  * 查询参数：`?backend=webgl2|webgpu|auto&spin=0&verify=1`
  */
 
@@ -247,8 +259,8 @@ async function main(): Promise<void> {
   const view = mat4.create();
   const viewProjection = mat4.create();
 
-  const updateMatrices = (angle: number): void => {
-    const aspect = context.height === 0 ? 1 : context.width / context.height;
+  const updateMatrices = (angle: number, aspectOverride?: number): void => {
+    const aspect = aspectOverride ?? (context.height === 0 ? 1 : context.width / context.height);
     mat4.perspective(projectionGL, Math.PI / 4, aspect, 0.1, 100);
     mat4.perspectiveZO(projectionZO, Math.PI / 4, aspect, 0.1, 100);
     mat4.lookAt(view, vec3.fromValues(0, 0, 3), vec3.fromValues(0, 0, 0), vec3.fromValues(0, 1, 0));
@@ -305,9 +317,20 @@ async function main(): Promise<void> {
   });
 
   if (query.get('verify') === '1') {
-    // 棋盘格必然产生多种颜色：颜色只有一种就说明纹理没采样成功。
+    /*
+     * 自检口径（跨后端可比的像素断言靠它）：
+     *
+     * 1. 棋盘格必然产生多种颜色：颜色只有一种就说明纹理没采样成功（`requireVariety`）。
+     * 2. 离屏目标是 96×96 的正方形，所以这里**显式把宽高比钉成 1**，而不是用画布的宽高比。
+     *    否则同一份代码在不同窗口尺寸下会投影出不同形状，`data-texture-pixel` 跟着漂
+     *    （同一份代码实测：画布 940×431 时中心是 51,100,184，500×180 时是 50,100,184，
+     *    1574×672 时也是 50,100,184）。像素自检要的是「画了什么」，不该随页面布局变。
+     * 3. 读回的行序由 `verifyOffscreen` 统一成屏幕行序（见那里的说明）：WebGL2 的渲染目标是
+     *    自下而上存储的，不翻的话读回的第 48 行其实是画面第 47 行，中心像素会从 204,157,91
+     *    变成 51,100,184（正好是棋盘格相邻两格的颜色），而 WebGPU 一直是 208,158,89。
+     */
     const stats = await verifyOffscreen(device, 96, 96, CLEAR, (pass) => {
-      updateMatrices(angle);
+      updateMatrices(angle, 1);
       drawQuad(pass);
     });
     reportVerify('texture', stats, true);

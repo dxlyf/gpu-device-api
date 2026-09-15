@@ -127,6 +127,25 @@ function toBytes(color: Color): [number, number, number] {
  * `usage` 要带 `CopySrc`（否则 WebGPU 不给拷）、深度格式用 `depth32float`（`usage` 会同时作用在
  * 深度附件上，而 `depth24plus` 在 WebGPU 里不能参与拷贝）、读回 buffer 用 `MapRead | CopyDst`
  *（WebGPU 规定 MapRead 只能与 CopyDst 组合）。
+ *
+ * **行序：两个后端唯一不一样的地方（务必读完）**
+ *
+ * - **WebGPU**：附件的纹素 (0, 0) 在左上角，渲染出来的画面第 0 行就落在纹素第 0 行；
+ *   `copyTextureToBuffer` 从 `origin.y` 起按纹素行序往下写，所以读回缓冲的第 0 行是**画面顶端**。
+ * - **WebGL2**：GL 的窗口原点在左下，附着在 FBO 上的纹理同理 —— 纹素第 0 行存的是画面**底端**。
+ *   后端的 `copyTextureToBuffer` 用 `gl.readPixels` 从 `origin.y` 起逐行读出，写进缓冲时**不打乱
+ *   行序**（这正是 WebGPU 的纹素拷贝语义：缓冲第 0 行 = 纹素行 `origin.y`；读回**上传过**的纹理时
+ *   两个后端本来就完全一致），于是同一个「渲染进纹理」的画面，WebGL2 读回来会整体上下颠倒。
+ *
+ * 本函数回答的是「**画面上**中心是什么颜色、有多少像素被点亮」，所以在 WebGL2 上把读回的行序翻成
+ * 屏幕行序，两个后端的 `data-*-pixel` / `data-*-lit-pixels` 才能直接对比
+ * （`scripts/verify-texture-parity.mjs` 就按这个口径做跨后端断言）。真实合成截图
+ * （`scripts/capture-screenshot.mjs`）永远是从上往下的那一份，口径一致。
+ *
+ * 注意这只补偿了**读回**这一处：「渲染进纹理之后再把这张纹理当纹理采样」在 WebGL2 上仍然是上下
+ * 颠倒的（采样走纹理坐标，库层没有插手的余地）。根源在后端渲染路径（GL 的渲染目标自下而上存储），
+ * 不是读回路径，已经作为后端缺陷单独反馈。一旦后端把渲染目标的行序修成与 WebGPU 一致，
+ * **这里必须删掉这次翻转**，否则会翻两次。
  */
 export async function verifyOffscreen(
   device: Device,
@@ -184,10 +203,12 @@ export async function verifyOffscreen(
   readback.destroy();
   target.destroy();
 
-  // 去掉每行末尾为 256 对齐加的填充，得到紧凑的像素。
+  // 去掉每行末尾为 256 对齐加的填充，得到紧凑的像素；WebGL2 上顺便翻成屏幕行序（理由见函数说明）。
+  const flipRows = device.backend === 'webgl2';
   const pixels = new Uint8Array(rowBytes * height);
   for (let y = 0; y < height; y++) {
-    pixels.set(raw.subarray(y * bytesPerRow, y * bytesPerRow + rowBytes), y * rowBytes);
+    const targetRow = flipRows ? height - 1 - y : y;
+    pixels.set(raw.subarray(y * bytesPerRow, y * bytesPerRow + rowBytes), targetRow * rowBytes);
   }
 
   const background = toBytes(clear);

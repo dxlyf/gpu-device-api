@@ -7,6 +7,19 @@
  *
  * WebGL2 没有 texture view 对象，`createView()` 返回的是**记录子资源范围**的轻量包装，
  * 真正的 GL 纹理句柄还是同一个。
+ *
+ * **本后端的纹理行序（与 WebGPU 对齐的那一部分，以及没对齐的那一处）**
+ *
+ * - 上传：`gl.texSubImage2D` 把主机数据的第 0 行写进纹素第 0 行，**不翻**（本后端的
+ *   `writeTexture` 从不设置 `UNPACK_FLIP_Y_WEBGL`；只有 `copyExternalImageToTexture` 会按它的
+ *   `flipY` 参数设置它）。所以「数据第 0 行 = 纹素第 0 行 = `v = 0`」与 WebGPU 完全一致。
+ * - 图像来源：`copyExternalImageToTexture` 显式设置 `UNPACK_FLIP_Y_WEBGL`，语义与 WebGPU 的
+ *   `flipY` 选项一致（默认都关）。
+ * - **渲染目标（未对齐）**：GL 的窗口原点在左下角，附着到 FBO 上的纹理因此是**自下而上**存的 ——
+ *   纹素第 0 行是画面底端。WebGPU 的附件纹素 (0, 0) 在左上角。于是同一个渲染结果，
+ *   WebGL2 读回 / 采样出来的行序与 WebGPU 相反。
+ *   修法只能落在渲染路径（按目标类型把 Y 翻过来，例如给非默认帧缓冲注入 `gl_Position.y` 取反的
+ *   顶点着色器变体或等价手段 —— WebGL2 不允许负高度的 `gl.viewport`），纹理资源这一层无能为力。
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';

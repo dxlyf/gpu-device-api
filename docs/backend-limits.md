@@ -143,3 +143,32 @@ WebGPU 侧由 `createRenderTarget` 的格式/采样数校验给出同样的效�
 
 诊断接口：`device.trackedResourceCount`（不属于 core 的 `Device` 接口，仅供诊断与测试）。
 两个后端各有一个回归测试：`test/webgpu-resource-tracking.test.ts`、`test/webgl2-resource-tracking.test.ts`。
+
+## 五、渲染目标的行序（唯一一处还没对齐的纹理差异）
+
+本库的纹理约定站在 **WebGPU** 这一边：纹素 (0, 0) 在左上角，纹理坐标 `v = 0` 指向纹素第 0 行，
+`queue.writeTexture` 把主机数据的第 0 行原样放进纹素第 0 行（两个后端都不翻转），
+`copyExternalImageToTexture` 的 `flipY` 在两个后端语义相同。
+
+**上传与读回**都已经对齐：WebGL2 的上传不设 `UNPACK_FLIP_Y_WEBGL`，读回走 `gl.readPixels`
+且不反行序，缓冲区第 0 行同样是「纹素行 `origin.y`」——这一点由 `examples/core-texture-mipmap.ts`
+在两后端之间逐纹素比对 mip 的真实字节佐证。
+
+**没对齐的是「渲染进纹理」**：GL 的窗口原点在左下角，附着到 FBO 上的纹理因此是自下而上存储的，
+纹素第 0 行是画面**底端**；WebGPU 的附件纹素 (0, 0) 在左上角。两边都按纹素行序如实输出，于是：
+
+- 读回一个**渲染出来**的纹理，WebGL2 的结果相对 WebGPU 整体上下颠倒（`examples/core-shared.ts`
+  的 `verifyOffscreen` 目前按后端翻一次行序，并在注释里写明后端修好后要删掉）；
+- 把渲染出来的纹理**当纹理采样**，WebGL2 上也是上下颠倒的（采样走纹理坐标，库层无从插手）。
+
+正解只能落在渲染路径：WebGL2 在渲染到非默认帧缓冲时把 Y 翻过来（例如按目标类型给顶点着色器
+注入 `gl_Position.y` 取反的变体；WebGL2 不允许负高度的 `gl.viewport`，所以没有更省事的办法）。
+在那之前，跨后端读回渲染结果的调用方必须自己按 `device.backend === 'webgl2'` 翻一次行序 ——
+`examples/core-landscape.ts` 的 `readOffscreen(..., rowsBottomUp)` 就是这么做的。
+
+跨后端的像素回归检查：`node scripts/verify-texture-parity.mjs --chrome <chrome.exe> --url ...`
+（同一页分别在两个后端跑 `?verify=1&spin=0`，比对 `data-*-pixel` 与 `data-*-lit-pixels`）；
+「上屏结果」的量化判据用 `scripts/capture-screenshot.mjs` 各抓一张合成截图，再交给
+`scripts/compare-screenshots.mjs`（它会给出原样 / 上下翻转 / 左右镜像 / 通道颠倒各自的一致率，
+翻转一致率异常高就是行序反了的决定性证据）。
+

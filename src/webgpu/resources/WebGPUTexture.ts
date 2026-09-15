@@ -8,6 +8,13 @@
  *   back buffer 的帧纹理）包起来。这类 texture 由 canvas 拥有，`destroy()` 不会销毁它。
  *
  * view 的创建与缓存也在本类：同一个 subresource 组合只建一次 view，并随 texture 一起释放。
+ *
+ * **行序（本后端就是「基准」那一侧）**：WebGPU 规定纹素 (0, 0) 在左上角，纹理坐标 `v = 0`
+ * 指向纹素第 0 行。`queue.writeTexture` 不翻数据（数据第 0 行 → 纹素第 0 行），
+ * `copyExternalImageToTexture` 的 `flipY` 显式控制是否把来源的上下翻过来，
+ * `copyTextureToBuffer` 的缓冲区第 0 行 = 纹素行 `origin.y`。本库的整体约定以这套语义为准
+ * （见 `core/resources/Texture.ts` 的说明），WebGL2 后端在上传与读回上已经对齐，
+ * 只有「渲染进纹理」还差一处（GL 的渲染目标自下而上存储）。
  */
 
 import type { Texture, TextureDescriptor, TextureDimension } from '../../core/resources/Texture.js';
