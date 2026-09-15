@@ -564,7 +564,7 @@ describe('gfx：渲染进纹理时自动统一行序（WebGL2）', () => {
     vi.mocked(prewarmWebGL2RenderPipeline).mockReset();
   });
 
-  it('离屏（bottomUp）通道：翻投影 + 翻 frontFace；同一帧切回画布通道后两者都恢复', async () => {
+  it('离屏（bottomUp）通道：翻投影 + 翻 frontFace；同一帧切回画布通道后两者都恢复，相机矩阵始终没被改', async () => {
     const fake = createFakeGfxDevice();
     const renderer = await createRenderer({
       backend: 'webgl2',
@@ -580,15 +580,32 @@ describe('gfx：渲染进纹理时自动统一行序（WebGL2）', () => {
     const material = renderer.createMaterial(defineCameraMaterial('lit'));
     const geometry = triangleGeometry(renderer);
 
+    /*
+     * 别名（aliasing）防线：翻投影**必须**写进渲染器自己的 scratch，不能就地改相机的那两份矩阵。
+     * `projectionMatrix` / `projectionViewMatrix` 是相机内部缓冲**本身**，就地改会让同一帧里
+     * 紧接着的 canvas 通道也拿到翻转后的矩阵（而且相机的缓存被永久改坏）。这里在**帧前**拷快照，
+     * 帧中、帧后各比对一次。
+     */
+    const cameraProjectionBefore = Array.from(perspective.projectionMatrix);
+    const cameraProjectionViewBefore = Array.from(perspective.projectionViewMatrix);
+
     // 离屏目标：WebGL2 就是 `bottomUp` —— gfx 应当自动翻投影并翻转绕序。
     renderer.beginFrame({ target: fakeTarget('bottomUp') });
     renderer.draw(geometry, { material });
+    // 帧中（离屏 pass 已经画完）：相机的矩阵必须还是原样。
+    expect(Array.from(perspective.projectionMatrix)).toEqual(cameraProjectionBefore);
+    expect(Array.from(perspective.projectionViewMatrix)).toEqual(cameraProjectionViewBefore);
     // 同一个通道里连续两次 draw：第二次不该再建管线（缓存命中）。
     renderer.draw(geometry, { material });
     // 切回画布通道（附件不是纹理）：这里开始必须不翻。
     renderer.beginPass();
     renderer.draw(geometry, { material });
+    expect(Array.from(perspective.projectionMatrix)).toEqual(cameraProjectionBefore);
+    expect(Array.from(perspective.projectionViewMatrix)).toEqual(cameraProjectionViewBefore);
     renderer.endFrame();
+    // 帧后依然原样：翻转从来没有落到相机自己的缓冲上。
+    expect(Array.from(perspective.projectionMatrix)).toEqual(cameraProjectionBefore);
+    expect(Array.from(perspective.projectionViewMatrix)).toEqual(cameraProjectionViewBefore);
 
     const offscreenPipeline = fake.pipelineOf(0, 0);
     const canvasPipeline = fake.pipelineOf(1, 0);
@@ -611,8 +628,8 @@ describe('gfx：渲染进纹理时自动统一行序（WebGL2）', () => {
     // 「翻过」这件事是真的发生了：两份矩阵不相等。
     expect(Array.from(offscreenWrite)).not.toEqual(Array.from(canvasWrite));
 
-    // 相机自己的矩阵没有被改（同一帧里画布那份仍然正确）。
-    expectMatrixClose(perspective.projectionViewMatrix, canvasWrite, 6);
+    // 画布那一份逐字节等于帧前的快照（相机的矩阵没有被那次翻转污染过）。
+    expectMatrixClose(canvasWrite, cameraProjectionViewBefore, 6);
 
     renderer.destroy();
   });
