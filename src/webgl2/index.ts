@@ -19,6 +19,14 @@ export { WebGL2Buffer } from './resources/WebGL2Buffer.js';
 export { WebGL2Texture, glTextureTarget } from './resources/WebGL2Texture.js';
 export { WebGL2TextureView } from './resources/WebGL2TextureView.js';
 export { WebGL2Sampler } from './resources/WebGL2Sampler.js';
+export {
+  ANY_SAMPLES_PASSED,
+  TIMER_QUERY_EXTENSION,
+  WebGL2QuerySet,
+  asWebGL2QuerySet,
+  getTimerQueryExtension,
+  type WebGL2TimerQueryExtension,
+} from './resources/WebGL2QuerySet.js';
 export { WebGL2ShaderModule } from './resources/WebGL2ShaderModule.js';
 
 export { WebGL2BindGroupLayout, assertLayoutSupportedByWebGL2 } from './binding/WebGL2BindGroupLayout.js';
@@ -58,6 +66,12 @@ export { FramebufferCache } from './render/framebuffer-cache.js';
 
 export { WebGL2Queue } from './sync/WebGL2Queue.js';
 export { WebGL2Fence } from './sync/WebGL2Fence.js';
+export {
+  DEFAULT_QUERY_POLL_TIMEOUT_MS,
+  WebGL2QueryResult,
+  isTimestampQueryResult,
+  type WebGL2QueryResultInit,
+} from './sync/WebGL2QueryResult.js';
 
 export {
   GL_ADDRESS_MODES,

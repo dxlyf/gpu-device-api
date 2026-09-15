@@ -32,11 +32,15 @@ export interface WebGPURenderPassLayout {
  * - `loadOp` / `storeOp` 省略时按 `'clear'` / `'store'` 处理（`GPURenderPassColorAttachment`
  *   要求这两个字段必填，而 core 里它们是可选的）；
  * - 所有 attachment 的 sampleCount 必须一致（WebGPU 的硬性要求），否则这里直接报错；
- * - 多重采样 attachment 必须有 `resolveTarget`（或 `storeOp: 'discard'`）。
+ * - 多重采样 attachment 必须有 `resolveTarget`（或 `storeOp: 'discard'`）；
+ * - `timestampWrites` 需要 `timestamp-query` 与 `timestamp-query-inside-passes`，缺一个就报错
+ *   （见 {@link toGPUTimestampWrites}）。
  */
-export declare function toGPURenderPassDescriptor(descriptor: RenderPassDescriptor): {
+export declare function toGPURenderPassDescriptor(descriptor: RenderPassDescriptor, device: WebGPUDevice): {
     native: GPURenderPassDescriptor;
     layout: WebGPURenderPassLayout;
+    /** 该 pass 是否声明了 occlusionQuerySet（决定 beginOcclusionQuery 是否可用）。 */
+    hasOcclusionQuerySet: boolean;
 };
 export declare class WebGPURenderPassEncoder implements RenderPassEncoder {
     readonly label: string;
@@ -44,7 +48,10 @@ export declare class WebGPURenderPassEncoder implements RenderPassEncoder {
     readonly native: GPURenderPassEncoder;
     private readonly device;
     private readonly onEnd;
+    /** 该 pass 是否声明了 occlusionQuerySet；没声明时 beginOcclusionQuery 会明确报错。 */
+    private readonly hasOcclusionQuerySet;
     private _ended;
+    private occlusionQueryOpen;
     /**
      * 一个 pass 的 attachment 布局与 label 在生命周期内都不变，因此「pipeline variant 请求」
      * 与各处报错用的 context 字符串都在构造时建一次。
@@ -59,7 +66,7 @@ export declare class WebGPURenderPassEncoder implements RenderPassEncoder {
     private readonly contextSetIndexBuffer;
     private readonly contextDrawIndirect;
     private readonly contextDrawIndexedIndirect;
-    constructor(device: WebGPUDevice, native: GPURenderPassEncoder, layout: WebGPURenderPassLayout, label: string, onEnd?: () => void);
+    constructor(device: WebGPUDevice, native: GPURenderPassEncoder, layout: WebGPURenderPassLayout, label: string, hasOcclusionQuerySet: boolean, onEnd?: () => void);
     get ended(): boolean;
     setPipeline(pipeline: RenderPipeline): void;
     setBindGroup(index: number, bindGroup: BindGroup | null, dynamicOffsets?: readonly number[]): void;
@@ -73,6 +80,16 @@ export declare class WebGPURenderPassEncoder implements RenderPassEncoder {
     drawIndexed(descriptor: DrawIndexedDescriptor): void;
     drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
     drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+    /**
+     * 开始一条遮挡查询：这一段里绘制的图元有多少采样通过深度/模板测试，就累加到
+     * `descriptor.occlusionQuerySet` 的第 `index` 个计数器里。
+     *
+     * WebGPU 要求 pass 在创建时就声明 `occlusionQuerySet`，没声明就报错（原生也会报，
+     * 但这里报得更早、说的更清楚）。
+     */
+    beginOcclusionQuery(index: number): void;
+    /** 结束最近一次 {@link beginOcclusionQuery}。 */
+    endOcclusionQuery(): void;
     /** 调试分组：直接转发给原生的 `GPURenderPassEncoder`（抓帧工具据此分组显示）。 */
     pushDebugGroup(label: string): void;
     popDebugGroup(): void;

@@ -25,6 +25,14 @@ export interface CreateDeviceOptions extends DeviceDescriptor, BackendCreateOpti
      * 调试 WebGPU 专用功能（compute、storage buffer）时很有用 —— 免得悄悄跑在 WebGL2 上。
      */
     strictBackend?: boolean;
+    /**
+     * 「有则更好」的 feature 名：只在所选后端的 adapter 支持时才申请，不支持就悄悄跳过。
+     *
+     * 用途是那些**允许降级**的可选能力（例如 `timestamp-query`：能拿到就顺手打开 GPU 计时，
+     * 拿不到也不该让整个设备的创建失败）。与之相对，{@link DeviceDescriptor.requiredFeatures}
+     * 里的名字一个都不能少，否则抛错。
+     */
+    optionalFeatures?: readonly string[];
 }
 export interface CreatedDevice {
     device: Device;

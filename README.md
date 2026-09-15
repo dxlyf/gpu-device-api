@@ -37,6 +37,7 @@ renderer.endFrame();
 - [目录结构](#目录结构)
 - [core 层](#core-层)
 - [便捷层 gfx](#便捷层-gfx)
+- [GPU 计时](#gpu-计时)
 - [示例与自检](#示例与自检)
 - [两个后端的硬约束（踩过的坑）](#两个后端的硬约束踩过的坑)
 - [能力边界（诚实清单）](#能力边界诚实清单)
@@ -63,8 +64,11 @@ renderer.endFrame();
 - **带实测数字的性能基准**：`examples/benchmark.html` 只用 core 层（不经过 gfx），在
   2000 / 5000 / 10000 / 20000 / 40000 个图形下跑**真实动态负载**（24 顶点盒子 + 光照着色器，
   每个物体每帧移动并重传矩阵），每档给出「含同步 / 不同步」两轮、静态对照、CPU 与 GPU 同步等待；
-  `examples/gfx-benchmark.html` 另外量化便捷层每 draw 的固定开销。见
-  [性能基准](#性能基准benchmarkhtml)。
+  `examples/gfx-benchmark.html` 另外量化便捷层每 draw 的固定开销。
+- **CPU 时间与 GPU 时间是两列**：`stats.frameTime` 是 CPU 提交耗时，`stats.gpuFrameTime`
+  来自后端的 query 机制（WebGPU 的 `timestamp-query`、WebGL2 的 `EXT_disjoint_timer_query_webgl2`），
+  延迟若干帧异步读回、不阻塞帧循环；拿不到时是 `null` 而不是 0。见
+  [GPU 计时](#gpu-计时) 与 [性能基准](#性能基准benchmarkhtml)。
 - **可观测**：`device.onError()` 统一上报（WebGPU 的 `onuncapturederror`、WebGL2 的 `getError()`，
   以及本库内部校验失败）；`device.limits` / `device.features` 两个后端都能无差别读取。
 - **逃生口**：`device.native` 是原生的 `GPUDevice` 或 `WebGL2RenderingContext`；`examples/smoke.ts`
@@ -98,7 +102,7 @@ pnpm install
 
 pnpm dev          # 启动示例站（vite dev server），打开 /examples/gallery.html
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（6 个文件 / 176 条用例，node 环境）
+pnpm test         # vitest run（9 个文件 / 208 条用例，node 环境）
 pnpm build        # 产出 dist/gpu-device-api.js（ESM）+ dist/types
 pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```
@@ -252,6 +256,9 @@ device.queue.submit([encoder.finish()]);
   `pushDebugGroup(label)` / `popDebugGroup()` / `insertDebugMarker(label)`，抓帧工具（RenderDoc、PIX）据此分组。
   WebGPU 直接转发原生调用；WebGL2 走 `EXT_debug_marker`，**扩展不可用时是空操作**（只影响抓帧分组，
   不影响渲染结果，所以没必要抛错）。
+- **GPU 计时与遮挡查询**：`device.createQuerySet()` + `encoder.writeTimestamp()` /
+  `RenderPassDescriptor.timestampWrites` / `pass.beginOcclusionQuery()` + `device.readQuerySet()`。
+  两个后端的实现与差异、以及 gfx 层的 `stats.gpuFrameTime` 见 [GPU 计时](#gpu-计时)。
 
 ### GLSL 的自动包装可以关掉
 
@@ -316,7 +323,7 @@ renderer.draw(geometry, {
   count: 36, first: 0, instances: 1,
 });
 renderer.endFrame();
-renderer.stats;                                        // drawCalls / triangles / pipelineSwitches / frameTime
+renderer.stats;                                        // drawCalls / triangles / pipelineSwitches / frameTime(CPU) / gpuFrameTime(GPU, 默认 null)
 renderer.destroy();
 ```
 
@@ -472,6 +479,111 @@ u.set('bones', boneMatrices);
   或浏览器图像来源（`ImageBitmap` / `HTMLImageElement` / `canvas` / `VideoFrame` …）。材质声明了纹理
   而 `draw()` 没给时，会绑一张 1×1 白色占位纹理 —— 「忘了传纹理」的表现是白色，而不是未定义数据。
 
+## GPU 计时
+
+`Renderer.stats.frameTime` 是 **CPU 提交耗时**（`beginFrame → 逐 draw → endFrame` 里 CPU 花的时间），
+它从来不是 GPU 时间。要拿真正的 GPU 执行时间，打开 GPU 计时：
+
+```ts
+const renderer = await Renderer.create({ canvas, gpuTiming: true }); // 申请 timestamp-query 并尝试打开
+// 或者创建之后再开（拿不到就抛错，错误消息说明缺什么）：
+// renderer.enableGpuTiming({ frames: 32, delay: 8 });
+
+renderer.beginFrame();
+renderer.draw(geometry, { material });
+renderer.endFrame();
+
+renderer.stats.frameTime;    // CPU 提交耗时（毫秒），语义与以前完全一致
+renderer.stats.gpuFrameTime; // GPU 执行时间（毫秒）；没开 / 拿不到时是 null（不是 0）
+renderer.gpuTiming;          // { enabled, available, frames, delay, gpuFrameTimeMs, samples, skipped, inFlight, error }
+```
+
+默认**关闭**：它要额外申请 feature、要额外提交读回命令、本身有开销。
+`Renderer.create({ gpuTiming: true })` 是「尽力而为」的路径（拿不到时 `enabled: false`，原因在
+`gpuTiming.error`）；显式调用 `renderer.enableGpuTiming()` 则是「要不到就报错」。
+
+### 两个后端各自动了什么
+
+| | WebGPU | WebGL2 |
+| --- | --- | --- |
+| 依赖 | device feature `timestamp-query` | 扩展 `EXT_disjoint_timer_query_webgl2` |
+| 每帧怎么写 | `CommandEncoder.writeTimestamp()`：帧开始一个、所有 pass 结束之后再一个 | `RenderPassDescriptor.timestampWrites`：`gl.beginQuery(TIME_ELAPSED_EXT)` → `endQuery` 包住整个通道 |
+| 每帧读到什么 | 两个**时刻**，差值才是耗时 | 一个**区间耗时**（纳秒），直接就是耗时 |
+| 单位换算 | 刻度 × `timestampPeriod`（`GPUQueue.getTimestampPeriod()`，实现没暴露时按规范默认 1 ns/刻度） | 扩展按规范就给纳秒，`timestampPeriod` 恒为 1 |
+| 读回 | `resolveQuerySet` → `copyBufferToBuffer` 到 `MAP_READ` buffer → `mapAsync`（`MAP_READ` 不能与 `QUERY_RESOLVE` 同时声明，所以中间那次拷贝是规范要求的） | `gl.getQueryParameter(QUERY_RESULT_AVAILABLE)` 轮询 + `QUERY_RESULT` |
+
+core 层的对应接口（两个后端都实现，`Device.readQuerySet()` 是跨后端的读回入口）：
+
+```ts
+const querySet = device.createQuerySet({ type: QueryType.Timestamp, count: 4 });
+encoder.writeTimestamp(querySet, 0);            // WebGPU；WebGL2 抛错（GL 没有「单个时刻」）
+const pass = encoder.beginRenderPass({ ..., timestampWrites: { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } });
+pass.beginOcclusionQuery(2);                    // 遮挡查询：WebGPU 原生 / WebGL2 的 ANY_SAMPLES_PASSED
+pass.endOcclusionQuery();
+encoder.resolveQuerySet(querySet, 0, 4, queryBuffer, 0);  // WebGL2 抛错（GL 没有结果缓冲区）
+const values = await device.readQuerySet(querySet, { firstQuery: 0, queryCount: 4 }).read(); // BigUint64Array
+```
+
+### 为什么不每帧阻塞读回
+
+GPU 时间只有在 GPU **真的执行完**那段命令之后才存在。每帧 `await` 一次读回等于每帧把 CPU 与 GPU
+串行化：队列里永远只有一帧在飞，测出来的数字会被同步开销主导，而且这种测法会改变被测对象本身。
+所以 gfx 的实现是**环形 query set + 延迟若干帧读回**（默认 `frames: 32`、`delay: 8`）：
+
+- 帧 k 写第 `k % frames` 个槽位，帧 k 提交之后去读第 `k - delay` 帧的槽位；
+- 某个槽位的读回还没落地时**不会重写、也不会重复读**它（否则可能读到后来那帧的值）；
+- 同时在飞的读回上限 4 个（读回自己也要提交命令、映射内存，不能让它把被测对象压垮）；
+- 读回失败（GPU disjoint、超时）只记录到 `gpuTiming.error`，绝不断掉帧循环。
+
+因此 `stats.gpuFrameTime` 是「最近一次成功读回的那一帧」的值，`gpuTiming.samples` 是样本数。
+需要连续曲线请用 `gpuTiming.gpuFrameTimeMs` + `samples` 自己采样。
+
+### 本机实测：CPU 与 GPU 确实是两个量
+
+`examples/gfx-benchmark.html`（画布 754×180，`antialias: false`，每物体一次 `renderer.draw()`）：
+
+| 物体数 | WebGPU CPU 提交 | WebGPU GPU 执行 | WebGL2/SwiftShader CPU 提交 | WebGL2/SwiftShader GPU 执行 |
+| --- | --- | --- | --- | --- |
+| 2000 | 7.10 ms | **1.226 ms** | 84.10 ms | **225.537 ms** |
+| 20000 | 84.13 ms | **8.215 ms** | 1519.73 ms | **1608.746 ms** |
+
+同一档 CPU 与 GPU 差一个数量级（WebGPU）或反超（WebGL2/SwiftShader，软件光栅化几乎全在
+GPU 进程的 CPU 上跑），且 GPU 列随负载变化（6.7× / 7.1×，负载差 10×）。页面把每档写进
+`data-bench-cpu-ms` / `data-bench-gpu-ms`（`档:值;档:值`），来源写进 `data-bench-gpu-source`
+（`webgpu-timestamp-query` / `webgl2-EXT_disjoint_timer_query_webgl2` / `unavailable`），
+拿不到时的原文错误写进 `data-bench-gpu-error`。
+
+**独立验证（填充率缩放）**：同样的 50 次全屏绘制，只改画布大小 —— 若这个数字是 GPU 时间，
+它应该随像素数按比例变化：
+
+| 画布 | 像素数 | WebGPU GPU 执行 | WebGL2/SwiftShader GPU 执行 |
+| --- | --- | --- | --- |
+| 754×339 | 255,606 | 0.791 ms | 127.320 ms |
+| 1574×835 | 1,314,290（5.14×） | 3.623 ms（**4.58×**） | 717.026 ms（**5.63×**） |
+
+两者都近似线性（比值 ≈ 像素比），这是「测到的是 GPU 光栅化工作」的直接证据 ——
+CPU 侧的 draw 次数、uniform 写入量在这个实验里完全没变。
+
+### 限制与坑（诚实清单）
+
+- **Chrome 默认不给 pass 内的 timestamp**：`timestampWrites` 需要 `timestamp-query-inside-passes`
+  （Chrome 只把它放在实验名 `chromium-experimental-timestamp-query-inside-passes` 后面，
+  要 `--enable-webgpu-developer-features`）。本库在缺这个能力时**抛错**并提示改用
+  `CommandEncoder.writeTimestamp()`（只需要 `timestamp-query`）—— gfx 的 GPU 计时走的就是后者。
+- **WebGL2 的读回是异步且滞后的**：`gl.finish()` 只保证命令交给 GPU 进程，不保证执行完；
+  实测 SwiftShader 上一次 `TIME_ELAPSED_EXT` 的结果可能好几秒后才可用（默认轮询上限 10 s）。
+  所以 WebGL2 上样本是「攒出来的」，`gpuTiming.skipped` 会明显偏大 —— 这是后端语义，不是丢了数据。
+- **`GPU_DISJOINT_EXT` 为真时结果无效**：本库直接抛 `GpuError`（`code: 'QUERY_DISJOINT'`），
+  不会把 0 或偏小的值当成真实耗时；gfx 捕获它并记进 `gpuTiming.error`。
+- **SwiftShader 上的数字不能当硬件性能**：软件光栅化把工作摊在 GPU 进程的 CPU 线程上，
+  「GPU 时间」会远大于「CPU 提交时间」。它验证的是机制可用与随负载变化，不是显卡性能。
+- **时间戳分辨率/量化**：两个后端的刻度都是纳秒，但真实分辨率由驱动决定；
+  几十微秒级的区间（例如一次小绘制的 pass）可能被量化到 0，请用它测整帧而不是单次 draw。
+- **`stats.gpuFrameTime` 不是「本帧」而是「最近一次读到的那一帧」**：有 `delay` 帧的滞后；
+  多通道帧（`beginPass()` 开的通道）不写时间戳，它对应的是 `beginFrame()` 那个通道。
+- **读回本身有开销**：每 `delay` 帧多一次小 command buffer（WebGPU）或一次 GL 查询轮询（WebGL2），
+  做严格 A/B 性能对比时请开着同一个设置对比，或干脆关掉计时。
+
 ## 示例与自检
 
 | 页面 | 内容 |
@@ -481,7 +593,7 @@ u.set('bones', boneMatrices);
 | `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
 | `examples/benchmark.html` | **性能基准（core 层）**：box + 光照着色器的**动态**场景，2000 / 5000 / 10000 / 20000 / 40000 个图形每帧移动并重传矩阵；含静态对照与「含同步 / 不同步」两轮 |
-| `examples/gfx-benchmark.html` | **性能基准（gfx 层）**：同样的档位测 `renderer.draw()` 的每 draw 固定开销（相机 uniform、model、法线矩阵、uniform arena + 动态偏移、逐属性顶点绑定） |
+| `examples/gfx-benchmark.html` | **性能基准（gfx 层）**：同样的档位测 `renderer.draw()` 的每 draw 固定开销（相机 uniform、model、法线矩阵、uniform arena + 动态偏移、逐属性顶点绑定），并给出 **CPU 提交时间与 GPU 执行时间两列**（`data-bench-cpu-ms` / `data-bench-gpu-ms`） |
 | `examples/smoke.html` | core 层的浏览器内冒烟测试：17 项检查，含像素级断言（canvas 中央、离屏目标角落）与 GLSL 包装开关 |
 | `examples/depth.html` | **画布深度测试回归**：近红先画、远绿后画，中心像素必须是红 —— 两个后端各自一遍，读回的也是 canvas 本身 |
 
@@ -708,8 +820,11 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 - WebGL2 的 `firstInstance` / `baseVertex` / 间接绘制（见上表）。
 - 便捷层 `gfx` 没有单独的包入口（子路径）：它和 core 一起从包根导出，`exports` 只有 `"."`
   （见 [快速开始](#快速开始)）。
-- `docs/需求.md` 里标注「第二阶段」的 query set / fence 等，WebGPU 侧已实现一部分，
-  WebGL2 侧按能力可用性抛错。
+- `docs/需求.md` 里标注「第二阶段」的 query set / fence：query set 已在两个后端做完
+  （timestamp + occlusion，见 [GPU 计时](#gpu-计时)）；`CommandEncoder.resolveQuerySet()`
+  与 pass 内的 `timestampWrites` 在 WebGL2 上没有对应能力，调用即抛错并给出替代方案。
+- `GPUCommandEncoder.writeTimestamp()` 之外的 encoder 级 GPU 时间手段（例如逐 pass 的
+  `resolveQuerySet` 批量读回）没有封装；目前 gfx 只暴露整帧一个数字。
 
 ## 开发
 
@@ -727,7 +842,7 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 
 ### 测试构成
 
-`test/` 下 6 个文件、176 条用例，全部跑在 **node** 环境（不需要浏览器）：
+`test/` 下 9 个文件、208 条用例，全部跑在 **node** 环境（不需要浏览器）：
 
 | 文件 | 覆盖 |
 | --- | --- |
@@ -737,6 +852,9 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 | `test/enums.test.ts` | 枚举取值与位标志 |
 | `test/utils.test.ts` | 断言、TypedArray、位标志、logger |
 | `test/factories.test.ts` | 后端探测、回退与错误路径 |
+| `test/webgl2-glstate.test.ts` | `GlStateCache.invalidateTextureUnits()` 的失效范围（哪些缓存必须保留） |
+| `test/webgpu-resource-tracking.test.ts` | WebGPU 资源追踪：`destroy()` 后从设备的追踪集合里摘掉（每帧 create/destroy 不堆积） |
+| `test/gpu-timing.test.ts` | timestamp 刻度→毫秒换算、`timestampWrites` 校验、拿不到 GPU 计时时的报错/降级、WebGPU 读回链路（mock 原生 device）、WebGL2 轮询与 disjoint、gfx 环形 + 延迟读回的槽位记账 |
 
 **像素级**的验证放在浏览器里，入口是 `examples/gallery.html`（汇总页，列出下面全部示例）：
 `examples/smoke.html`（core 层 17 项）、`examples/index.html?verify=1`（gfx 层）、

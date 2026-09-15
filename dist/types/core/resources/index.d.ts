@@ -3,5 +3,5 @@ export { TextureDimension, defaultTextureUsage, fullMipLevelCount, resolveTextur
 export { resolveTextureViewDescriptor, type TextureAspect, type TextureView, type TextureViewDescriptor, type TextureViewDimension, } from './TextureView.js';
 export { resolveSamplerDescriptor, samplerKey, type Sampler, type SamplerDescriptor, } from './Sampler.js';
 export { resolveShaderSource, type GlslWrapOptions, type ShaderModule, type ShaderModuleDescriptor, type ShaderSource, } from './ShaderModule.js';
-export { QueryType, type QuerySet, type QuerySetDescriptor } from './QuerySet.js';
+export { QueryType, assertPassTimestampWrites, type PassTimestampWrites, type QuerySet, type QuerySetDescriptor, } from './QuerySet.js';
 //# sourceMappingURL=index.d.ts.map

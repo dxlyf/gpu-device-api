@@ -20,6 +20,7 @@ import type {
   CommandEncoderDescriptor,
   TextureCopyView,
 } from '../../core/render/CommandEncoder.js';
+import type { QuerySet } from '../../core/resources/QuerySet.js';
 import type { Extent3D } from '../../types/internal.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
@@ -280,6 +281,45 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     const zeros = new Uint8Array(length);
     // 走 buffer 自己的目标：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
     target.upload(offset, zeros);
+  }
+
+  /**
+   * WebGL2 没有对应能力：GL 的查询结果不能写进 buffer，只能 `getQueryParameter()` 读回。
+   * 调用它明确报错，并指出替代方案（`Device.readQuerySet()`）。
+   */
+  resolveQuerySet(
+    querySet: QuerySet,
+    firstQuery: number,
+    queryCount: number,
+    destination: { readonly size: number },
+    destinationOffset: number,
+  ): void {
+    this.assertOpen('resolveQuerySet');
+    void querySet;
+    void firstQuery;
+    void queryCount;
+    void destination;
+    void destinationOffset;
+    throw new ValidationError(
+      '[gpu-device-api] WebGL2 has no resolveQuerySet(): GL query results cannot be copied into a buffer, ' +
+        'they can only be read back one by one with gl.getQueryParameter(). Use Device.readQuerySet() ' +
+        'instead — it polls QUERY_RESULT_AVAILABLE and returns the same QueryResult shape as WebGPU.',
+    );
+  }
+
+  /**
+   * WebGL2 没有「单个时刻的时间戳」：GL 的时间查询是 `beginQuery → endQuery` 的**区间**测量。
+   * 请改用 `RenderPassDescriptor.timestampWrites`（后端会用 beginQuery/endQuery 包住整个通道）。
+   */
+  writeTimestamp(querySet: QuerySet, queryIndex: number): void {
+    this.assertOpen('writeTimestamp');
+    void querySet;
+    void queryIndex;
+    throw new ValidationError(
+      '[gpu-device-api] WebGL2 has no CommandEncoder.writeTimestamp(): GL timer queries measure an ' +
+        'interval (beginQuery → endQuery), not a single instant. Use RenderPassDescriptor.timestampWrites ' +
+        'with an EXT_disjoint_timer_query_webgl2 query set instead.',
+    );
   }
 
   /** 调试分组：WebGL2 靠 `EXT_debug_marker`，扩展不可用时是空操作（见 utils/debugMarkers.ts）。 */

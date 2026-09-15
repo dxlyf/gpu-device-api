@@ -63,8 +63,8 @@
       <table>
         <thead>
           <tr>
-            <th>物体数</th><th>draw calls</th><th>三角形/帧</th><th>帧耗时(CPU 均值)</th>
-            <th>最小</th><th>最大</th><th>每次 draw</th><th>draws/s</th><th>管线切换</th>
+            <th>物体数</th><th>draw calls</th><th>三角形/帧</th><th>CPU 提交(均值)</th>
+            <th>最小</th><th>最大</th><th>GPU 执行(均值)</th><th>每次 draw</th><th>draws/s</th><th>管线切换</th>
             <th>含等待后端(均值)</th><th>说明</th>
           </tr>
         </thead>
@@ -72,19 +72,27 @@
       </table>
       <pre id="out">正在启动…</pre>
       <p class="hint">
+        <b>CPU 提交</b>是 <code>beginFrame → 逐 draw → endFrame</code> 里 CPU 花的时间；
+        <b>GPU 执行</b>来自后端的 query 机制（WebGPU：<code>timestamp-query</code> +
+        <code>encoder.writeTimestamp</code>；WebGL2：<code>EXT_disjoint_timer_query_webgl2</code>），
+        是环形 query set + 延迟若干帧的异步读回，<b>不会每帧阻塞等 GPU</b>。
+        两列不是同一个量：调用 <code>renderer.enableGpuTiming()</code> 之前 GPU 那列是 <code>—</code>（不是 0）。
+        拿不到 GPU 计时的原因（缺 feature / 缺扩展 / disjoint）写在 <code>data-bench-gpu-error</code> 里。
+      </p>
+      <p class="hint">
         这一页和 <a href="./benchmark.html">core 层基准</a> 测的是**同一件事的两个层次**：core 基准手写
         着色器/缓冲/bind group/管线/通道，所以它看不到便捷层的开销；本页只用 <code>src/gfx</code>，
         每个物体一次 <code>renderer.draw()</code>，每次 draw 都要走：相机 uniform、自己的
         <code>model</code>、自动计算的法线矩阵（<code>lambert</code> 声明了 <code>normalMatrix</code>）、
         uniform arena + 动态偏移、bind group，以及按材质属性逐个绑定顶点缓冲（3 个属性 = 3 次
-        <code>setVertexBuffer</code>）。两页同档的「帧耗时(CPU 均值)」可以直接相减，差值就是便捷层的净开销。
+        <code>setVertexBuffer</code>）。两页同档的「CPU 提交(均值)」可以直接相减，差值就是便捷层的净开销。
       </p>
       <p class="hint">
-        计时只算 <code>beginFrame → 逐 draw → endFrame</code> 的 CPU 时间（<code>frames</code> 是每档测量的帧数，
-        先空跑几帧热身）。帧与帧之间只 <code>await device.queue.onSubmittedWorkDone()</code>，
-        **故意不做** core 基准那个 1×1 <code>readPixels</code> 强制同步 —— 那个技巧是为了把 GPU 时间算进帧耗时，
-        代价是每帧把 GPU 串行化；本页要的是 CPU 成本，所以另给一列「含等待后端」作参考。
-        每档都打印 <code>renderer.stats</code>，用来确认这些 draw 真的发生了。
+        计时只算 CPU 时间（<code>frames</code> 是每档测量的帧数，先空跑几帧热身）。帧与帧之间只
+        <code>await device.queue.onSubmittedWorkDone()</code>，**故意不做** core 基准那个 1×1
+        <code>readPixels</code> 强制同步 —— 那个技巧是为了把 GPU 时间算进帧耗时，代价是每帧把 GPU 串行化。
+        交叉验证 GPU 那列是否可信：它应当与「含等待后端 − CPU 提交」同量级（后者是另一条包含
+        GPU 执行时间的路径）。
       </p>
     </section>
     <footer>

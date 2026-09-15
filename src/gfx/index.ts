@@ -97,6 +97,16 @@ export {
 } from './Renderer.js';
 
 export {
+  DEFAULT_GPU_TIMING_DELAY,
+  DEFAULT_GPU_TIMING_FRAMES,
+  GPU_TIMING_FEATURE,
+  GpuTiming,
+  describeGpuTimingFailure,
+  type GpuTimingOptions,
+  type GpuTimingStats,
+} from './GpuTiming.js';
+
+export {
   PerspectiveCamera,
   OrthographicCamera,
   type DepthRangeConvention,

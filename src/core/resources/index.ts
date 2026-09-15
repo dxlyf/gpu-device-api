@@ -32,4 +32,10 @@ export {
   type ShaderModuleDescriptor,
   type ShaderSource,
 } from './ShaderModule.js';
-export { QueryType, type QuerySet, type QuerySetDescriptor } from './QuerySet.js';
+export {
+  QueryType,
+  assertPassTimestampWrites,
+  type PassTimestampWrites,
+  type QuerySet,
+  type QuerySetDescriptor,
+} from './QuerySet.js';

@@ -9,6 +9,7 @@
  * 这一点与 WebGPU 的「录制后统一提交」不同，已在 `core/sync/Queue.ts` 里写明差异。
  */
 import type { BufferCopyView, CommandBuffer, CommandEncoder, CommandEncoderDescriptor, TextureCopyView } from '../../core/render/CommandEncoder.js';
+import type { QuerySet } from '../../core/resources/QuerySet.js';
 import type { Extent3D } from '../../types/internal.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 import { WebGL2RenderPassEncoder, type WebGL2RenderPassOptions } from './WebGL2RenderPassEncoder.js';
@@ -43,6 +44,18 @@ export declare class WebGL2CommandEncoder implements CommandEncoder {
     clearBuffer(buffer: {
         readonly size: number;
     }, offset?: number, size?: number): void;
+    /**
+     * WebGL2 没有对应能力：GL 的查询结果不能写进 buffer，只能 `getQueryParameter()` 读回。
+     * 调用它明确报错，并指出替代方案（`Device.readQuerySet()`）。
+     */
+    resolveQuerySet(querySet: QuerySet, firstQuery: number, queryCount: number, destination: {
+        readonly size: number;
+    }, destinationOffset: number): void;
+    /**
+     * WebGL2 没有「单个时刻的时间戳」：GL 的时间查询是 `beginQuery → endQuery` 的**区间**测量。
+     * 请改用 `RenderPassDescriptor.timestampWrites`（后端会用 beginQuery/endQuery 包住整个通道）。
+     */
+    writeTimestamp(querySet: QuerySet, queryIndex: number): void;
     /** 调试分组：WebGL2 靠 `EXT_debug_marker`，扩展不可用时是空操作（见 utils/debugMarkers.ts）。 */
     pushDebugGroup(label: string): void;
     popDebugGroup(): void;

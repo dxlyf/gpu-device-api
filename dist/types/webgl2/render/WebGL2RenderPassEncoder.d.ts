@@ -49,6 +49,18 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     private stencilReference;
     private _ended;
     /**
+     * 本通道正在计时的时间查询（`beginQuery` 已在构造时下发，`end()` 时收尾）。
+     *
+     * GL 的时间查询是**区间**测量：`beginQuery(TIME_ELAPSED_EXT, q)` → `endQuery` 之间的 GPU
+     * 时间会写进 q。所以它包住的是「通道开始清屏/绑定 framebuffer 之后到 end() 之前」这段，
+     * 对单通道帧来说就是整个渲染阶段。
+     */
+    private pendingTimerQueries;
+    /** 是否有正在进行的遮挡查询（GL 要求 beginQuery/endQuery 严格配对）。 */
+    private occlusionQueryOpen;
+    /** 本通道声明了 occlusionQuerySet 时的 query set（决定 beginOcclusionQuery 是否可用）。 */
+    private occlusionQuerySet;
+    /**
      * 变体请求对象：通道的颜色/深度格式在构造时就定了，生命周期内不会变，
      * 所以只分配一次（原来每次解析变体都要新建一个对象）。
      */
@@ -73,6 +85,15 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
     drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
     /**
+     * 开始一条遮挡查询（对应 `gl.beginQuery(ANY_SAMPLES_PASSED, query)`）。
+     *
+     * `ANY_SAMPLES_PASSED` 是 WebGL2 核心功能，不需要扩展；计数器记录的是「有多少个采样通过了
+     * 深度/模板测试」（≥1 即表示「有东西可见」）。结果由 `Device.readQuerySet()` 读回。
+     */
+    beginOcclusionQuery(index: number): void;
+    /** 结束最近一次 {@link beginOcclusionQuery}。 */
+    endOcclusionQuery(): void;
+    /**
      * 调试分组：WebGL2 靠 `EXT_debug_marker` 实现，扩展不可用时是空操作
      * （只影响抓帧工具的分组显示，不影响渲染结果）。
      */
@@ -80,6 +101,18 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     popDebugGroup(): void;
     insertDebugMarker(label: string): void;
     end(): void;
+    /**
+     * 处理 `RenderPassDescriptor.timestampWrites` 与 `occlusionQuerySet`。
+     *
+     * **WebGL2 的 timestamp 语义与 WebGPU 不同**（这一点必须看清）：
+     * GL 的 `TIME_ELAPSED_EXT` 测量的是 `beginQuery` → `endQuery` 之间的**区间耗时**，
+     * 而 WebGPU 写的是「通道开始的时刻」与「通道结束的时刻」两个独立时间戳。
+     * 所以这里把区间耗时写进 `beginningOfPassWriteIndex`（只给了 end 时用 end 那个下标），
+     * 另一个下标保持 0；读回后的解释也相应不同（见 gfx 的 `GpuTiming`）。
+     */
+    private beginQuerySetup;
+    /** 收尾时间查询；没有正在进行的查询时是空操作。 */
+    private endTimerQuery;
     /**
      * 取当前通道形态下已解析好的管线变体。
      *

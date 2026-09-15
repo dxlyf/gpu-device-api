@@ -23,6 +23,7 @@ import type { QuerySet, QuerySetDescriptor } from './resources/QuerySet.js';
 import type { Sampler, SamplerDescriptor } from './resources/Sampler.js';
 import type { ShaderModule, ShaderModuleDescriptor } from './resources/ShaderModule.js';
 import type { Texture, TextureDescriptor } from './resources/Texture.js';
+import type { QueryResult, QuerySetReadOptions } from './sync/QueryResult.js';
 import type { Queue } from './sync/Queue.js';
 
 /**
@@ -117,6 +118,21 @@ export interface Device {
   createSampler(descriptor?: SamplerDescriptor): Sampler;
   createShaderModule(descriptor: ShaderModuleDescriptor): ShaderModule;
   createQuerySet(descriptor: QuerySetDescriptor): QuerySet;
+
+  /**
+   * 把 query set 里的结果读回 CPU，并返回一个可 `await` 的结果对象。
+   *
+   * 为什么放在设备上而不是 `QuerySet` 的方法里：WebGPU 的读回要「resolve 进 buffer → 拷进
+   * 可映射 buffer → mapAsync」，每一步都需要设备级的资源（buffer、command encoder、queue），
+   * 而 `GPUQuerySet` 本身既没有 resolve 也没有 map。WebGL2 侧则是 `gl.getQueryParameter`
+   * 的同步轮询 —— 两个后端唯一的共同点就是「由设备提供读回」。
+   *
+   * 读回**不会阻塞**在 GPU 上（WebGPU 是 `mapAsync`；WebGL2 每轮询一次就让出一拍），
+   * 所以可以安全地放在帧循环里，只要延迟若干帧读、并且上一帧的读回完成后才发起下一次。
+   *
+   * 结果只能 `read()` 一次：读回用的中转 buffer 在读取后即销毁。
+   */
+  readQuerySet(querySet: QuerySet, options?: QuerySetReadOptions): QueryResult;
 
   /* ---------------------------------------------------------------- 绑定 */
   createBindGroupLayout(descriptor: BindGroupLayoutDescriptor): BindGroupLayout;

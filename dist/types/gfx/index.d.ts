@@ -33,6 +33,7 @@ export { UniformArena, UniformArenaPool, type UniformArenaOptions } from './Unif
 export { Geometry, STANDARD_ATTRIBUTE_FORMATS, createGeometry, type GeometryAttribute, type GeometryAttributeInput, type GeometryDesc, } from './Geometry.js';
 export { GfxTexture, buildMipChain, isImageSource, type ImageSource, type TextureDesc, } from './Texture.js';
 export { Renderer, type Camera, type ColorInput, type DrawOptions, type FrameOptions, type RendererOptions, type RendererStats, } from './Renderer.js';
+export { DEFAULT_GPU_TIMING_DELAY, DEFAULT_GPU_TIMING_FRAMES, GPU_TIMING_FEATURE, GpuTiming, describeGpuTimingFailure, type GpuTimingOptions, type GpuTimingStats, } from './GpuTiming.js';
 export { PerspectiveCamera, OrthographicCamera, type DepthRangeConvention, type PerspectiveCameraOptions, type OrthographicCameraOptions, } from './Camera.js';
 export { OrbitControls, type OrbitControlsOptions } from './OrbitControls.js';
 /**

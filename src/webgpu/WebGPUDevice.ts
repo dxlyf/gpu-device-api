@@ -32,7 +32,8 @@ import type { RenderTargetDescriptor } from '../core/render/RenderTarget.js';
 import type { ComputePipelineDescriptor } from '../core/pipeline/ComputePipeline.js';
 import type { RenderPipelineDescriptor } from '../core/pipeline/RenderPipeline.js';
 import type { BufferDescriptor } from '../core/resources/Buffer.js';
-import type { QuerySetDescriptor } from '../core/resources/QuerySet.js';
+import type { QuerySet, QuerySetDescriptor } from '../core/resources/QuerySet.js';
+import type { QueryResult, QuerySetReadOptions } from '../core/sync/QueryResult.js';
 import type { SamplerDescriptor } from '../core/resources/Sampler.js';
 import type { ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
 import type { TextureDescriptor } from '../core/resources/Texture.js';
@@ -41,16 +42,24 @@ import { GpuError, isGpuError } from '../core/errors/GpuError.js';
 import { ValidationError } from '../core/errors/ValidationError.js';
 import { OutOfMemoryError } from '../core/errors/OutOfMemoryError.js';
 import { DeviceLostError, type DeviceLostReason } from '../core/errors/DeviceLostError.js';
+import { BufferUsage } from '../core/enums/BufferUsage.js';
+import { assertNonNegativeInteger } from '../utils/assert.js';
 import { disposeAll } from '../utils/Disposable.js';
 import { createLogger, type Logger } from '../utils/logger.js';
 import { nextId } from '../utils/id.js';
 import { assertSampleCount } from './utils/wgpuEnumMap.js';
-import { readDeviceLimits, WebGPUFeatures, type WebGPUAdapterRequestOptions } from './utils/wgpuCapabilities.js';
+import {
+  readDeviceLimits,
+  readSupportedFeatures,
+  WebGPUFeatures,
+  type WebGPUAdapterRequestOptions,
+} from './utils/wgpuCapabilities.js';
 import { WebGPUBuffer } from './resources/WebGPUBuffer.js';
 import { WebGPUTexture } from './resources/WebGPUTexture.js';
 import { WebGPUSampler } from './resources/WebGPUSampler.js';
 import { WebGPUShaderModule } from './resources/WebGPUShaderModule.js';
-import { WebGPUQuerySet } from './resources/WebGPUQuerySet.js';
+import { WebGPUQuerySet, asGPUQuerySet } from './resources/WebGPUQuerySet.js';
+import { WebGPUQueryResult } from './sync/WebGPUQueryResult.js';
 import { WebGPUBindGroup } from './binding/WebGPUBindGroup.js';
 import { WebGPUBindGroupLayout } from './binding/WebGPUBindGroupLayout.js';
 import { WebGPUPipelineLayout } from './binding/WebGPUPipelineLayout.js';
@@ -82,6 +91,14 @@ export class WebGPUDevice implements Device {
 
   /** 请求设备时实际启用的 feature 名（`DeviceDescriptor.requiredFeatures`）。 */
   readonly enabledFeatures: readonly string[];
+  /**
+   * 设备上**真正启用**的 feature 集合。
+   *
+   * 与 {@link WebGPUDevice.features}（adapter 支持什么）不是一回事：adapter 支持 `timestamp-query`
+   * 但 `requiredFeatures` 里没写，设备上就没有这个能力。`native.features` 是权威来源；
+   * 实现没有暴露它（或跑在 mock 上）时退回请求列表。
+   */
+  readonly enabledFeatureSet: ReadonlySet<string>;
   /** 创建本设备的 adapter 信息，便于日志与调试。 */
   readonly adapterInfo: AdapterInfo;
   /** `requiredLimits` 经校验后的完整 limits；`limits` 则来自实际创建出来的 device。 */
@@ -107,6 +124,7 @@ export class WebGPUDevice implements Device {
     this.requestedLimits = init.resolvedLimits;
     this.debug = init.descriptor.debug ?? false;
     this.enabledFeatures = [...(init.descriptor.requiredFeatures ?? [])];
+    this.enabledFeatureSet = readEnabledFeatures(native, this.enabledFeatures);
     this.features = new WebGPUFeatures(init.adapterFeatures);
     this.limits = readDeviceLimits(native.limits);
     this.defaultSampleCount = assertSampleCount(
@@ -148,6 +166,39 @@ export class WebGPUDevice implements Device {
     return this.resources.size;
   }
 
+  /**
+   * 该 feature 是否**已经在本设备上启用**（不只是 adapter 支持）。
+   *
+   * 需要 feature 的能力（timestamp 查询等）必须查这个而不是 `features.has()`，
+   * 否则会出现「adapter 支持 → 我们以为能用 → 原生校验失败」的静默失效。
+   */
+  hasEnabledFeature(feature: string): boolean {
+    return this.enabledFeatureSet.has(feature);
+  }
+
+  /**
+   * GPU 时间戳的「纳秒 / 刻度」换算系数。
+   *
+   * 优先读 `queue.getTimestampPeriod()`（规范接口），再退回 `queue.timestampPeriod` 属性。
+   * 本仓库实测的 Chrome（2025 年的 Windows 版本）两者都没有暴露，此时按规范默认值 1 处理 ——
+   * 也就是刻度本身就是纳秒。**绝不能**因为拿不到这个值就把刻度直接当纳秒用而不做说明：
+   * 那样在其它实现（例如 period 是 83.33 的某些移动 GPU）上会得到系统性偏小的数字。
+   */
+  get timestampPeriod(): number {
+    const queue = this.native.queue as GPUQueue & {
+      timestampPeriod?: number;
+      getTimestampPeriod?: () => number;
+    };
+    if (typeof queue.getTimestampPeriod === 'function') {
+      const value = queue.getTimestampPeriod();
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+    }
+    if (typeof queue.timestampPeriod === 'number' && Number.isFinite(queue.timestampPeriod) && queue.timestampPeriod > 0) {
+      return queue.timestampPeriod;
+    }
+    return 1;
+  }
+
   /** 生成 `prefix#N` 形式的资源 id，供各资源的默认 label 使用。 */
   nextResourceId(prefix: string): string {
     return nextId(prefix);
@@ -178,6 +229,68 @@ export class WebGPUDevice implements Device {
   createQuerySet(descriptor: QuerySetDescriptor): WebGPUQuerySet {
     this.assertUsable('createQuerySet');
     return this.track(new WebGPUQuerySet(this, descriptor));
+  }
+
+  /**
+   * 读回 query set 的结果：`resolveQuerySet` → `copyBufferToBuffer` → `mapAsync`。
+   *
+   * 两个中转 buffer 都通过 `this.createBuffer()` 创建，因此被设备的资源追踪覆盖：
+   * 正常路径由 `QueryResult.read()` 销毁，忘了读则在 `device.dispose()` 时统一释放。
+   */
+  readQuerySet(querySet: QuerySet, options: QuerySetReadOptions = {}): QueryResult {
+    this.assertUsable('readQuerySet');
+    // 先收窄原生对象（顺带校验这是本后端的 query set），早报错更清楚。
+    asGPUQuerySet(querySet, `Device "${this.label}".readQuerySet(querySet)`);
+
+    const first = options.firstQuery ?? 0;
+    assertNonNegativeInteger(first, 'QuerySetReadOptions.firstQuery');
+    const count = options.queryCount ?? querySet.count - first;
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new ValidationError(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: queryCount must be a positive integer, got ` +
+          `${String(count)}.`,
+      );
+    }
+    if (first + count > querySet.count) {
+      throw new ValidationError(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: range [${first}, ${first + count}) exceeds the ` +
+          `query set "${querySet.label}" count ${querySet.count}.`,
+      );
+    }
+
+    const label = options.label ?? `${querySet.label}:read`;
+    const byteSize = count * 8;
+    const staging = this.createBuffer({
+      label: `${label}#resolve`,
+      size: byteSize,
+      usage: BufferUsage.QueryResolve | BufferUsage.CopySrc,
+    });
+    const readback = this.createBuffer({
+      label: `${label}#readback`,
+      size: byteSize,
+      usage: BufferUsage.MapRead | BufferUsage.CopyDst,
+    });
+
+    const encoder = this.createCommandEncoder({ label });
+    try {
+      encoder.resolveQuerySet(querySet, first, count, staging, 0);
+      encoder.copyBufferToBuffer(staging, 0, readback, 0, byteSize);
+      this.queue.submit([encoder.finish()]);
+    } catch (error) {
+      readback.destroy();
+      staging.destroy();
+      throw error;
+    } finally {
+      encoder.dispose();
+    }
+
+    return new WebGPUQueryResult({
+      type: querySet.type,
+      count,
+      timestampPeriod: this.timestampPeriod,
+      staging,
+      readback,
+    });
   }
 
   /* ---------------------------------------------------------------- 绑定 */
@@ -379,4 +492,16 @@ function isGpuErrorClass(value: unknown, className: string): boolean {
   }
   const name = (value as { constructor?: { name?: string } } | null | undefined)?.constructor?.name;
   return name === className;
+}
+
+/**
+ * 读出设备上**真正启用**的 feature 集合。
+ *
+ * `GPUDevice.features` 是权威来源（它只列出已启用的），但它不是所有实现都提供，
+ * mock 里也没有；拿不到时退回 `requiredFeatures`（`requestDevice` 已经校验过这些名字可用）。
+ */
+function readEnabledFeatures(native: GPUDevice, requested: readonly string[]): ReadonlySet<string> {
+  const fromDevice = readSupportedFeatures((native as { features?: GPUSupportedFeatures }).features);
+  if (fromDevice.size > 0) return fromDevice;
+  return new Set(requested);
 }

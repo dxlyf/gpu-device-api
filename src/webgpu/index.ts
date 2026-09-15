@@ -62,7 +62,9 @@ export {
   WebGPUQuerySet,
   asGPUQuerySet,
   isWebGPUQuerySet,
+  TIMESTAMP_INSIDE_PASSES_FEATURES,
   TIMESTAMP_QUERY_FEATURE,
+  toGPUTimestampWrites,
 } from './resources/WebGPUQuerySet.js';
 
 /* ------------------------------------------------------------------ 绑定 ----------------- */
@@ -129,6 +131,7 @@ export {
 /* ------------------------------------------------------------------ 同步 ----------------- */
 export { WebGPUFence } from './sync/WebGPUFence.js';
 export { WebGPUQueue } from './sync/WebGPUQueue.js';
+export { WebGPUQueryResult, type WebGPUQueryResultInit } from './sync/WebGPUQueryResult.js';
 
 /* ------------------------------------------------------------------ 工具 ----------------- */
 export {

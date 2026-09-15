@@ -149,6 +149,12 @@ export const WEBGL2_FEATURE_NAMES: readonly string[] = [
   'texture-float32-filterable',
   'color-buffer-float',
   'debug-renderer-info',
+  /**
+   * GPU 计时。WebGPU 上这是同名的 device feature；WebGL2 上它等价于「拿到了
+   * `EXT_disjoint_timer_query_webgl2`」。用同一个名字是为了让上层（例如 gfx 的 GPU 计时入口）
+   * 能用 `device.features.has('timestamp-query')` 统一判断，而不必分后端写两套探测。
+   */
+  'timestamp-query',
 ];
 
 /** 探测 WebGL2 实际可用的特性集合。 */
@@ -158,6 +164,8 @@ export function queryGlFeatures(gl: WebGL2RenderingContext): Set<string> {
   if (gl.getExtension('OES_texture_float_linear')) features.add('texture-float32-filterable');
   if (gl.getExtension('EXT_color_buffer_float')) features.add('color-buffer-float');
   if (gl.getExtension('WEBGL_debug_renderer_info')) features.add('debug-renderer-info');
+  // 时间查询扩展：它决定 timestamp query set 能不能建（见 WebGL2QuerySet）。
+  if (gl.getExtension('EXT_disjoint_timer_query_webgl2')) features.add('timestamp-query');
   return features;
 }
 

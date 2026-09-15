@@ -11,6 +11,7 @@
 import type { BufferCopyView, BufferLike, CommandBuffer, CommandEncoder, CommandEncoderDescriptor, TextureCopyView } from '../../core/render/CommandEncoder.js';
 import type { RenderPassDescriptor, RenderPassEncoder } from '../../core/render/RenderPassEncoder.js';
 import type { ComputePassDescriptor, ComputePassEncoder } from '../../core/render/ComputePassEncoder.js';
+import type { QuerySet } from '../../core/resources/QuerySet.js';
 import type { Extent3D } from '../../types/internal.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 export declare class WebGPUCommandEncoder implements CommandEncoder {
@@ -34,6 +35,20 @@ export declare class WebGPUCommandEncoder implements CommandEncoder {
     copyTextureToTexture(source: TextureCopyView, destination: TextureCopyView, copySize: Extent3D): void;
     /** 将 buffer 的一段范围清零。`size` 省略时清到末尾，但必须是 4 的倍数。 */
     clearBuffer(buffer: BufferLike, offset?: number, size?: number): void;
+    /**
+     * 把 query set 的一段结果解析进 `destination`（需要 `BufferUsage.QueryResolve`）。
+     *
+     * 注意读回路径：`MAP_READ` 不能与 `QUERY_RESOLVE` 组合，所以想读回必须再
+     * `copyBufferToBuffer` 到一个 `MAP_READ | COPY_DST` 的 buffer（`Device.readQuerySet()` 已经封装好）。
+     */
+    resolveQuerySet(querySet: QuerySet, firstQuery: number, queryCount: number, destination: BufferLike, destinationOffset: number): void;
+    /**
+     * 在命令流里写一个 GPU 时间戳（只需要 `timestamp-query`，不需要 `timestamp-query-inside-passes`）。
+     *
+     * 必须在任何 pass **之外**调用：WebGPU 规定 encoder 上写时间戳时不能有打开的 pass。
+     * 未启用 feature、或实现没有暴露这个方法时明确报错（后者实测存在于部分实现里）。
+     */
+    writeTimestamp(querySet: QuerySet, queryIndex: number): void;
     /** 调试分组：直接转发给原生的 `GPUCommandEncoder`。 */
     pushDebugGroup(label: string): void;
     popDebugGroup(): void;

@@ -4,7 +4,7 @@ import type { IndexFormat } from '../enums/IndexFormat.js';
 import type { BindGroup } from '../binding/BindGroup.js';
 import type { RenderPipeline } from '../pipeline/RenderPipeline.js';
 import type { Buffer } from '../resources/Buffer.js';
-import type { QuerySet } from '../resources/QuerySet.js';
+import type { PassTimestampWrites, QuerySet } from '../resources/QuerySet.js';
 import type { ColorAttachment, Color, DepthStencilAttachment, RenderTarget } from './RenderTarget.js';
 import type {
   DrawDescriptor,
@@ -20,6 +20,19 @@ export interface RenderPassDescriptor {
   /** 便捷方式：直接由一个 render target 生成两份 attachment 列表。 */
   target?: RenderTarget;
   occlusionQuerySet?: QuerySet;
+  /**
+   * 在通道的首尾各写一个 GPU 时间戳（形状与 WebGPU 的 `GPURenderPassTimestampWrites` 一致）。
+   *
+   * WebGPU：需要设备启用 `timestamp-query`，且实现支持 `timestamp-query-inside-passes`
+   * （Chrome 里该能力默认不开，只暴露实验名 `chromium-experimental-timestamp-query-inside-passes`）；
+   * 不满足时抛出带 `[gpu-device-api] ` 前缀的英文错误，而不是静默忽略。
+   * WebGL2：用 `EXT_disjoint_timer_query_webgl2` 的 `beginQuery`/`endQuery` 包住整个通道。
+   * **语义差异**：GL 测量的是区间耗时，所以 WebGL2 把「本通道耗时（纳秒）」写进
+   * `beginningOfPassWriteIndex`（只给 end 时写进 end 那个下标），另一个下标保持 0；
+   * WebGPU 写的则是两个时刻，差值才是耗时。跨后端代码要么自己分后端解释，
+   * 要么直接用 gfx 的 GPU 计时（`Renderer.enableGpuTiming()`），它已经把差异封好了。
+   */
+  timestampWrites?: PassTimestampWrites;
   /** 使用 `target` 时应用的清除值。 */
   clearValue?: Color;
   depthClearValue?: number;
@@ -47,6 +60,20 @@ export interface RenderPassEncoder {
   drawIndexed(descriptor: DrawIndexedDescriptor): void;
   drawIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
   drawIndexedIndirect(indirect: DrawIndirectDescriptor | BufferLike, indirectOffset?: number): void;
+
+  /**
+   * 开始一条遮挡查询（对应 WebGPU 的 `GPURenderPassEncoder.beginOcclusionQuery()`）。
+   *
+   * `index` 是 `RenderPassDescriptor.occlusionQuerySet` 内的下标。这一段里画的图元有多少
+   * 个采样通过深度/模板测试，就写进该下标的计数器 —— 典型用途是「先查询、再决定要不要
+   * 画细节层次」。必须与 {@link endOcclusionQuery} 配对。
+   *
+   * 这一层暴露它是因为两个后端都能实现（WebGPU 原生支持；WebGL2 用 `ANY_SAMPLES_PASSED`），
+   * 而「查询包围盒」这件事只有在录制命令的地方才知道边界，放到上层会退化成手工记账。
+   */
+  beginOcclusionQuery(index: number): void;
+  /** 结束最近一次 {@link beginOcclusionQuery}；没有正在进行的查询时抛错。 */
+  endOcclusionQuery(): void;
 
   /**
    * 打一个调试分组（对应 WebGPU 的 `pushDebugGroup` / WebGL2 的 `EXT_debug_marker`）。

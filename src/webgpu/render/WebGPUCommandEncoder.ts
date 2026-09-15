@@ -19,12 +19,14 @@ import type {
 } from '../../core/render/CommandEncoder.js';
 import type { RenderPassDescriptor, RenderPassEncoder } from '../../core/render/RenderPassEncoder.js';
 import type { ComputePassDescriptor, ComputePassEncoder } from '../../core/render/ComputePassEncoder.js';
+import type { QuerySet } from '../../core/resources/QuerySet.js';
 import type { Extent3D } from '../../types/internal.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
-import { assertNonNegativeInteger } from '../../utils/assert.js';
+import { assertNonNegativeInteger, assertPositiveInteger } from '../../utils/assert.js';
 import { asGPUBuffer, describeUnknown } from '../resources/WebGPUBuffer.js';
 import { asGPUTexture } from '../resources/WebGPUTexture.js';
+import { asGPUQuerySet, TIMESTAMP_QUERY_FEATURE } from '../resources/WebGPUQuerySet.js';
 import { toGPUExtent3D, toGPUOrigin3D, toGPUTextureAspect } from '../utils/wgpuEnumMap.js';
 import {
   WebGPURenderPassEncoder,
@@ -60,13 +62,14 @@ export class WebGPUCommandEncoder implements CommandEncoder {
   beginRenderPass(descriptor: RenderPassDescriptor): RenderPassEncoder {
     this.assertRecording('beginRenderPass');
     this.closeOpenPass();
-    const { native, layout } = toGPURenderPassDescriptor(descriptor);
+    const { native, layout, hasOcclusionQuerySet } = toGPURenderPassDescriptor(descriptor, this.device);
     const label = descriptor.label ?? this.label;
     const encoder = new WebGPURenderPassEncoder(
       this.device,
       this.native.beginRenderPass(native),
       layout,
       label,
+      hasOcclusionQuerySet,
       () => {
         if (this.openPass === encoder) this.openPass = null;
       },
@@ -79,7 +82,7 @@ export class WebGPUCommandEncoder implements CommandEncoder {
   beginComputePass(descriptor?: ComputePassDescriptor): ComputePassEncoder {
     this.assertRecording('beginComputePass');
     this.closeOpenPass();
-    const native = toGPUComputePassDescriptor(descriptor);
+    const native = toGPUComputePassDescriptor(descriptor, this.device);
     const label = descriptor?.label ?? this.label;
     const encoder = new WebGPUComputePassEncoder(
       this.device,
@@ -178,6 +181,72 @@ export class WebGPUCommandEncoder implements CommandEncoder {
       offset,
       resolvedSize,
     );
+  }
+
+  /**
+   * 把 query set 的一段结果解析进 `destination`（需要 `BufferUsage.QueryResolve`）。
+   *
+   * 注意读回路径：`MAP_READ` 不能与 `QUERY_RESOLVE` 组合，所以想读回必须再
+   * `copyBufferToBuffer` 到一个 `MAP_READ | COPY_DST` 的 buffer（`Device.readQuerySet()` 已经封装好）。
+   */
+  resolveQuerySet(
+    querySet: QuerySet,
+    firstQuery: number,
+    queryCount: number,
+    destination: BufferLike,
+    destinationOffset: number,
+  ): void {
+    this.assertRecording('resolveQuerySet');
+    const context = `${this.label}.resolveQuerySet`;
+    assertNonNegativeInteger(firstQuery, `${context} firstQuery`);
+    assertPositiveInteger(queryCount, `${context} queryCount`);
+    assertNonNegativeInteger(destinationOffset, `${context} destinationOffset`);
+    this.native.resolveQuerySet(
+      asGPUQuerySet(querySet, `${context}(querySet)`),
+      firstQuery,
+      queryCount,
+      asGPUBuffer(destination, `${context}(destination)`),
+      destinationOffset,
+    );
+  }
+
+  /**
+   * 在命令流里写一个 GPU 时间戳（只需要 `timestamp-query`，不需要 `timestamp-query-inside-passes`）。
+   *
+   * 必须在任何 pass **之外**调用：WebGPU 规定 encoder 上写时间戳时不能有打开的 pass。
+   * 未启用 feature、或实现没有暴露这个方法时明确报错（后者实测存在于部分实现里）。
+   */
+  writeTimestamp(querySet: QuerySet, queryIndex: number): void {
+    this.assertRecording('writeTimestamp');
+    const context = `${this.label}.writeTimestamp`;
+    const nativeWrite = (this.native as GPUCommandEncoder & {
+      writeTimestamp?: (querySet: GPUQuerySet, queryIndex: number) => void;
+    }).writeTimestamp;
+    if (typeof nativeWrite !== 'function') {
+      throw new ValidationError(
+        `[gpu-device-api] ${context}: this WebGPU implementation does not expose ` +
+          'GPUCommandEncoder.writeTimestamp(). Use RenderPassDescriptor.timestampWrites instead (it needs ' +
+          '"timestamp-query-inside-passes"), or read GPU time from the backend\'s own profiler.',
+      );
+    }
+    if (!this.device.hasEnabledFeature(TIMESTAMP_QUERY_FEATURE)) {
+      throw new ValidationError(
+        `[gpu-device-api] ${context}: timestamp queries need the "${TIMESTAMP_QUERY_FEATURE}" device feature; ` +
+          'request it in DeviceDescriptor.requiredFeatures.',
+      );
+    }
+    if (this.openPass && !this.openPass.ended) {
+      throw new ValidationError(
+        `[gpu-device-api] ${context}: a pass is still open. Call end() on it before writing a timestamp.`,
+      );
+    }
+    if (!Number.isInteger(queryIndex) || queryIndex < 0 || queryIndex >= querySet.count) {
+      throw new ValidationError(
+        `[gpu-device-api] ${context}: queryIndex ${String(queryIndex)} is outside the query set range ` +
+          `[0, ${querySet.count}).`,
+      );
+    }
+    nativeWrite.call(this.native, asGPUQuerySet(querySet, `${context}(querySet)`), queryIndex);
   }
 
   /** 调试分组：直接转发给原生的 `GPUCommandEncoder`。 */

@@ -11,7 +11,7 @@ import type { BufferLike } from '../../core/render/CommandEncoder.js';
 import type { DispatchIndirectDescriptor } from '../../core/render/DrawCommands.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 /** 把 core 的 `ComputePassDescriptor` 翻译为 WebGPU 形态。 */
-export declare function toGPUComputePassDescriptor(descriptor?: ComputePassDescriptor): GPUComputePassDescriptor;
+export declare function toGPUComputePassDescriptor(descriptor: ComputePassDescriptor | undefined, device: WebGPUDevice): GPUComputePassDescriptor;
 export declare class WebGPUComputePassEncoder implements ComputePassEncoder {
     readonly label: string;
     readonly native: GPUComputePassEncoder;

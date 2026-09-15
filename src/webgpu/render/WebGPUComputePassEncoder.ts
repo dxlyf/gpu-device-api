@@ -15,19 +15,22 @@ import { ValidationError } from '../../core/errors/ValidationError.js';
 import { asGPUComputePipeline } from '../pipeline/WebGPUComputePipeline.js';
 import { asGPUBindGroup, NO_DYNAMIC_OFFSETS, validateDynamicOffsets } from '../binding/WebGPUBindGroup.js';
 import { asGPUBuffer } from '../resources/WebGPUBuffer.js';
-import { asGPUQuerySet } from '../resources/WebGPUQuerySet.js';
+import { toGPUTimestampWrites } from '../resources/WebGPUQuerySet.js';
 
 /** 把 core 的 `ComputePassDescriptor` 翻译为 WebGPU 形态。 */
-export function toGPUComputePassDescriptor(descriptor?: ComputePassDescriptor): GPUComputePassDescriptor {
+export function toGPUComputePassDescriptor(
+  descriptor: ComputePassDescriptor | undefined,
+  device: WebGPUDevice,
+): GPUComputePassDescriptor {
   const label = descriptor?.label ?? 'computePass';
   const native: GPUComputePassDescriptor = { label };
   if (descriptor?.timestampWrites) {
-    const writes = descriptor.timestampWrites;
-    native.timestampWrites = {
-      querySet: asGPUQuerySet(writes.querySet, `${label}.timestampWrites.querySet`),
-      beginningOfPassWriteIndex: writes.beginningOfPassWriteIndex,
-      endOfPassWriteIndex: writes.endOfPassWriteIndex,
-    };
+    // 与 render pass 同一套校验：下标范围 + timestamp-query + timestamp-query-inside-passes。
+    native.timestampWrites = toGPUTimestampWrites(
+      descriptor.timestampWrites,
+      device,
+      `${label}.timestampWrites`,
+    );
   }
   return native;
 }

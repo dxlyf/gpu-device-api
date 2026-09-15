@@ -31,6 +31,7 @@ import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasContext } from '../core/CanvasContext.js';
 import type { Device } from '../core/Device.js';
 import type { CommandEncoder, CommandBuffer } from '../core/render/CommandEncoder.js';
+import type { PassTimestampWrites } from '../core/resources/QuerySet.js';
 import type { RenderPassDescriptor, RenderPassEncoder } from '../core/render/RenderPassEncoder.js';
 import type { RenderTarget, Color } from '../core/render/RenderTarget.js';
 import type { RenderPipeline } from '../core/pipeline/RenderPipeline.js';
@@ -40,6 +41,13 @@ import { Material, defineMaterial, type MaterialDesc } from './Material.js';
 import { Geometry, type GeometryDesc } from './Geometry.js';
 import { GfxTexture, type TextureDesc } from './Texture.js';
 import { UniformArenaPool } from './UniformArena.js';
+import {
+  GPU_TIMING_FEATURE,
+  GpuTiming,
+  describeGpuTimingFailure,
+  type GpuTimingOptions,
+  type GpuTimingStats,
+} from './GpuTiming.js';
 import type { UniformValues } from './Uniforms.js';
 import { unwrapUniforms } from './Uniforms.js';
 import type { PerspectiveCamera, OrthographicCamera } from './Camera.js';
@@ -70,6 +78,21 @@ export interface RendererOptions {
   clearColor?: ColorInput;
   camera?: Camera;
   logger?: Logger;
+  /**
+   * 创建设备时额外申请的 feature（例如 `'timestamp-query'`）。
+   *
+   * WebGPU 必须在 `requestDevice` 时就申请，事后无法补；WebGL2 会把这些名字当成
+   * 「必须可用的扩展」校验，缺一个就抛错。
+   */
+  requiredFeatures?: readonly string[];
+  /**
+   * 打开 GPU 计时：会自动申请 `timestamp-query`，并在创建后尝试 `enableGpuTiming()`。
+   *
+   * 后端不支持时 **不会** 让 `Renderer.create()` 失败：`renderer.gpuTiming.enabled` 为 false、
+   * `renderer.gpuTiming.error` 里给出原因（想「要不到就报错」请自己调用 `enableGpuTiming()`）。
+   * 默认关闭 —— GPU 计时需要额外 feature、要做读回、本身有开销。
+   */
+  gpuTiming?: boolean | GpuTimingOptions;
   /** WebGL2 的 context 属性覆盖项（覆盖上面几个选项推导出来的默认值）。 */
   contextAttributes?: WebGLContextAttributes;
 }
@@ -116,8 +139,22 @@ export interface RendererStats {
    * 切换次数应该是 1（这正是「批量绘制用一条管线」的价值所在，也是这行统计的意义）。
    */
   pipelineSwitches: number;
-  /** 上一帧的 CPU 提交耗时（毫秒）。 */
+  /**
+   * 上一帧的 **CPU 提交耗时**（毫秒）：`beginFrame → 逐 draw → endFrame` 里 CPU 花掉的时间，
+   * 不含 GPU 执行时间。
+   *
+   * 它与 {@link RendererStats.gpuFrameTime} 是**两个不同的量**，不要混用：瓶颈在录制命令时
+   * `frameTime` 大而 `gpuFrameTime` 小，瓶颈在 GPU 时反过来。
+   */
   frameTime: number;
+  /**
+   * 上一帧的 **GPU 执行时间**（毫秒）；拿不到时为 `null`（不是 0）。
+   *
+   * 默认是 `null`：需要 `Renderer.enableGpuTiming()`（或 `Renderer.create({ gpuTiming: true })`）
+   * 打开，而且后端要支持（WebGPU 的 `timestamp-query`、WebGL2 的时间查询扩展）。
+   * 数值来自延迟若干帧的异步读回，所以它对应的是「最近一次拿到样本的那一帧」，见 `GpuTiming`。
+   */
+  gpuFrameTime: number | null;
 }
 
 /**
@@ -156,7 +193,13 @@ export class Renderer {
     instances: 0,
     pipelineSwitches: 0,
     frameTime: 0,
+    gpuFrameTime: null,
   };
+
+  /** GPU 计时；`enableGpuTiming()` 之前是 null（默认关闭：需要额外 feature、要读回、有开销）。 */
+  private gpuTimingValue: GpuTiming | null = null;
+  /** 打开 GPU 计时失败的原因；供 `gpuTiming.error` 与诊断使用。 */
+  private gpuTimingError: string | null = null;
 
   private _clearColor: Color;
   private _pixelRatio: number;
@@ -218,6 +261,11 @@ export class Renderer {
       backend: options.backend ?? 'auto',
       label: 'gfx-renderer',
       contextAttributes,
+      // GPU 计时需要 `timestamp-query`，而 WebGPU 只能在 requestDevice 时申请。
+      // 用 optionalFeatures：后端不支持时忽略而不是让整个 Renderer.create 失败
+      //（真正的失败原因由 enableGpuTiming() → createQuerySet() 给出）。
+      ...(options.requiredFeatures ? { requiredFeatures: options.requiredFeatures } : {}),
+      ...(options.gpuTiming ? { optionalFeatures: [GPU_TIMING_FEATURE] } : {}),
     });
 
     if (!created.context) {
@@ -258,6 +306,16 @@ export class Renderer {
     // 设一次像素比，让 canvas 后备缓冲与显示尺寸匹配。
     if (options.pixelRatio) renderer.setPixelRatio(options.pixelRatio);
     renderer.resize();
+
+    if (options.gpuTiming) {
+      // 失败不抛：这是一条「尽力而为」的路径，原因记在 renderer.gpuTiming.error 里。
+      try {
+        renderer.enableGpuTiming(typeof options.gpuTiming === 'object' ? options.gpuTiming : {});
+      } catch (error) {
+        renderer.gpuTimingError = describeGpuTimingFailure(error);
+        logger.warn(`GPU 计时不可用：${renderer.gpuTimingError}`);
+      }
+    }
     return renderer;
   }
 
@@ -365,6 +423,58 @@ export class Renderer {
     return this.statsValue;
   }
 
+  /* ------------------------------------------------------------------ GPU 计时 --------------- */
+
+  /** 当前后端 + 设备是否具备 GPU 计时能力（不创建设备资源，可先判断再决定要不要开）。 */
+  get supportsGpuTiming(): boolean {
+    return GpuTiming.isAvailable(this.device);
+  }
+
+  /**
+   * GPU 计时状态。默认 `enabled: false`。
+   *
+   * 读 `gpuFrameTimeMs` 拿到最近一次成功读回的 GPU 帧耗时（毫秒），`samples` / `skipped`
+   * 说明样本数量与跳过的读回次数；失败原因在 `error` 里。
+   */
+  get gpuTiming(): GpuTimingStats {
+    if (this.gpuTimingValue) return this.gpuTimingValue.stats;
+    return {
+      enabled: false,
+      available: GpuTiming.isAvailable(this.device),
+      frames: 0,
+      delay: 0,
+      gpuFrameTimeMs: null,
+      samples: 0,
+      skipped: 0,
+      inFlight: 0,
+      error: this.gpuTimingError,
+    };
+  }
+
+  /**
+   * 打开 GPU 计时。
+   *
+   * 显式调用时**失败就抛错**（带 `[gpu-device-api] ` 前缀的英文消息，说明缺哪个 feature/扩展）——
+   * 例如 WebGL2 上没有 `EXT_disjoint_timer_query_webgl2`、或 WebGPU 设备没启用 `timestamp-query`。
+   * 想让失败静默降级请用 `Renderer.create({ gpuTiming: true })`（它会把原因写进 `gpuTiming.error`）。
+   *
+   * 实现方式是环形 query set + 延迟若干帧的异步读回，**不会每帧阻塞等待 GPU**；
+   * 详见 `GpuTiming` 的说明。
+   */
+  enableGpuTiming(options: GpuTimingOptions = {}): void {
+    if (this.gpuTimingValue) return;
+    const timing = new GpuTiming(this.device, options);
+    this.gpuTimingValue = timing;
+    this.gpuTimingError = null;
+  }
+
+  /** 关闭 GPU 计时并释放 query set。 */
+  disableGpuTiming(): void {
+    this.gpuTimingValue?.destroy();
+    this.gpuTimingValue = null;
+    this.statsValue.gpuFrameTime = null;
+  }
+
   /* ------------------------------------------------------------------ 帧 --------------------- */
 
   beginFrame(options: FrameOptions = {}): void {
@@ -377,6 +487,10 @@ export class Renderer {
     this.updateCamera();
 
     this.encoder = this.device.createCommandEncoder({ label: 'gfx-frame' });
+    // WebGPU 走 encoder 级时间戳：它只需要 `timestamp-query`，而 pass 内的 timestampWrites
+    // 还需要 `timestamp-query-inside-passes`（Chrome 默认不开）。WebGL2 是空操作，
+    // 它的计时由下面 pass 的 timestampWrites 包住整个通道。
+    this.gpuTimingValue?.beforeFrame(this.encoder);
     const clearColor = options.color ?? this._clearColor;
     const descriptor = this.createPassDescriptor(options, clearColor);
 
@@ -393,6 +507,9 @@ export class Renderer {
       label: 'gfx-pass',
       colorAttachments: descriptor.colorAttachments,
       ...(descriptor.depthStencilAttachment ? { depthStencilAttachment: descriptor.depthStencilAttachment } : {}),
+      // GPU 计时只标在本帧第一个通道上：单通道帧（beginFrame 的默认形态）就是整帧；
+      // 多通道时 beginPass() 开的通道不写时间戳，避免把不同通道混进同一个样本。
+      ...this.timestampWritesForPass(),
     });
 
     this.commandBuffers = [];
@@ -407,11 +524,22 @@ export class Renderer {
   endFrame(): void {
     if (!this._inFrame) return;
     this.pass?.end();
-    if (this.encoder) this.commandBuffers.push(this.encoder.finish());
+    const encoder = this.encoder;
+    if (encoder) {
+      // WebGPU 的「帧结束」时间戳：必须在所有 pass 都 end() 之后、finish() 之前写。
+      if (this.gpuTimingValue) this.gpuTimingValue.afterFrameEncoding(encoder);
+      this.commandBuffers.push(encoder.finish());
+    }
     if (this.commandBuffers.length > 0) this.device.queue.submit(this.commandBuffers);
 
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.statsValue.frameTime = now - this.frameStart;
+
+    // 提交之后才安排读回：队列顺序保证它看到的时间戳已经写入（见 GpuTiming）。
+    if (this.gpuTimingValue) {
+      this.gpuTimingValue.onFrameSubmitted();
+      this.statsValue.gpuFrameTime = this.gpuTimingValue.stats.gpuFrameTimeMs;
+    }
 
     this.pass = null;
     this.encoder = null;
@@ -448,6 +576,12 @@ export class Renderer {
 
     // 新通道开始时管线状态要重新绑定，所以第一个 draw 记作一次切换。
     this.currentPipeline = null;
+  }
+
+  /** 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。 */
+  private timestampWritesForPass(): { timestampWrites?: PassTimestampWrites } {
+    const writes = this.gpuTimingValue?.passTimestampWrites();
+    return writes ? { timestampWrites: writes } : {};
   }
 
   /**
@@ -578,6 +712,8 @@ export class Renderer {
     if (this._disposed) return;
     this._disposed = true;
     if (this._inFrame) this.endFrame();
+    this.gpuTimingValue?.destroy();
+    this.gpuTimingValue = null;
     for (const state of this.materials.values()) {
       state.pipeline?.dispose();
       state.values = null;

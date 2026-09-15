@@ -16,6 +16,9 @@
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { indexFormatByteSize } from '../../core/enums/IndexFormat.js';
 import { BindingType } from '../../core/enums/BindingType.js';
+import { assertPassTimestampWrites } from '../../core/resources/QuerySet.js';
+import { ANY_SAMPLES_PASSED, asWebGL2QuerySet } from '../resources/WebGL2QuerySet.js';
+import type { WebGL2QuerySet } from '../resources/WebGL2QuerySet.js';
 import { GL_INDEX_TYPES, resolveClearColor } from '../utils/glEnumMap.js';
 import {
   insertDebugMarker as insertGlDebugMarker,
@@ -98,6 +101,18 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   private indexBuffer: IndexBufferBinding | null = null;
   private stencilReference = 0;
   private _ended = false;
+  /**
+   * 本通道正在计时的时间查询（`beginQuery` 已在构造时下发，`end()` 时收尾）。
+   *
+   * GL 的时间查询是**区间**测量：`beginQuery(TIME_ELAPSED_EXT, q)` → `endQuery` 之间的 GPU
+   * 时间会写进 q。所以它包住的是「通道开始清屏/绑定 framebuffer 之后到 end() 之前」这段，
+   * 对单通道帧来说就是整个渲染阶段。
+   */
+  private pendingTimerQueries: { readonly target: number; readonly query: WebGLQuery } | null = null;
+  /** 是否有正在进行的遮挡查询（GL 要求 beginQuery/endQuery 严格配对）。 */
+  private occlusionQueryOpen = false;
+  /** 本通道声明了 occlusionQuerySet 时的 query set（决定 beginOcclusionQuery 是否可用）。 */
+  private occlusionQuerySet: WebGL2QuerySet | null = null;
 
   /**
    * 变体请求对象：通道的颜色/深度格式在构造时就定了，生命周期内不会变，
@@ -170,6 +185,9 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
 
     // 附件形态到这里就定了：之后的 setPipeline / draw 都复用这一个请求对象。
     this.variantShape = { colorFormats: this.colorFormats, sampleCount: 1, depthFormat: this.depthFormat };
+
+    // 查询必须在附件/清屏之后开始，否则时间戳会把「切 framebuffer、清屏」这段算在外面。
+    this.beginQuerySetup(descriptor);
   }
 
   get ended(): boolean {
@@ -367,6 +385,43 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   }
 
   /**
+   * 开始一条遮挡查询（对应 `gl.beginQuery(ANY_SAMPLES_PASSED, query)`）。
+   *
+   * `ANY_SAMPLES_PASSED` 是 WebGL2 核心功能，不需要扩展；计数器记录的是「有多少个采样通过了
+   * 深度/模板测试」（≥1 即表示「有东西可见」）。结果由 `Device.readQuerySet()` 读回。
+   */
+  beginOcclusionQuery(index: number): void {
+    this.assertOpen('beginOcclusionQuery');
+    const set = this.occlusionQuerySet;
+    if (!set) {
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: the pass was created without ` +
+          'RenderPassDescriptor.occlusionQuerySet, so there is nowhere to store the sample count.',
+      );
+    }
+    if (this.occlusionQueryOpen) {
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: an occlusion query is already open; ` +
+          'call endOcclusionQuery() first (GL allows only one active query per target).',
+      );
+    }
+    this.gl.beginQuery(ANY_SAMPLES_PASSED, set.queryAt(index, `${this.label}.beginOcclusionQuery`));
+    this.occlusionQueryOpen = true;
+  }
+
+  /** 结束最近一次 {@link beginOcclusionQuery}。 */
+  endOcclusionQuery(): void {
+    this.assertOpen('endOcclusionQuery');
+    if (!this.occlusionQueryOpen) {
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".endOcclusionQuery: no occlusion query is open.`,
+      );
+    }
+    this.gl.endQuery(ANY_SAMPLES_PASSED);
+    this.occlusionQueryOpen = false;
+  }
+
+  /**
    * 调试分组：WebGL2 靠 `EXT_debug_marker` 实现，扩展不可用时是空操作
    * （只影响抓帧工具的分组显示，不影响渲染结果）。
    */
@@ -384,6 +439,14 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
 
   end(): void {
     if (this._ended) return;
+    if (this.occlusionQueryOpen) {
+      // GL 的查询必须配对；不配对会让后面的查询直接报 INVALID_OPERATION（而且报在别处，很难查）。
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".end: an occlusion query is still open; call ` +
+          'endOcclusionQuery() before ending the pass.',
+      );
+    }
+    this.endTimerQuery();
     this._ended = true;
     // GL 没有「结束渲染通道」这一步：默认帧缓冲会在浏览器合成时自动呈现，
     // 离屏目标则已经写在纹理里。这里只需要把状态缓存作废，
@@ -392,6 +455,46 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   }
 
   /* ------------------------------------------------------------------ 内部 ------------------- */
+
+  /**
+   * 处理 `RenderPassDescriptor.timestampWrites` 与 `occlusionQuerySet`。
+   *
+   * **WebGL2 的 timestamp 语义与 WebGPU 不同**（这一点必须看清）：
+   * GL 的 `TIME_ELAPSED_EXT` 测量的是 `beginQuery` → `endQuery` 之间的**区间耗时**，
+   * 而 WebGPU 写的是「通道开始的时刻」与「通道结束的时刻」两个独立时间戳。
+   * 所以这里把区间耗时写进 `beginningOfPassWriteIndex`（只给了 end 时用 end 那个下标），
+   * 另一个下标保持 0；读回后的解释也相应不同（见 gfx 的 `GpuTiming`）。
+   */
+  private beginQuerySetup(descriptor: RenderPassDescriptor): void {
+    if (descriptor.occlusionQuerySet) {
+      this.occlusionQuerySet = asWebGL2QuerySet(
+        descriptor.occlusionQuerySet,
+        `${this.label}.occlusionQuerySet`,
+      );
+    }
+
+    const writes = descriptor.timestampWrites;
+    if (!writes) return;
+    const context = `${this.label}.timestampWrites`;
+    assertPassTimestampWrites(writes, context);
+    const set = asWebGL2QuerySet(writes.querySet, `${context}.querySet`);
+    const slot = writes.beginningOfPassWriteIndex ?? writes.endOfPassWriteIndex;
+    if (slot === undefined) {
+      // assertPassTimestampWrites 已经拦下这种情况，这里只是让类型收窄。
+      throw new ValidationError(`[gpu-device-api] ${context}: no write index was given.`);
+    }
+    const query = set.queryAt(slot, context);
+    this.gl.beginQuery(set.target, query);
+    this.pendingTimerQueries = { target: set.target, query };
+  }
+
+  /** 收尾时间查询；没有正在进行的查询时是空操作。 */
+  private endTimerQuery(): void {
+    const pending = this.pendingTimerQueries;
+    if (!pending) return;
+    this.pendingTimerQueries = null;
+    this.gl.endQuery(pending.target);
+  }
 
   /**
    * 取当前通道形态下已解析好的管线变体。

@@ -31,6 +31,7 @@ import type { RenderTarget, Color } from '../core/render/RenderTarget.js';
 import { Material, type MaterialDesc } from './Material.js';
 import { Geometry, type GeometryDesc } from './Geometry.js';
 import { GfxTexture, type TextureDesc } from './Texture.js';
+import { type GpuTimingOptions, type GpuTimingStats } from './GpuTiming.js';
 import type { PerspectiveCamera, OrthographicCamera } from './Camera.js';
 /** 便捷层支持的相机类型。 */
 export type Camera = PerspectiveCamera | OrthographicCamera;
@@ -57,6 +58,21 @@ export interface RendererOptions {
     clearColor?: ColorInput;
     camera?: Camera;
     logger?: Logger;
+    /**
+     * 创建设备时额外申请的 feature（例如 `'timestamp-query'`）。
+     *
+     * WebGPU 必须在 `requestDevice` 时就申请，事后无法补；WebGL2 会把这些名字当成
+     * 「必须可用的扩展」校验，缺一个就抛错。
+     */
+    requiredFeatures?: readonly string[];
+    /**
+     * 打开 GPU 计时：会自动申请 `timestamp-query`，并在创建后尝试 `enableGpuTiming()`。
+     *
+     * 后端不支持时 **不会** 让 `Renderer.create()` 失败：`renderer.gpuTiming.enabled` 为 false、
+     * `renderer.gpuTiming.error` 里给出原因（想「要不到就报错」请自己调用 `enableGpuTiming()`）。
+     * 默认关闭 —— GPU 计时需要额外 feature、要做读回、本身有开销。
+     */
+    gpuTiming?: boolean | GpuTimingOptions;
     /** WebGL2 的 context 属性覆盖项（覆盖上面几个选项推导出来的默认值）。 */
     contextAttributes?: WebGLContextAttributes;
 }
@@ -99,8 +115,22 @@ export interface RendererStats {
      * 切换次数应该是 1（这正是「批量绘制用一条管线」的价值所在，也是这行统计的意义）。
      */
     pipelineSwitches: number;
-    /** 上一帧的 CPU 提交耗时（毫秒）。 */
+    /**
+     * 上一帧的 **CPU 提交耗时**（毫秒）：`beginFrame → 逐 draw → endFrame` 里 CPU 花掉的时间，
+     * 不含 GPU 执行时间。
+     *
+     * 它与 {@link RendererStats.gpuFrameTime} 是**两个不同的量**，不要混用：瓶颈在录制命令时
+     * `frameTime` 大而 `gpuFrameTime` 小，瓶颈在 GPU 时反过来。
+     */
     frameTime: number;
+    /**
+     * 上一帧的 **GPU 执行时间**（毫秒）；拿不到时为 `null`（不是 0）。
+     *
+     * 默认是 `null`：需要 `Renderer.enableGpuTiming()`（或 `Renderer.create({ gpuTiming: true })`）
+     * 打开，而且后端要支持（WebGPU 的 `timestamp-query`、WebGL2 的时间查询扩展）。
+     * 数值来自延迟若干帧的异步读回，所以它对应的是「最近一次拿到样本的那一帧」，见 `GpuTiming`。
+     */
+    gpuFrameTime: number | null;
 }
 export declare class Renderer {
     readonly backend: BackendKind;
@@ -115,6 +145,10 @@ export declare class Renderer {
     private readonly textures;
     private readonly bindGroups;
     private readonly statsValue;
+    /** GPU 计时；`enableGpuTiming()` 之前是 null（默认关闭：需要额外 feature、要读回、有开销）。 */
+    private gpuTimingValue;
+    /** 打开 GPU 计时失败的原因；供 `gpuTiming.error` 与诊断使用。 */
+    private gpuTimingError;
     private _clearColor;
     private _pixelRatio;
     private _width;
@@ -156,6 +190,28 @@ export declare class Renderer {
     setMaterial(material: Material | null): void;
     get material(): Material | null;
     get stats(): RendererStats;
+    /** 当前后端 + 设备是否具备 GPU 计时能力（不创建设备资源，可先判断再决定要不要开）。 */
+    get supportsGpuTiming(): boolean;
+    /**
+     * GPU 计时状态。默认 `enabled: false`。
+     *
+     * 读 `gpuFrameTimeMs` 拿到最近一次成功读回的 GPU 帧耗时（毫秒），`samples` / `skipped`
+     * 说明样本数量与跳过的读回次数；失败原因在 `error` 里。
+     */
+    get gpuTiming(): GpuTimingStats;
+    /**
+     * 打开 GPU 计时。
+     *
+     * 显式调用时**失败就抛错**（带 `[gpu-device-api] ` 前缀的英文消息，说明缺哪个 feature/扩展）——
+     * 例如 WebGL2 上没有 `EXT_disjoint_timer_query_webgl2`、或 WebGPU 设备没启用 `timestamp-query`。
+     * 想让失败静默降级请用 `Renderer.create({ gpuTiming: true })`（它会把原因写进 `gpuTiming.error`）。
+     *
+     * 实现方式是环形 query set + 延迟若干帧的异步读回，**不会每帧阻塞等待 GPU**；
+     * 详见 `GpuTiming` 的说明。
+     */
+    enableGpuTiming(options?: GpuTimingOptions): void;
+    /** 关闭 GPU 计时并释放 query set。 */
+    disableGpuTiming(): void;
     beginFrame(options?: FrameOptions): void;
     endFrame(): void;
     get inFrame(): boolean;
@@ -164,6 +220,8 @@ export declare class Renderer {
      * 必须在 `beginFrame()` 之后调用。
      */
     beginPass(options?: FrameOptions): void;
+    /** 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。 */
+    private timestampWritesForPass;
     /**
      * 「画到离屏 target」与「画到 canvas」走同一段代码，只是附件来源不同。
      *

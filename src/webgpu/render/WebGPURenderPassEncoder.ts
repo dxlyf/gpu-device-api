@@ -23,7 +23,7 @@ import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { asGPUBuffer } from '../resources/WebGPUBuffer.js';
 import { asGPUTextureView } from '../resources/WebGPUTextureView.js';
-import { asGPUQuerySet } from '../resources/WebGPUQuerySet.js';
+import { asGPUQuerySet, toGPUTimestampWrites } from '../resources/WebGPUQuerySet.js';
 import { asGPUBindGroup, NO_DYNAMIC_OFFSETS, validateDynamicOffsets } from '../binding/WebGPUBindGroup.js';
 import { asGPURenderPipeline } from '../pipeline/WebGPURenderPipeline.js';
 import { WebGPURenderTarget } from './WebGPURenderTarget.js';
@@ -44,11 +44,18 @@ export interface WebGPURenderPassLayout {
  * - `loadOp` / `storeOp` 省略时按 `'clear'` / `'store'` 处理（`GPURenderPassColorAttachment`
  *   要求这两个字段必填，而 core 里它们是可选的）；
  * - 所有 attachment 的 sampleCount 必须一致（WebGPU 的硬性要求），否则这里直接报错；
- * - 多重采样 attachment 必须有 `resolveTarget`（或 `storeOp: 'discard'`）。
+ * - 多重采样 attachment 必须有 `resolveTarget`（或 `storeOp: 'discard'`）；
+ * - `timestampWrites` 需要 `timestamp-query` 与 `timestamp-query-inside-passes`，缺一个就报错
+ *   （见 {@link toGPUTimestampWrites}）。
  */
-export function toGPURenderPassDescriptor(descriptor: RenderPassDescriptor): {
+export function toGPURenderPassDescriptor(
+  descriptor: RenderPassDescriptor,
+  device: WebGPUDevice,
+): {
   native: GPURenderPassDescriptor;
   layout: WebGPURenderPassLayout;
+  /** 该 pass 是否声明了 occlusionQuerySet（决定 beginOcclusionQuery 是否可用）。 */
+  hasOcclusionQuerySet: boolean;
 } {
   const label = descriptor.label ?? 'renderPass';
   let colorAttachments: readonly (ColorAttachment | null)[];
@@ -152,9 +159,17 @@ export function toGPURenderPassDescriptor(descriptor: RenderPassDescriptor): {
   if (descriptor.occlusionQuerySet) {
     native.occlusionQuerySet = asGPUQuerySet(descriptor.occlusionQuerySet, `${label}.occlusionQuerySet`);
   }
+  if (descriptor.timestampWrites) {
+    native.timestampWrites = toGPUTimestampWrites(
+      descriptor.timestampWrites,
+      device,
+      `${label}.timestampWrites`,
+    );
+  }
 
   return {
     native,
+    hasOcclusionQuerySet: descriptor.occlusionQuerySet !== undefined,
     layout: {
       colorFormats: formats,
       depthFormat,
@@ -193,7 +208,10 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
 
   private readonly device: WebGPUDevice;
   private readonly onEnd: (() => void) | undefined;
+  /** 该 pass 是否声明了 occlusionQuerySet；没声明时 beginOcclusionQuery 会明确报错。 */
+  private readonly hasOcclusionQuerySet: boolean;
   private _ended = false;
+  private occlusionQueryOpen = false;
 
   /**
    * 一个 pass 的 attachment 布局与 label 在生命周期内都不变，因此「pipeline variant 请求」
@@ -215,12 +233,14 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
     native: GPURenderPassEncoder,
     layout: WebGPURenderPassLayout,
     label: string,
+    hasOcclusionQuerySet: boolean,
     onEnd?: () => void,
   ) {
     this.device = device;
     this.native = native;
     this.layout = layout;
     this.label = label;
+    this.hasOcclusionQuerySet = hasOcclusionQuerySet;
     this.onEnd = onEnd;
 
     const pass = `RenderPass "${label}"`;
@@ -341,6 +361,43 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
     this.native.drawIndexedIndirect(resolved.buffer, resolved.offset);
   }
 
+  /**
+   * 开始一条遮挡查询：这一段里绘制的图元有多少采样通过深度/模板测试，就累加到
+   * `descriptor.occlusionQuerySet` 的第 `index` 个计数器里。
+   *
+   * WebGPU 要求 pass 在创建时就声明 `occlusionQuerySet`，没声明就报错（原生也会报，
+   * 但这里报得更早、说的更清楚）。
+   */
+  beginOcclusionQuery(index: number): void {
+    this.assertOpen('beginOcclusionQuery');
+    if (!this.hasOcclusionQuerySet) {
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: the pass was created without ` +
+          'RenderPassDescriptor.occlusionQuerySet, so there is nowhere to store the sample count.',
+      );
+    }
+    if (this.occlusionQueryOpen) {
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: an occlusion query is already open; ` +
+          'call endOcclusionQuery() first.',
+      );
+    }
+    this.native.beginOcclusionQuery(index);
+    this.occlusionQueryOpen = true;
+  }
+
+  /** 结束最近一次 {@link beginOcclusionQuery}。 */
+  endOcclusionQuery(): void {
+    this.assertOpen('endOcclusionQuery');
+    if (!this.occlusionQueryOpen) {
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".endOcclusionQuery: no occlusion query is open.`,
+      );
+    }
+    this.occlusionQueryOpen = false;
+    this.native.endOcclusionQuery();
+  }
+
   /** 调试分组：直接转发给原生的 `GPURenderPassEncoder`（抓帧工具据此分组显示）。 */
   pushDebugGroup(label: string): void {
     this.assertOpen('pushDebugGroup');
@@ -360,6 +417,13 @@ export class WebGPURenderPassEncoder implements RenderPassEncoder {
   /** 结束该 pass。幂等；此后再调用任何录制方法都会抛错。 */
   end(): void {
     if (this._ended) return;
+    if (this.occlusionQueryOpen) {
+      // WebGPU 同样把「pass 结束时还有未闭合的遮挡查询」判为校验错误，这里提前报清楚。
+      throw new ValidationError(
+        `[gpu-device-api] RenderPass "${this.label}".end: an occlusion query is still open; call ` +
+          'endOcclusionQuery() before ending the pass.',
+      );
+    }
     this._ended = true;
     this.native.end();
     this.onEnd?.();

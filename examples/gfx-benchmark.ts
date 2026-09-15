@@ -32,11 +32,27 @@
  * - 几何体、`model` 矩阵、颜色在整个测量过程中不变（只创建/预计算一次），
  *   避免把上传与分配的噪声算进来；每档先空跑几帧热身（arena 扩容也发生在热身的头一帧里）。
  *
+ * ## GPU 时间是真测出来的，不是 CPU 的复制
+ *
+ * 页面用 `Renderer.create({ gpuTiming: true })` 打开 GPU 计时，于是多出一列 `gpu=`：
+ * 它来自后端的 query 机制（WebGPU 的 `timestamp-query` + `encoder.writeTimestamp`，
+ * WebGL2 的 `EXT_disjoint_timer_query_webgl2`），**与 CPU 那列完全无关**：
+ * - 两列数字不相等（同一档通常差一个数量级）；
+ * - GPU 那列随负载变化（2000 → 20000 会明显上升），而 CPU 那列按 draw 数线性上升；
+ * - `gpu=` 与 `sync - frame`（整帧减去 CPU 提交）应当同量级 —— 后者是本页唯一另一个「包含
+ *   GPU 执行时间」的量，用来交叉验证刻度的单位换算（`timestampPeriod`）没有搞错。
+ * 拿不到 GPU 计时（后端缺 feature/扩展）时 `gpu=` 显示 `—`，原因写进 `data-bench-gpu-error`。
+ *
  * ## 本页自带结论
  *
  * 跑完把所有分档写进 `<html data-gfx-benchmark-*>`（键名与 `benchmark.ts` 的 `data-benchmark-*`
  * 一一对应），全部测完再写 `gfxBenchmarkResult = ok`，之后页面**自己停下来**（不再排 rAF 循环）。
  * 每档还会核对 `renderer.stats`（drawCalls 必须等于物体数），用来证明这些 draw 真的发生了。
+ *
+ * 无头抓取关心的是这几个 key：
+ * `data-bench-cpu-ms`（每档 CPU 均值，`档:值;档:值`）、`data-bench-gpu-ms`（每档 GPU 均值）、
+ * `data-bench-gpu-source`（`webgpu-timestamp-query` / `webgl2-EXT_disjoint_timer_query_webgl2` /
+ * `unavailable`）、`data-bench-gpu-error`（拿不到时的原文错误）。
  *
  * ## 运行
  *
@@ -187,6 +203,8 @@ async function createScene(): Promise<Scene> {
     antialias: false,
     depth: true,
     clearColor: CLEAR_COLOR,
+    // GPU 计时：申请 timestamp-query 并尝试打开（后端不支持时不会让页面失败，原因进 error）。
+    gpuTiming: true,
   });
 
   renderer.device.onError((error) => {
@@ -264,6 +282,79 @@ function yieldToBrowser(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------------------------------------ */
+/* GPU 样本收集                                                                                        */
+/* ------------------------------------------------------------------------------------------------ */
+
+/** 每档最多为「等 GPU 样本落地」画多久（毫秒）。WebGL2 + SwiftShader 上读回可能滞后好几秒。 */
+const GPU_SAMPLE_DEADLINE_MS = 12000;
+/** 每档期望拿到的样本数；够了就不再等。 */
+const GPU_SAMPLE_TARGET = 3;
+
+/** GPU 计时的来源说明，写进 `data-bench-gpu-source`。 */
+function gpuTimingSource(): string {
+  const active = scene;
+  if (!active || !active.renderer.gpuTiming.enabled) return 'unavailable';
+  return active.renderer.backend === 'webgpu'
+    ? 'webgpu-timestamp-query'
+    : 'webgl2-EXT_disjoint_timer_query_webgl2';
+}
+
+/**
+ * 每档开始前重开一次 GPU 计时。
+ *
+ * 目的是**把档与档之间的样本彻底隔开**：上一档里那些「还没落地」的异步读回会随着 query set
+ * 一起被丢弃，绝不会被算进下一档（WebGL2 上的读回延迟可达数秒，不隔离就会串档）。
+ */
+function restartGpuTiming(): void {
+  const active = scene;
+  if (!active) return;
+  const wasEnabled = active.renderer.gpuTiming.enabled;
+  if (!wasEnabled) return;
+  active.renderer.disableGpuTiming();
+  try {
+    active.renderer.enableGpuTiming();
+  } catch (error) {
+    setData('benchGpuError', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * 收集当前档位的 GPU 帧耗时样本（毫秒）。
+ *
+ * `GpuTiming` 是「延迟若干帧 + 异步读回」，所以测量完 CPU 之后还要继续画**同一档**的帧，
+ * 样本才会陆续落地：WebGPU 上一两帧就有，WebGL2（SwiftShader）上实测要等好几秒。
+ * 直到凑够 {@link GPU_SAMPLE_TARGET} 个样本、或者超过 {@link GPU_SAMPLE_DEADLINE_MS} 为止。
+ */
+async function collectGpuSamples(count: number): Promise<number[]> {
+  const active = scene;
+  if (!active) return [];
+  const timing = active.renderer.gpuTiming;
+  if (!timing.enabled) return [];
+
+  const samples: number[] = [];
+  let seen = timing.samples;
+  const deadline = performance.now() + GPU_SAMPLE_DEADLINE_MS;
+  while (performance.now() < deadline && samples.length < GPU_SAMPLE_TARGET) {
+    drawFrame(count);
+    await syncFrame();
+    // 关键：每次循环都要让出宏任务。WebGL2 的读回用 `setTimeout(0)` 轮询
+    // QUERY_RESULT_AVAILABLE，如果这里只 await 微任务（onSubmittedWorkDone 就是），
+    // 定时器永远排不上队，样本一个都不会落地（实测踩过）。
+    await yieldToBrowser();
+    const now = active.renderer.gpuTiming;
+    if (now.gpuFrameTimeMs !== null && now.samples > seen) {
+      samples.push(now.gpuFrameTimeMs);
+      seen = now.samples;
+    }
+    if (now.error !== null && document.documentElement.dataset.benchGpuError === undefined) {
+      // 读回失败（例如 GPU_DISJOINT_EXT）时留证据，但不再刷屏。
+      setData('benchGpuError', now.error.replace(/\s+/g, ' ').trim());
+    }
+  }
+  return samples;
+}
+
+/* ------------------------------------------------------------------------------------------------ */
 /* 测量                                                                                                */
 /* ------------------------------------------------------------------------------------------------ */
 
@@ -280,6 +371,13 @@ interface Measurement {
   readonly drawsPerSecond: number;
   /** 含 `onSubmittedWorkDone()` 等待的帧耗时，只作参考（说明 GPU 负担）。 */
   readonly syncMsMean: number;
+  /** GPU 帧耗时均值（毫秒）；拿不到 GPU 计时时为 null（不是 0）。 */
+  readonly gpuMsMean: number | null;
+  readonly gpuSamples: number;
+  /** 收集样本期间的诊断：跳过的读回次数 / 仍在飞的读回 / 读回错误。 */
+  readonly gpuSkipped: number;
+  readonly gpuInFlight: number;
+  readonly gpuError: string | null;
   readonly framesMeasured: number;
   /** `renderer.stats.drawCalls` 是否等于物体数（证明这些 draw 真的发生了）。 */
   readonly statsConsistent: boolean;
@@ -310,6 +408,9 @@ function warmupForCount(count: number): number {
 
 async function measure(count: number): Promise<TierResult> {
   const active = scene!;
+
+  // 每档重开 GPU 计时：上一档还没落地的读回随 query set 一起丢弃，不会串到这一档。
+  restartGpuTiming();
 
   for (let index = 0; index < warmupForCount(count); index++) drawFrame(count);
   await syncFrame();
@@ -352,6 +453,9 @@ async function measure(count: number): Promise<TierResult> {
     setData('gfxBenchmarkStatsOk', 'false');
   }
 
+  // GPU 样本要在 CPU 测量之后单独收集（延迟若干帧的异步读回，见 collectGpuSamples）。
+  const gpuSamples = await collectGpuSamples(count);
+
   return {
     count,
     drawCalls,
@@ -363,6 +467,11 @@ async function measure(count: number): Promise<TierResult> {
     perDrawUs: (frameMsMean * 1000) / Math.max(count, 1),
     drawsPerSecond: count / Math.max(frameMsMean / 1000, 1e-9),
     syncMsMean: mean(syncSamples),
+    gpuMsMean: gpuSamples.length > 0 ? mean(gpuSamples) : null,
+    gpuSamples: gpuSamples.length,
+    gpuSkipped: active.renderer.gpuTiming.skipped,
+    gpuInFlight: active.renderer.gpuTiming.inFlight,
+    gpuError: active.renderer.gpuTiming.error,
     framesMeasured: measuredFrames,
     statsConsistent,
     note: active.renderer.backend === 'webgpu' ? 'WebGPU：队列排空' : 'WebGL2：gl.finish()',
@@ -373,7 +482,7 @@ async function measure(count: number): Promise<TierResult> {
 /* 结果展示                                                                                            */
 /* ------------------------------------------------------------------------------------------------ */
 
-const COLUMN_COUNT = 11;
+const COLUMN_COUNT = 12;
 
 function rowFor(count: number): HTMLTableRowElement {
   const row = document.createElement('tr');
@@ -390,8 +499,8 @@ function renderMeasurement(result: TierResult): void {
 
   if ('skipped' in result) {
     row.className = 'skipped';
-    for (let index = 1; index <= 9; index++) row.cells[index]!.textContent = '—';
-    row.cells[10]!.textContent = result.skipped;
+    for (let index = 1; index <= 10; index++) row.cells[index]!.textContent = '—';
+    row.cells[11]!.textContent = result.skipped;
     return;
   }
 
@@ -401,11 +510,14 @@ function renderMeasurement(result: TierResult): void {
   row.cells[3]!.textContent = `${result.frameMsMean.toFixed(2)} ms`;
   row.cells[4]!.textContent = `${result.frameMsMin.toFixed(2)} ms`;
   row.cells[5]!.textContent = `${result.frameMsMax.toFixed(2)} ms`;
-  row.cells[6]!.textContent = `${result.perDrawUs.toFixed(2)} µs`;
-  row.cells[7]!.textContent = result.drawsPerSecond.toFixed(0);
-  row.cells[8]!.textContent = String(result.pipelineSwitches);
-  row.cells[9]!.textContent = `${result.syncMsMean.toFixed(2)} ms`;
-  row.cells[10]!.textContent = result.statsConsistent ? result.note : `stats 不一致（drawCalls=${result.drawCalls}）`;
+  // GPU 那列拿不到时显示「—」而不是 0：0 会被误读成「GPU 不花时间」。
+  row.cells[6]!.textContent =
+    result.gpuMsMean === null ? '—' : `${result.gpuMsMean.toFixed(3)} ms (${result.gpuSamples})`;
+  row.cells[7]!.textContent = `${result.perDrawUs.toFixed(2)} µs`;
+  row.cells[8]!.textContent = result.drawsPerSecond.toFixed(0);
+  row.cells[9]!.textContent = String(result.pipelineSwitches);
+  row.cells[10]!.textContent = `${result.syncMsMean.toFixed(2)} ms`;
+  row.cells[11]!.textContent = result.statsConsistent ? result.note : `stats 不一致（drawCalls=${result.drawCalls}）`;
 }
 
 /** 每档一条紧凑摘要；档与档之间用 `;` 分隔（与 `benchmark.ts` 的 `benchmarkResults` 同一写法）。 */
@@ -415,7 +527,10 @@ function summarize(results: readonly TierResult[]): string {
       'skipped' in result
         ? `${result.count}:skipped(${result.skipped})`
         : `${result.count}:frame=${result.frameMsMean.toFixed(2)}ms,min=${result.frameMsMin.toFixed(2)}ms,` +
-          `max=${result.frameMsMax.toFixed(2)}ms,perDraw=${result.perDrawUs.toFixed(2)}us,` +
+          `max=${result.frameMsMax.toFixed(2)}ms,gpu=${result.gpuMsMean === null ? 'n/a' : `${result.gpuMsMean.toFixed(3)}ms`},` +
+          `gpuSamples=${result.gpuSamples},gpuSkipped=${result.gpuSkipped},gpuInFlight=${result.gpuInFlight},` +
+          `gpuError=${result.gpuError === null ? 'none' : result.gpuError.replace(/\s+/g, ' ').trim()},` +
+          `perDraw=${result.perDrawUs.toFixed(2)}us,` +
           `drawsPerSecond=${result.drawsPerSecond.toFixed(0)},sync=${result.syncMsMean.toFixed(2)}ms,` +
           `drawCalls=${result.drawCalls},tris=${result.triangles},pipelineSwitches=${result.pipelineSwitches},` +
           `frames=${result.framesMeasured},stats=${result.statsConsistent ? 'ok' : 'mismatch'}`,
@@ -423,14 +538,29 @@ function summarize(results: readonly TierResult[]): string {
     .join(';');
 }
 
+/** 每档一列数字，供无头抓取（`data-bench-cpu-ms` / `data-bench-gpu-ms`）。 */
+function seriesOf(results: readonly TierResult[], pick: (result: Measurement) => number | null): string {
+  return results
+    .filter((result): result is Measurement => !('skipped' in result))
+    .map((result) => {
+      const value = pick(result);
+      return `${result.count}:${value === null ? 'n/a' : value.toFixed(3)}`;
+    })
+    .join(';');
+}
+
 /** `#out` 里的人读版本：每档一行。 */
 function describeLine(result: TierResult): string {
-  return 'skipped' in result
-    ? `${result.count} 个物体：跳过 —— ${result.skipped}`
-    : `${result.count} 个物体：CPU 帧耗时 ${result.frameMsMean.toFixed(2)} ms（${result.perDrawUs.toFixed(2)} µs/draw，` +
-        `${result.drawsPerSecond.toFixed(0)} draws/s），含等待后端 ${result.syncMsMean.toFixed(2)} ms，` +
-        `draw calls ${result.drawCalls}，三角形 ${result.triangles}，管线切换 ${result.pipelineSwitches}，` +
-        `测了 ${result.framesMeasured} 帧`;
+  if ('skipped' in result) return `${result.count} 个物体：跳过 —— ${result.skipped}`;
+  const gpu =
+    result.gpuMsMean === null
+      ? `GPU 时间不可用（样本 0，跳过 ${result.gpuSkipped} 次读回` +
+        `${result.gpuError === null ? '' : `，错误：${result.gpuError}`}）`
+      : `GPU 执行 ${result.gpuMsMean.toFixed(3)} ms（${result.gpuSamples} 个样本，跳过 ${result.gpuSkipped} 次读回）`;
+  return `${result.count} 个物体：CPU 提交 ${result.frameMsMean.toFixed(2)} ms（${result.perDrawUs.toFixed(2)} µs/draw，` +
+    `${result.drawsPerSecond.toFixed(0)} draws/s），${gpu}，含等待后端 ${result.syncMsMean.toFixed(2)} ms，` +
+    `draw calls ${result.drawCalls}，三角形 ${result.triangles}，管线切换 ${result.pipelineSwitches}，` +
+    `测了 ${result.framesMeasured} 帧`;
 }
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -449,13 +579,18 @@ async function runBenchmark(): Promise<void> {
   outEl.textContent = '测量中…';
   // 重跑时先把上一轮的结论清掉，免得无头抓取拿到旧值。
   document.documentElement.removeAttribute('data-gfx-benchmark-result');
+  document.documentElement.removeAttribute('data-bench-gpu-error');
   setData('gfxBenchmarkResults', '');
   setData('gfxBenchmarkStatsOk', 'true');
   setData('gfxBenchmarkFrames', String(framesToMeasure));
 
+  const gpuStats = active.renderer.gpuTiming;
+  setData('benchGpuSource', gpuTimingSource());
+  setData('benchGpuEnabled', String(gpuStats.enabled));
+  if (gpuStats.error !== null) setData('benchGpuError', gpuStats.error.replace(/\s+/g, ' ').trim());
+
   const results: TierResult[] = [];
-  for (const count of counts) {
-    statusEl.textContent = `测量中：${count} 个物体（每物体一次 draw call）…`;
+  for (const count of counts) {    statusEl.textContent = `测量中：${count} 个物体（每物体一次 draw call）…`;
     renderMeasurement({ count, skipped: '测量中…' });
     const pending = rowsEl.querySelector<HTMLTableRowElement>(`tr[data-count="${count}"]`);
     if (pending) pending.className = 'pending';
@@ -463,6 +598,8 @@ async function runBenchmark(): Promise<void> {
     renderMeasurement(result);
     results.push(result);
     setData('gfxBenchmarkResults', summarize(results));
+    setData('benchCpuMs', seriesOf(results, (item) => item.frameMsMean));
+    setData('benchGpuMs', seriesOf(results, (item) => item.gpuMsMean));
     statsEl.textContent = `后端 ${active.renderer.backend}　画布 ${active.renderer.width}×${active.renderer.height}　物体 ${active.placements.length} 份摆放已就绪`;
     await yieldToBrowser();
   }
@@ -471,9 +608,14 @@ async function runBenchmark(): Promise<void> {
   const allConsistent = okTiers.length > 0 && okTiers.every((result) => result.statsConsistent);
   setData('gfxBenchmarkStatsOk', String(allConsistent));
   setData('gfxBenchmarkResults', summarize(results));
+  setData('benchCpuMs', seriesOf(results, (item) => item.frameMsMean));
+  setData('benchGpuMs', seriesOf(results, (item) => item.gpuMsMean));
+  setData('benchGpuSource', gpuTimingSource());
+  const gpuTierCount = okTiers.filter((result) => result.gpuMsMean !== null).length;
   outEl.textContent =
     `后端 ${active.renderer.backend}　画布 ${active.renderer.width}×${active.renderer.height}　` +
     `几何 ${active.geometry.label}（${TRIANGLES_PER_BOX} 三角形）　材质 ${active.material.name}\n` +
+    `GPU 计时：${gpuTimingSource()}（${gpuTierCount}/${okTiers.length} 档拿到样本）\n` +
     results.map(describeLine).join('\n');
 
   progressEl.textContent = '完成';

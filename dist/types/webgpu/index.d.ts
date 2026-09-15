@@ -22,7 +22,7 @@ export { WebGPUTexture, asGPUTexture, isNativeGPUTexture, isWebGPUTexture, type 
 export { WebGPUTextureView, asGPUTextureView, isNativeGPUTextureView, isWebGPUTextureView, type ResolvedTextureViewDescriptor, } from './resources/WebGPUTextureView.js';
 export { WebGPUSampler, asGPUSampler, isNativeGPUSampler, isWebGPUSampler, } from './resources/WebGPUSampler.js';
 export { WebGPUShaderModule, asWebGPUShaderModule, isWebGPUShaderModule, } from './resources/WebGPUShaderModule.js';
-export { WebGPUQuerySet, asGPUQuerySet, isWebGPUQuerySet, TIMESTAMP_QUERY_FEATURE, } from './resources/WebGPUQuerySet.js';
+export { WebGPUQuerySet, asGPUQuerySet, isWebGPUQuerySet, TIMESTAMP_INSIDE_PASSES_FEATURES, TIMESTAMP_QUERY_FEATURE, toGPUTimestampWrites, } from './resources/WebGPUQuerySet.js';
 export { WebGPUBindGroupLayout, asGPUBindGroupLayout, isNativeGpuObject, isWebGPUBindGroupLayout, } from './binding/WebGPUBindGroupLayout.js';
 export { WebGPUBindGroup, asGPUBindGroup, isWebGPUBindGroup, validateDynamicOffsets, } from './binding/WebGPUBindGroup.js';
 export { WebGPUPipelineLayout, asGPUPipelineLayout, isWebGPUPipelineLayout, } from './binding/WebGPUPipelineLayout.js';
@@ -36,6 +36,7 @@ export { WebGPURenderPassEncoder, resolveIndirect, toGPURenderPassDescriptor, ty
 export { WebGPUComputePassEncoder, toGPUComputePassDescriptor, } from './render/WebGPUComputePassEncoder.js';
 export { WebGPUFence } from './sync/WebGPUFence.js';
 export { WebGPUQueue } from './sync/WebGPUQueue.js';
+export { WebGPUQueryResult, type WebGPUQueryResultInit } from './sync/WebGPUQueryResult.js';
 export { GPU_BUFFER_USAGE, GPU_COLOR_WRITE, GPU_MAP_MODE, GPU_SHADER_STAGE, GPU_TEXTURE_USAGE, assertSampleCount, assertSamplerBindingType, isStripTopology, resolveClearColor, toGPUAddressMode, toGPUBlendFactor, toGPUBlendOperation, toGPUBufferBindingType, toGPUBufferUsage, toGPUColorWriteMask, toGPUCompareFunction, toGPUCullMode, toGPUExtent3D, toGPUFilterMode, toGPUFrontFace, toGPUIndexFormat, toGPULoadOp, toGPUMapMode, toGPUMipmapFilterMode, toGPUOrigin3D, toGPUPrimitiveTopology, toGPUQueryType, toGPUSamplerBindingType, toGPUShaderStage, toGPUStencilOperation, toGPUStoreOp, toGPUTexelCopyBufferLayout, toGPUTextureAspect, toGPUTextureSampleType, toGPUTextureUsage, toGPUTextureViewDimension, toGPUVertexFormat, toGPUVertexStepMode, } from './utils/wgpuEnumMap.js';
 export { TEXTURE_FORMAT_CAPABILITIES, assertCopyableFormat, assertRenderableFormat, assertSampleableFormat, assertStorageTextureFormat, assertTextureAspectForFormat, assertTextureUsageSupported, defaultTextureSampleType, filterFeatureFor, fromGPUTextureFormat, hasDepthAspect, hasStencilAspect, isDepthOrStencilFormat, isFilterableFormat, isRenderableFormat, isStorageTextureFormat, textureFormatCapabilities, toGPUTextureFormat, type TextureFormatCapabilities, type TextureFormatKind, } from './utils/wgpuFormatMap.js';
 export { DEVICE_LIMIT_KEYS, FALLBACK_DEVICE_LIMITS, WebGPUFeatures, describeWebGPUAdapter, getWebGPU, getWebGPUCanvasContext, isWebGPUCanvasSupported, isWebGPUSupported, preferredCanvasFormat, readDeviceLimits, readSupportedFeatures, requestWebGPUAdapter, toCanvasFormat, validateRequiredFeatures, type WebGPUAdapterRequestOptions, } from './utils/wgpuCapabilities.js';

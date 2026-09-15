@@ -22,6 +22,7 @@ import type { Texture, TextureDescriptor } from '../core/resources/Texture.js';
 import type { Sampler, SamplerDescriptor } from '../core/resources/Sampler.js';
 import type { ShaderModule, ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
 import type { QuerySet, QuerySetDescriptor } from '../core/resources/QuerySet.js';
+import type { QueryResult, QuerySetReadOptions } from '../core/sync/QueryResult.js';
 import type { BindGroup, BindGroupDescriptor } from '../core/binding/BindGroup.js';
 import type { BindGroupLayout, BindGroupLayoutDescriptor } from '../core/binding/BindGroupLayout.js';
 import type { PipelineLayout, PipelineLayoutDescriptor } from '../core/binding/PipelineLayout.js';
@@ -29,6 +30,7 @@ import type { RenderPipeline, RenderPipelineDescriptor } from '../core/pipeline/
 import type { ComputePipeline, ComputePipelineDescriptor } from '../core/pipeline/ComputePipeline.js';
 import type { CommandEncoder, CommandEncoderDescriptor } from '../core/render/CommandEncoder.js';
 import type { RenderTarget, RenderTargetDescriptor } from '../core/render/RenderTarget.js';
+import type { Disposable } from '../utils/Disposable.js';
 import { GlStateCache } from './utils/glStateCache.js';
 import { WebGL2Texture } from './resources/WebGL2Texture.js';
 import { BindingPlanCache } from './binding/TextureUnitAllocator.js';
@@ -77,7 +79,22 @@ export declare class WebGL2Device implements Device {
     createAttachmentTexture(format: TextureDescriptor['format'], width: number, height: number, usage: BufferUsage | number, label: string): WebGL2Texture;
     createSampler(descriptor?: SamplerDescriptor): Sampler;
     createShaderModule(descriptor: ShaderModuleDescriptor): ShaderModule;
+    /**
+     * 创建 query set。
+     *
+     * - occlusion：`ANY_SAMPLES_PASSED` 是 WebGL2 核心功能，直接用；
+     * - timestamp：需要 `EXT_disjoint_timer_query_webgl2`，扩展缺失时抛带 `[gpu-device-api] ` 前缀的
+     *   英文错误说明缺哪个扩展（而不是静默返回 0）。
+     */
     createQuerySet(descriptor: QuerySetDescriptor): QuerySet;
+    /**
+     * 读回 query set 的结果：轮询 `QUERY_RESULT_AVAILABLE` 后逐条 `getQueryParameter`。
+     *
+     * 轮询本身是异步的（每轮让出一拍），不会像 `gl.finish()` 那样强制同步 GPU；
+     * 但结果只有在 GPU 真正做完之后才可用，所以调用方应该**延迟若干帧**再读
+     * （gfx 的 GPU 计时就是这么做的）。
+     */
+    readQuerySet(querySet: QuerySet, options?: QuerySetReadOptions): QueryResult;
     createBindGroupLayout(descriptor: BindGroupLayoutDescriptor): BindGroupLayout;
     createBindGroup(descriptor: BindGroupDescriptor): BindGroup;
     createPipelineLayout(descriptor: PipelineLayoutDescriptor): PipelineLayout;
@@ -97,6 +114,13 @@ export declare class WebGL2Device implements Device {
      */
     checkGlError(context: string): void;
     private track;
+    /**
+     * 资源在 `destroy()` 时把自己从追踪集合里摘掉（与 WebGPU 后端同一套机制）。
+     *
+     * 不做这一步，「每帧 create/destroy」的用法（query set、临时 buffer……）会让 `resources`
+     * 一直强引用已经释放的包装对象与原生句柄，直到 `device.dispose()`。幂等。
+     */
+    untrack(resource: Disposable): void;
     private assertUsable;
 }
 /** 探测当前 canvas 上可用的 WebGL2 能力，供 adapter 使用。 */

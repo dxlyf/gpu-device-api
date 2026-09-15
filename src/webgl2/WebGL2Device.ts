@@ -30,6 +30,7 @@ import type { Texture, TextureDescriptor } from '../core/resources/Texture.js';
 import type { Sampler, SamplerDescriptor } from '../core/resources/Sampler.js';
 import type { ShaderModule, ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
 import type { QuerySet, QuerySetDescriptor } from '../core/resources/QuerySet.js';
+import type { QueryResult, QuerySetReadOptions } from '../core/sync/QueryResult.js';
 import type { BindGroup, BindGroupDescriptor } from '../core/binding/BindGroup.js';
 import type { BindGroupLayout, BindGroupLayoutDescriptor } from '../core/binding/BindGroupLayout.js';
 import type { PipelineLayout, PipelineLayoutDescriptor } from '../core/binding/PipelineLayout.js';
@@ -45,6 +46,7 @@ import { WebGL2Buffer } from './resources/WebGL2Buffer.js';
 import { WebGL2Texture } from './resources/WebGL2Texture.js';
 import { WebGL2Sampler } from './resources/WebGL2Sampler.js';
 import { WebGL2ShaderModule } from './resources/WebGL2ShaderModule.js';
+import { WebGL2QuerySet, asWebGL2QuerySet } from './resources/WebGL2QuerySet.js';
 import { WebGL2BindGroupLayout } from './binding/WebGL2BindGroupLayout.js';
 import { WebGL2BindGroup } from './binding/WebGL2BindGroup.js';
 import { WebGL2PipelineLayout } from './binding/WebGL2PipelineLayout.js';
@@ -57,6 +59,7 @@ import { WebGL2CommandEncoder } from './render/WebGL2CommandEncoder.js';
 import { FramebufferCache } from './render/framebuffer-cache.js';
 import { WebGL2Queue } from './sync/WebGL2Queue.js';
 import { WebGL2Fence } from './sync/WebGL2Fence.js';
+import { WebGL2QueryResult } from './sync/WebGL2QueryResult.js';
 import { WebGL2CanvasContext } from './WebGL2CanvasContext.js';
 
 export interface WebGL2DeviceOptions {
@@ -202,12 +205,57 @@ export class WebGL2Device implements Device {
     return this.track(new WebGL2ShaderModule(descriptor));
   }
 
+  /**
+   * 创建 query set。
+   *
+   * - occlusion：`ANY_SAMPLES_PASSED` 是 WebGL2 核心功能，直接用；
+   * - timestamp：需要 `EXT_disjoint_timer_query_webgl2`，扩展缺失时抛带 `[gpu-device-api] ` 前缀的
+   *   英文错误说明缺哪个扩展（而不是静默返回 0）。
+   */
   createQuerySet(descriptor: QuerySetDescriptor): QuerySet {
     this.assertUsable('createQuerySet');
-    throw new ValidationError(
-      `[gpu-device-api] WebGL2 后端暂不支持 query set（「${descriptor.label ?? descriptor.type}」）。` +
-        'WebGL2 的遮挡查询只能同步读回单个样本数，没有查询结果缓冲区的概念。',
-    );
+    return this.track(new WebGL2QuerySet(this.gl, descriptor, (querySet) => this.untrack(querySet)));
+  }
+
+  /**
+   * 读回 query set 的结果：轮询 `QUERY_RESULT_AVAILABLE` 后逐条 `getQueryParameter`。
+   *
+   * 轮询本身是异步的（每轮让出一拍），不会像 `gl.finish()` 那样强制同步 GPU；
+   * 但结果只有在 GPU 真正做完之后才可用，所以调用方应该**延迟若干帧**再读
+   * （gfx 的 GPU 计时就是这么做的）。
+   */
+  readQuerySet(querySet: QuerySet, options: QuerySetReadOptions = {}): QueryResult {
+    this.assertUsable('readQuerySet');
+    const set = asWebGL2QuerySet(querySet, `Device "${this.label}".readQuerySet(querySet)`);
+
+    const first = options.firstQuery ?? 0;
+    if (!Number.isInteger(first) || first < 0) {
+      throw new ValidationError(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: firstQuery must be a non-negative integer, got ` +
+          `${String(first)}.`,
+      );
+    }
+    const count = options.queryCount ?? set.count - first;
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new ValidationError(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: queryCount must be a positive integer, got ` +
+          `${String(count)}.`,
+      );
+    }
+    if (first + count > set.count) {
+      throw new ValidationError(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: range [${first}, ${first + count}) exceeds the ` +
+          `query set "${set.label}" count ${set.count}.`,
+      );
+    }
+
+    return new WebGL2QueryResult({
+      gl: this.gl,
+      querySet: set,
+      type: set.type,
+      first,
+      count,
+    });
   }
 
   /* ------------------------------------------------------------------ 绑定 ------------------- */
@@ -412,6 +460,16 @@ export class WebGL2Device implements Device {
   private track<T extends Disposable>(resource: T): T {
     this.resources.add(resource);
     return resource;
+  }
+
+  /**
+   * 资源在 `destroy()` 时把自己从追踪集合里摘掉（与 WebGPU 后端同一套机制）。
+   *
+   * 不做这一步，「每帧 create/destroy」的用法（query set、临时 buffer……）会让 `resources`
+   * 一直强引用已经释放的包装对象与原生句柄，直到 `device.dispose()`。幂等。
+   */
+  untrack(resource: Disposable): void {
+    this.resources.delete(resource);
   }
 
   private assertUsable(operation: string): void {

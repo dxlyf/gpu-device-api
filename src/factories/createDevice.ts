@@ -29,6 +29,14 @@ export interface CreateDeviceOptions extends DeviceDescriptor, BackendCreateOpti
    * 调试 WebGPU 专用功能（compute、storage buffer）时很有用 —— 免得悄悄跑在 WebGL2 上。
    */
   strictBackend?: boolean;
+  /**
+   * 「有则更好」的 feature 名：只在所选后端的 adapter 支持时才申请，不支持就悄悄跳过。
+   *
+   * 用途是那些**允许降级**的可选能力（例如 `timestamp-query`：能拿到就顺手打开 GPU 计时，
+   * 拿不到也不该让整个设备的创建失败）。与之相对，{@link DeviceDescriptor.requiredFeatures}
+   * 里的名字一个都不能少，否则抛错。
+   */
+  optionalFeatures?: readonly string[];
 }
 
 export interface CreatedDevice {
@@ -109,7 +117,8 @@ export async function createDeviceWithAdapter(options: CreateDeviceOptions = {})
 
       const device = await adapter.requestDevice({
         label: options.label,
-        requiredFeatures: options.requiredFeatures,
+        // 可选 feature 按 adapter 的实际能力过滤：不支持就不申请（而不是抛错）。
+        requiredFeatures: mergeFeatures(options.requiredFeatures, options.optionalFeatures, adapter.features),
         requiredLimits: options.requiredLimits,
         debug: options.debug,
       });
@@ -141,4 +150,29 @@ export async function createDeviceWithAdapter(options: CreateDeviceOptions = {})
       '另一个常见原因：这张 canvas 已经被别的代码用 getContext() 绑定成了其它类型，' +
       '一个 canvas 只能绑定一种 context —— 请为它新建一张 canvas，或换一个未被占用的 canvas。',
   );
+}
+
+/**
+ * 合并「必须有」与「有则更好」的 feature，并去掉重复项与空名字。
+ *
+ * 可选 feature 由**所选后端 adapter 的能力集合**过滤：不支持的直接不申请，
+ * 这样 `optionalFeatures: ['timestamp-query']` 在缺少该能力的机器上不会让设备创建失败。
+ * 必需 feature 不做过滤：让 adapter 的校验给出「不支持 xxx」的明确错误。
+ */
+function mergeFeatures(
+  required: readonly string[] | undefined,
+  optional: readonly string[] | undefined,
+  available: ReadonlySet<string>,
+): readonly string[] | undefined {
+  if ((!required || required.length === 0) && (!optional || optional.length === 0)) return undefined;
+  const merged: string[] = [];
+  for (const feature of required ?? []) {
+    if (!merged.includes(feature)) merged.push(feature);
+  }
+  for (const feature of optional ?? []) {
+    if (merged.includes(feature)) continue;
+    if (!available.has(feature)) continue;
+    merged.push(feature);
+  }
+  return merged;
 }

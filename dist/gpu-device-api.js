@@ -1,4 +1,4 @@
-const O = {
+const C = {
   None: 0,
   /** 可映射用于读取。 */
   MapRead: 1,
@@ -20,7 +20,7 @@ const O = {
   Indirect: 256,
   /** 可接收查询结果。 */
   QueryResolve: 512
-}, x = {
+}, v = {
   None: 0,
   CopySrc: 1,
   CopyDst: 2,
@@ -30,13 +30,13 @@ const O = {
   StorageBinding: 8,
   /** 可用作 render pass 的 color/depth attachment。 */
   RenderAttachment: 16
-}, ai = [
+}, pi = [
   "depth16unorm",
   "depth24plus",
   "depth24plus-stencil8",
   "depth32float",
   "stencil8"
-], rm = [
+], $m = [
   "r8unorm",
   "r8uint",
   "r8sint",
@@ -68,12 +68,12 @@ const O = {
   "rgba32uint",
   "rgba32sint",
   "rgba32float",
-  ...ai
+  ...pi
 ];
-function fa(t) {
-  return ai.includes(t);
+function Aa(t) {
+  return pi.includes(t);
 }
-function im(t) {
+function Am(t) {
   return t === "rgba8unorm-srgb" || t === "bgra8unorm-srgb";
 }
 const q = {
@@ -81,21 +81,21 @@ const q = {
   Vertex: 1,
   Fragment: 2,
   Compute: 4
-}, sm = {
+}, _m = {
   [q.Vertex]: "vertex",
   [q.Fragment]: "fragment",
   [q.Compute]: "compute"
-}, am = {
+}, Em = {
   PointList: "point-list",
   LineList: "line-list",
   LineStrip: "line-strip",
   TriangleList: "triangle-list",
   TriangleStrip: "triangle-strip"
 };
-function om(t) {
+function Pm(t) {
   return t === "triangle-list" || t === "triangle-strip";
 }
-function cm(t, e) {
+function Lm(t, e) {
   switch (t) {
     case "point-list":
       return e;
@@ -109,23 +109,23 @@ function cm(t, e) {
       return Math.max(0, e - 2);
   }
 }
-const lm = {
+const Cm = {
   Uint16: "uint16",
   Uint32: "uint32"
 };
-function da(t) {
+function _a(t) {
   return t === "uint16" ? 2 : 4;
 }
-function pa(t) {
+function Ea(t) {
   return t > 65535 ? "uint32" : "uint16";
 }
-const um = {
+const Mm = {
   Load: "load",
   Clear: "clear"
-}, hm = {
+}, Fm = {
   Store: "store",
   Discard: "discard"
-}, fm = {
+}, Rm = {
   Never: "never",
   Less: "less",
   Equal: "equal",
@@ -134,7 +134,7 @@ const um = {
   NotEqual: "not-equal",
   GreaterEqual: "greater-equal",
   Always: "always"
-}, dm = {
+}, Bm = {
   Zero: "zero",
   One: "one",
   Src: "src",
@@ -148,13 +148,13 @@ const um = {
   SrcAlphaSaturated: "src-alpha-saturated",
   Constant: "constant",
   OneMinusConstant: "one-minus-constant"
-}, pm = {
+}, Gm = {
   Add: "add",
   Subtract: "subtract",
   ReverseSubtract: "reverse-subtract",
   Min: "min",
   Max: "max"
-}, mm = {
+}, Om = {
   Keep: "keep",
   Zero: "zero",
   Replace: "replace",
@@ -163,73 +163,73 @@ const um = {
   DecrementClamp: "decrement-clamp",
   IncrementWrap: "increment-wrap",
   DecrementWrap: "decrement-wrap"
-}, gm = {
+}, Um = {
   None: "none",
   Front: "front",
   Back: "back"
-}, bm = {
+}, Dm = {
   Ccw: "ccw",
   Cw: "cw"
-}, wm = {
+}, Im = {
   ClampToEdge: "clamp-to-edge",
   Repeat: "repeat",
   MirrorRepeat: "mirror-repeat"
-}, vm = {
+}, Vm = {
   Nearest: "nearest",
   Linear: "linear"
 };
-function S(t, e, n, r = !1) {
+function T(t, e, n, r = !1) {
   return { components: t, byteSize: e, kind: n, normalized: r };
 }
-const ma = Object.freeze({
-  uint8x2: S(2, 2, "uint"),
-  uint8x4: S(4, 4, "uint"),
-  sint8x2: S(2, 2, "sint"),
-  sint8x4: S(4, 4, "sint"),
-  unorm8x2: S(2, 2, "float", !0),
-  unorm8x4: S(4, 4, "float", !0),
-  snorm8x2: S(2, 2, "float", !0),
-  snorm8x4: S(4, 4, "float", !0),
-  uint16x2: S(2, 4, "uint"),
-  uint16x4: S(4, 8, "uint"),
-  sint16x2: S(2, 4, "sint"),
-  sint16x4: S(4, 8, "sint"),
-  unorm16x2: S(2, 4, "float", !0),
-  unorm16x4: S(4, 8, "float", !0),
-  snorm16x2: S(2, 4, "float", !0),
-  snorm16x4: S(4, 8, "float", !0),
-  float16x2: S(2, 4, "float"),
-  float16x4: S(4, 8, "float"),
-  float32: S(1, 4, "float"),
-  float32x2: S(2, 8, "float"),
-  float32x3: S(3, 12, "float"),
-  float32x4: S(4, 16, "float"),
-  uint32: S(1, 4, "uint"),
-  uint32x2: S(2, 8, "uint"),
-  uint32x3: S(3, 12, "uint"),
-  uint32x4: S(4, 16, "uint"),
-  sint32: S(1, 4, "sint"),
-  sint32x2: S(2, 8, "sint"),
-  sint32x3: S(3, 12, "sint"),
-  sint32x4: S(4, 16, "sint")
+const Pa = Object.freeze({
+  uint8x2: T(2, 2, "uint"),
+  uint8x4: T(4, 4, "uint"),
+  sint8x2: T(2, 2, "sint"),
+  sint8x4: T(4, 4, "sint"),
+  unorm8x2: T(2, 2, "float", !0),
+  unorm8x4: T(4, 4, "float", !0),
+  snorm8x2: T(2, 2, "float", !0),
+  snorm8x4: T(4, 4, "float", !0),
+  uint16x2: T(2, 4, "uint"),
+  uint16x4: T(4, 8, "uint"),
+  sint16x2: T(2, 4, "sint"),
+  sint16x4: T(4, 8, "sint"),
+  unorm16x2: T(2, 4, "float", !0),
+  unorm16x4: T(4, 8, "float", !0),
+  snorm16x2: T(2, 4, "float", !0),
+  snorm16x4: T(4, 8, "float", !0),
+  float16x2: T(2, 4, "float"),
+  float16x4: T(4, 8, "float"),
+  float32: T(1, 4, "float"),
+  float32x2: T(2, 8, "float"),
+  float32x3: T(3, 12, "float"),
+  float32x4: T(4, 16, "float"),
+  uint32: T(1, 4, "uint"),
+  uint32x2: T(2, 8, "uint"),
+  uint32x3: T(3, 12, "uint"),
+  uint32x4: T(4, 16, "uint"),
+  sint32: T(1, 4, "sint"),
+  sint32x2: T(2, 8, "sint"),
+  sint32x3: T(3, 12, "sint"),
+  sint32x4: T(4, 16, "sint")
 });
-function Se(t) {
-  const e = ma[t];
+function Ae(t) {
+  const e = Pa[t];
   if (!e) throw new Error(`[gpu-device-api] Unknown vertex format "${t}".`);
   return e;
 }
-function ga(t) {
-  const e = Se(t);
+function La(t) {
+  const e = Ae(t);
   return (e.kind === "float" ? ["float", "vec2", "vec3", "vec4"] : e.kind === "uint" ? ["uint", "uvec2", "uvec3", "uvec4"] : ["int", "ivec2", "ivec3", "ivec4"])[e.components - 1];
 }
-function ba(t) {
-  const e = Se(t);
+function Ca(t) {
+  const e = Ae(t);
   return (e.kind === "float" ? ["f32", "vec2f", "vec3f", "vec4f"] : e.kind === "uint" ? ["u32", "vec2u", "vec3u", "vec4u"] : ["i32", "vec2i", "vec3i", "vec4i"])[e.components - 1];
 }
-const xm = {
+const Nm = {
   Vertex: "vertex",
   Instance: "instance"
-}, R = {
+}, O = {
   /** uniform buffer（只读，16 字节对齐布局）。 */
   Uniform: "uniform",
   /** 读写 storage buffer（仅 WebGPU）。 */
@@ -245,16 +245,16 @@ const xm = {
   /** 只写 storage texture（仅 WebGPU）。 */
   StorageTexture: "storage-texture"
 };
-function oi(t) {
+function mi(t) {
   return t === "uniform" || t === "storage" || t === "read-only-storage";
 }
-function ym(t) {
+function km(t) {
   return t === "texture" || t === "storage-texture";
 }
-function ci(t) {
+function gi(t) {
   return t === "sampler" || t === "comparison-sampler";
 }
-class de extends Error {
+class K extends Error {
   code;
   details;
   constructor(e, n = {}) {
@@ -265,20 +265,20 @@ class de extends Error {
     return `${this.name} [${this.code}]: ${this.message}`;
   }
 }
-function wa(t) {
-  return t instanceof de;
+function Ma(t) {
+  return t instanceof K;
 }
-class u extends de {
+class u extends K {
   constructor(e, n = {}) {
     super(e, { ...n, code: "VALIDATION_ERROR" }), this.name = "ValidationError";
   }
 }
-class va extends de {
+class Fa extends K {
   constructor(e, n = {}) {
     super(e, { ...n, code: "OUT_OF_MEMORY" }), this.name = "OutOfMemoryError";
   }
 }
-class gn extends de {
+class xn extends K {
   reason;
   constructor(e, n = {}) {
     super(e, { ...n, code: "DEVICE_LOST" }), this.name = "DeviceLostError", this.reason = n.reason ?? "unknown";
@@ -288,26 +288,26 @@ class gn extends de {
     return this.reason === "destroyed";
   }
 }
-const xt = {
+const At = {
   D1: "1d",
   D2: "2d",
   D3: "3d"
 };
-function Cn(t) {
+function Gn(t) {
   return typeof t == "number" ? { width: t, height: t, depthOrArrayLayers: 1 } : {
     width: t.width,
     height: t.height ?? 1,
     depthOrArrayLayers: t.depthOrArrayLayers ?? 1
   };
 }
-function xa(t) {
-  const e = Cn(t);
+function Ra(t) {
+  const e = Gn(t);
   return Math.floor(Math.log2(Math.max(e.width, e.height, e.depthOrArrayLayers))) + 1;
 }
-function ya(t = 0) {
-  return x.CopyDst | x.TextureBinding | t;
+function Ba(t = 0) {
+  return v.CopyDst | v.TextureBinding | t;
 }
-function $t(t, e = {}) {
+function Lt(t, e = {}) {
   const n = e.dimension ?? (t.dimension === "1d" ? "1d" : t.dimension === "3d" ? "3d" : t.depthOrArrayLayers > 1 ? "2d-array" : "2d");
   return {
     format: e.format,
@@ -319,7 +319,7 @@ function $t(t, e = {}) {
     aspect: e.aspect ?? "all"
   };
 }
-function li(t = {}) {
+function bi(t = {}) {
   return {
     addressModeU: t.addressModeU ?? "clamp-to-edge",
     addressModeV: t.addressModeV ?? "clamp-to-edge",
@@ -333,7 +333,7 @@ function li(t = {}) {
     compare: t.compare
   };
 }
-function Tm(t) {
+function zm(t) {
   return [
     t.addressModeU,
     t.addressModeV,
@@ -347,23 +347,46 @@ function Tm(t) {
     t.compare ?? "none"
   ].join("|");
 }
-function ui(t) {
+function wi(t) {
   return typeof t == "string" ? { wgsl: t } : { ...t };
 }
-const bn = {
+const ze = {
   Occlusion: "occlusion",
   Timestamp: "timestamp"
 };
-function Sm(t) {
+function yi(t, e) {
+  if (t.querySet.type !== ze.Timestamp)
+    throw new u(
+      `[gpu-device-api] ${e}: timestampWrites.querySet must be a "timestamp" query set, got "${String(t.querySet.type)}".`
+    );
+  const n = t.beginningOfPassWriteIndex, r = t.endOfPassWriteIndex;
+  if (n === void 0 && r === void 0)
+    throw new u(
+      `[gpu-device-api] ${e}: timestampWrites needs at least one of beginningOfPassWriteIndex / endOfPassWriteIndex.`
+    );
+  for (const [i, s] of [
+    ["beginningOfPassWriteIndex", n],
+    ["endOfPassWriteIndex", r]
+  ])
+    if (s !== void 0 && (!Number.isInteger(s) || s < 0 || s >= t.querySet.count))
+      throw new u(
+        `[gpu-device-api] ${e}: timestampWrites.${i} (${String(s)}) is outside the query set's range [0, ${t.querySet.count}).`
+      );
+  if (n !== void 0 && n === r)
+    throw new u(
+      `[gpu-device-api] ${e}: beginningOfPassWriteIndex and endOfPassWriteIndex must differ (they are two different instants), got both = ${n}.`
+    );
+}
+function Wm(t) {
   return t.buffer !== void 0;
 }
-function $m(t) {
+function qm(t) {
   return t.sampler !== void 0;
 }
-function Am(t) {
+function jm(t) {
   return t.view !== void 0;
 }
-function _m(t) {
+function Qm(t) {
   return {
     ...t,
     binding: t.binding,
@@ -371,7 +394,7 @@ function _m(t) {
     type: t.type
   };
 }
-function hi(t) {
+function vi(t) {
   if (t.length === 0)
     throw new Error("[gpu-device-api] A BindGroupLayout needs at least one entry.");
   const e = [...t].sort((n, r) => n.binding - r.binding);
@@ -384,7 +407,7 @@ function hi(t) {
   }
   return e;
 }
-function fi(t, e) {
+function xi(t, e) {
   if (!Number.isInteger(t.arrayStride) || t.arrayStride <= 0)
     throw new Error(`[gpu-device-api] VertexBufferLayout.arrayStride must be a positive integer, got ${t.arrayStride}.`);
   if (t.arrayStride % 4 !== 0)
@@ -396,7 +419,7 @@ function fi(t, e) {
   if (t.attributes.length === 0)
     throw new Error("[gpu-device-api] VertexBufferLayout needs at least one attribute.");
   for (const n of t.attributes) {
-    const r = Se(n.format);
+    const r = Ae(n.format);
     if (n.shaderLocation < 0 || n.shaderLocation >= e.maxVertexAttributes)
       throw new Error(
         `[gpu-device-api] VertexAttribute.shaderLocation ${n.shaderLocation} is outside [0, ${e.maxVertexAttributes - 1}].`
@@ -409,40 +432,40 @@ function fi(t, e) {
       );
   }
 }
-const nr = /* @__PURE__ */ new WeakMap();
-function di(t) {
-  const e = nr.get(t);
+const lr = /* @__PURE__ */ new WeakMap();
+function Si(t) {
+  const e = lr.get(t);
   if (e !== void 0) return e;
   const n = t.map((r) => {
     const i = r.attributes.map((s) => `${s.shaderLocation}@${s.offset}:${s.format}`).join(",");
     return `${r.arrayStride}/${r.stepMode ?? "vertex"}[${i}]`;
   }).join(";");
-  return nr.set(t, n), n;
+  return lr.set(t, n), n;
 }
-const ae = {
+const oe = {
   None: 0,
   Red: 1,
   Green: 2,
   Blue: 4,
   Alpha: 8,
   All: 15
-}, jt = {
+}, Ht = {
   topology: "triangle-list",
   frontFace: "ccw",
   cullMode: "none"
-}, rr = {
+}, cr = {
   depthWriteEnabled: !0,
   depthCompare: "less"
-}, Ta = {
+}, Ga = {
   srcFactor: "one",
   dstFactor: "zero",
   operation: "add"
-}, at = {
+}, ht = {
   compare: "always",
   failOp: "keep",
   depthFailOp: "keep",
   passOp: "keep"
-}, Sa = Object.freeze({
+}, Oa = Object.freeze({
   /** 直通 alpha：`rgb * a + dst * (1 - a)`。 */
   alpha: {
     color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
@@ -466,16 +489,16 @@ const ae = {
     alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
   }
 });
-function Em(t) {
+function Xm(t) {
   if (t === !1 || t === void 0) return null;
   if (typeof t == "string") {
-    const e = Sa[t];
+    const e = Oa[t];
     if (!e) throw new Error(`[gpu-device-api] Unknown blend preset "${t}".`);
     return e;
   }
   return t;
 }
-function $a(t = 128, e) {
+function Ua(t = 128, e) {
   const n = /* @__PURE__ */ new Map();
   let r;
   const i = () => {
@@ -512,7 +535,7 @@ function $a(t = 128, e) {
     }
   };
 }
-function pi(...t) {
+function Ti(...t) {
   let e = "";
   for (let n = 0; n < t.length; n += 1) {
     const r = t[n];
@@ -520,11 +543,15 @@ function pi(...t) {
   }
   return e;
 }
-function Lm(t) {
+function Da(t, e, n = 1) {
+  const r = e - t;
+  return r <= 0n ? 0 : Number(r) * n / 1e6;
+}
+function Ym(t) {
   const e = t.isFallbackAdapter ? " (fallback)" : "";
   return `${t.backend}: ${t.device || t.vendor || "unknown"}${e}`;
 }
-function mi(t, e, n) {
+function $i(t, e, n) {
   if (!e) return { ...t };
   const r = { ...t };
   for (const [i, s] of Object.entries(e)) {
@@ -540,45 +567,45 @@ function mi(t, e, n) {
   }
   return r;
 }
-const gi = "depth24plus";
-function je(t) {
+const Ai = "depth24plus";
+function He(t) {
   const e = t;
   return typeof e.clientWidth == "number" && typeof e.clientHeight == "number" ? { width: e.clientWidth || e.width || 1, height: e.clientHeight || e.height || 1 } : { width: t.width || 1, height: t.height || 1 };
 }
-function bi() {
+function _i() {
   const t = typeof globalThis < "u" ? globalThis.devicePixelRatio : 1;
   return t && t > 0 ? Math.min(t, 4) : 1;
 }
-function Mn(t, e, n) {
+function On(t, e, n) {
   if (!t) throw new u(e, n ? { details: n } : {});
 }
-function Cm(t, e, n) {
+function Hm(t, e, n) {
   if (t == null)
     throw new u(e, n ? { details: n } : {});
   return t;
 }
-function L(t, e) {
+function P(t, e) {
   throw new u(e ?? `[gpu-device-api] Unexpected value: ${String(t)}`);
 }
-function Ye(t, e) {
-  Mn(
+function We(t, e) {
+  On(
     Number.isSafeInteger(t) && t > 0,
     `[gpu-device-api] ${e} must be a positive integer, got ${String(t)}.`
   );
 }
-function Bt(t, e) {
-  Mn(
+function Te(t, e) {
+  On(
     Number.isSafeInteger(t) && t >= 0,
     `[gpu-device-api] ${e} must be a non-negative integer, got ${String(t)}.`
   );
 }
-function Mm(t, e) {
-  Mn(
+function Zm(t, e) {
+  On(
     Number.isSafeInteger(t) && t > 0 && (t & t - 1) === 0,
     `[gpu-device-api] ${e} must be a power of two, got ${String(t)}.`
   );
 }
-const Aa = [
+const Ia = [
   Int8Array,
   Uint8Array,
   Uint8ClampedArray,
@@ -589,34 +616,34 @@ const Aa = [
   Float32Array,
   Float64Array
 ];
-function Pm(t) {
-  return Aa.some((e) => t instanceof e);
+function Km(t) {
+  return Ia.some((e) => t instanceof e);
 }
-function Fm(t) {
+function Jm(t) {
   return ArrayBuffer.isView(t) && !(t instanceof DataView);
 }
-function Bm(t) {
+function eg(t) {
   return typeof t == "number" ? t : (t instanceof ArrayBuffer, t.byteLength);
 }
-function _a(t) {
+function Va(t) {
   return new Uint8Array(t.buffer, t.byteOffset, t.byteLength);
 }
-function wi(t, e) {
+function Ei(t, e) {
   return e <= 1 ? t : Math.ceil(t / e) * e;
 }
-function Rm(t) {
+function tg(t) {
   return t + 3 & -4;
 }
-function Ea(t, e = 4) {
-  const n = _a(t), r = wi(n.byteLength, e);
+function Na(t, e = 4) {
+  const n = Va(t), r = Ei(n.byteLength, e);
   if (r === n.byteLength) return n;
   const i = new Uint8Array(r);
   return i.set(n), i;
 }
-function Gm(t) {
+function ng(t) {
   return t.BYTES_PER_ELEMENT ?? 1;
 }
-function Um(t) {
+function rg(t) {
   if (t.length === 0) throw new RangeError("[gpu-device-api] concatTypedArrays() received no arrays.");
   const e = t[0];
   let n = 0;
@@ -627,21 +654,21 @@ function Um(t) {
     i.set(a, s), s += a.length;
   return i;
 }
-function Om(t, e) {
+function ig(t, e) {
   return (t & e) === e;
 }
-function Dm(t, e) {
+function sg(t, e) {
   return (t & e) !== 0;
 }
-function Im(t, e) {
+function ag(t, e) {
   return (t & e) === e;
 }
-function Vm(...t) {
+function og(...t) {
   let e = 0;
   for (const n of t) e |= n;
   return e;
 }
-function Nm(t, e) {
+function lg(t, e) {
   if (t === 0) return "None";
   const n = [];
   let r = 0;
@@ -652,15 +679,15 @@ function Nm(t, e) {
   const i = t & ~r;
   return i && n.push(`0x${i.toString(16)}`), n.join(" | ");
 }
-let At = 0;
-function G(t) {
-  return At += 1, `${t}#${At}`;
+let Ct = 0;
+function B(t) {
+  return Ct += 1, `${t}#${Ct}`;
 }
-function km() {
-  return At;
+function cg() {
+  return Ct;
 }
-function zm() {
-  At = 0;
+function ug() {
+  Ct = 0;
 }
 const W = {
   Silent: 0,
@@ -669,14 +696,14 @@ const W = {
   Info: 3,
   Debug: 4,
   Trace: 5
-}, Wm = {
+}, hg = {
   0: "silent",
   1: "error",
   2: "warn",
   3: "info",
   4: "debug",
   5: "trace"
-}, La = {
+}, ka = {
   silent: W.Silent,
   error: W.Error,
   warn: W.Warn,
@@ -684,15 +711,15 @@ const W = {
   debug: W.Debug,
   trace: W.Trace
 };
-let Pn = W.Warn;
-function qm(t) {
-  Pn = typeof t == "string" ? La[t] : t;
+let Un = W.Warn;
+function dg(t) {
+  Un = typeof t == "string" ? ka[t] : t;
 }
-function jm() {
-  return Pn;
+function fg() {
+  return Un;
 }
-function Je(t = "gpu-device-api", e) {
-  const n = () => e ?? Pn, r = (i, s, a, o) => {
+function it(t = "gpu-device-api", e) {
+  const n = () => e ?? Un, r = (i, s, a, o) => {
     n() < i || s(`[${t}] ${a}`, ...o);
   };
   return {
@@ -706,7 +733,7 @@ function Je(t = "gpu-device-api", e) {
     trace: (i, ...s) => r(W.Trace, console.debug, i, s)
   };
 }
-const Xm = {
+const pg = {
   level: W.Silent,
   error: () => {
   },
@@ -719,13 +746,13 @@ const Xm = {
   trace: () => {
   }
 };
-function Ca(t) {
+function za(t) {
   return !!t && typeof t == "object" && typeof t.dispose == "function";
 }
-function vi(t) {
+function Pi(t) {
   let e;
   for (const n of t)
-    if (Ca(n))
+    if (za(n))
       try {
         n.dispose();
       } catch (r) {
@@ -733,7 +760,7 @@ function vi(t) {
       }
   if (e !== void 0) throw e;
 }
-class Ym {
+class mg {
   resources = /* @__PURE__ */ new Set();
   _disposed = !1;
   get disposed() {
@@ -751,557 +778,557 @@ class Ym {
     if (this._disposed) return;
     this._disposed = !0;
     const e = [...this.resources];
-    this.resources.clear(), vi(e);
+    this.resources.clear(), Pi(e);
   }
 }
-function Ma() {
+function Wa() {
   return new Float32Array(2);
 }
-function Pa(t) {
+function qa(t) {
   const e = new Float32Array(2);
   return e[0] = t[0], e[1] = t[1], e;
 }
-function Fa(t, e) {
+function ja(t, e) {
   const n = new Float32Array(2);
   return n[0] = t, n[1] = e, n;
 }
-function Ba(t, e) {
+function Qa(t, e) {
   return t[0] = e[0], t[1] = e[1], t;
 }
-function Ra(t, e, n) {
+function Xa(t, e, n) {
   return t[0] = e, t[1] = n, t;
 }
-function Ga(t) {
+function Ya(t) {
   return t[0] = 0, t[1] = 0, t;
 }
-function Ua(t, e, n) {
+function Ha(t, e, n) {
   return t[0] = e[0] + n[0], t[1] = e[1] + n[1], t;
 }
-function Oa(t, e, n) {
+function Za(t, e, n) {
   return t[0] = e[0] - n[0], t[1] = e[1] - n[1], t;
 }
-function Da(t, e, n) {
+function Ka(t, e, n) {
   return t[0] = e[0] * n[0], t[1] = e[1] * n[1], t;
 }
-function Ia(t, e, n) {
+function Ja(t, e, n) {
   return t[0] = e[0] / n[0], t[1] = e[1] / n[1], t;
 }
-function Va(t, e, n) {
+function eo(t, e, n) {
   return t[0] = e[0] * n, t[1] = e[1] * n, t;
 }
-function Na(t, e, n, r) {
+function to(t, e, n, r) {
   return t[0] = e[0] + n[0] * r, t[1] = e[1] + n[1] * r, t;
 }
-function ka(t, e) {
+function no(t, e) {
   return t[0] = -e[0], t[1] = -e[1], t;
 }
-function za(t, e) {
+function ro(t, e) {
   const n = e[0], r = e[1];
   let i = Math.hypot(n, r);
   return i > 0 && (i = 1 / i), t[0] = n * i, t[1] = r * i, t;
 }
-function Wa(t) {
+function io(t) {
   return Math.hypot(t[0], t[1]);
 }
-function qa(t) {
+function so(t) {
   return t[0] * t[0] + t[1] * t[1];
 }
-function ja(t, e) {
+function ao(t, e) {
   return Math.hypot(t[0] - e[0], t[1] - e[1]);
 }
-function Xa(t, e) {
+function oo(t, e) {
   const n = t[0] - e[0], r = t[1] - e[1];
   return n * n + r * r;
 }
-function Ya(t, e) {
+function lo(t, e) {
   return t[0] * e[0] + t[1] * e[1];
 }
-function Ha(t, e) {
+function co(t, e) {
   return t[0] * e[1] - t[1] * e[0];
 }
-function Za(t, e, n, r) {
+function uo(t, e, n, r) {
   return t[0] = e[0] + r * (n[0] - e[0]), t[1] = e[1] + r * (n[1] - e[1]), t;
 }
-function Ka(t, e, n) {
+function ho(t, e, n) {
   return t[0] = Math.min(e[0], n[0]), t[1] = Math.min(e[1], n[1]), t;
 }
-function Qa(t, e, n) {
+function fo(t, e, n) {
   return t[0] = Math.max(e[0], n[0]), t[1] = Math.max(e[1], n[1]), t;
 }
-function Ja(t, e, n = 1e-6) {
+function po(t, e, n = 1e-6) {
   return Math.abs(t[0] - e[0]) <= n && Math.abs(t[1] - e[1]) <= n;
 }
-function eo(t, e, n) {
+function mo(t, e, n) {
   const r = e[0], i = e[1];
   return t[0] = n[0] * r + n[3] * i + n[6], t[1] = n[1] * r + n[4] * i + n[7], t;
 }
-function to(t) {
+function go(t) {
   return [t[0], t[1]];
 }
-function no(t) {
+function bo(t) {
   return `vec2(${t[0]}, ${t[1]})`;
 }
-const Hm = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const gg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  add: Ua,
-  clone: Pa,
-  copy: Ba,
-  create: Ma,
-  cross: Ha,
-  distance: ja,
-  div: Ia,
-  dot: Ya,
-  equals: Ja,
-  fromValues: Fa,
-  length: Wa,
-  lerp: Za,
-  max: Qa,
-  min: Ka,
-  mul: Da,
-  negate: ka,
-  normalize: za,
-  scale: Va,
-  scaleAndAdd: Na,
-  set: Ra,
-  squaredDistance: Xa,
-  squaredLength: qa,
-  sub: Oa,
-  toArray: to,
-  toString: no,
-  transformMat3: eo,
-  zero: Ga
+  add: Ha,
+  clone: qa,
+  copy: Qa,
+  create: Wa,
+  cross: co,
+  distance: ao,
+  div: Ja,
+  dot: lo,
+  equals: po,
+  fromValues: ja,
+  length: io,
+  lerp: uo,
+  max: fo,
+  min: ho,
+  mul: Ka,
+  negate: no,
+  normalize: ro,
+  scale: eo,
+  scaleAndAdd: to,
+  set: Xa,
+  squaredDistance: oo,
+  squaredLength: so,
+  sub: Za,
+  toArray: go,
+  toString: bo,
+  transformMat3: mo,
+  zero: Ya
 }, Symbol.toStringTag, { value: "Module" }));
-function F() {
+function R() {
   return new Float32Array(3);
 }
-function ro(t) {
+function wo(t) {
   const e = new Float32Array(3);
   return e[0] = t[0], e[1] = t[1], e[2] = t[2], e;
 }
-function io(t, e, n) {
+function yo(t, e, n) {
   const r = new Float32Array(3);
   return r[0] = t, r[1] = e, r[2] = n, r;
 }
-function se(t, e) {
+function ae(t, e) {
   return t[0] = e[0], t[1] = e[1], t[2] = e[2], t;
 }
 function pe(t, e, n, r) {
   return t[0] = e, t[1] = n, t[2] = r, t;
 }
-function wn(t) {
+function Sn(t) {
   return t[0] = 0, t[1] = 0, t[2] = 0, t;
 }
-function He(t, e, n) {
+function Je(t, e, n) {
   return t[0] = e[0] + n[0], t[1] = e[1] + n[1], t[2] = e[2] + n[2], t;
 }
-function oe(t, e, n) {
+function le(t, e, n) {
   return t[0] = e[0] - n[0], t[1] = e[1] - n[1], t[2] = e[2] - n[2], t;
 }
-function so(t, e, n) {
+function vo(t, e, n) {
   return t[0] = e[0] * n[0], t[1] = e[1] * n[1], t[2] = e[2] * n[2], t;
 }
-function ao(t, e, n) {
+function xo(t, e, n) {
   return t[0] = e[0] / n[0], t[1] = e[1] / n[1], t[2] = e[2] / n[2], t;
 }
-function _t(t, e, n) {
+function Mt(t, e, n) {
   return t[0] = e[0] * n, t[1] = e[1] * n, t[2] = e[2] * n, t;
 }
-function yt(t, e, n, r) {
+function _t(t, e, n, r) {
   return t[0] = e[0] + n[0] * r, t[1] = e[1] + n[1] * r, t[2] = e[2] + n[2] * r, t;
 }
-function oo(t, e) {
+function So(t, e) {
   return t[0] = -e[0], t[1] = -e[1], t[2] = -e[2], t;
 }
-function Fn(t, e) {
+function Dn(t, e) {
   const n = e[0], r = e[1], i = e[2];
   let s = Math.hypot(n, r, i);
   return s > 0 && (s = 1 / s), t[0] = n * s, t[1] = r * s, t[2] = i * s, t;
 }
-function Oe(t) {
+function Ie(t) {
   return Math.hypot(t[0], t[1], t[2]);
 }
-function xi(t) {
+function Li(t) {
   return t[0] * t[0] + t[1] * t[1] + t[2] * t[2];
 }
-function yi(t, e) {
+function Ci(t, e) {
   return Math.hypot(t[0] - e[0], t[1] - e[1], t[2] - e[2]);
 }
-function Rt(t, e) {
+function Dt(t, e) {
   const n = t[0] - e[0], r = t[1] - e[1], i = t[2] - e[2];
   return n * n + r * r + i * i;
 }
-function ue(t, e) {
+function he(t, e) {
   return t[0] * e[0] + t[1] * e[1] + t[2] * e[2];
 }
-function Ti(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = n[0], o = n[1], l = n[2];
-  return t[0] = i * l - s * o, t[1] = s * a - r * l, t[2] = r * o - i * a, t;
+function Mi(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = n[0], o = n[1], c = n[2];
+  return t[0] = i * c - s * o, t[1] = s * a - r * c, t[2] = r * o - i * a, t;
 }
-function co(t, e, n, r) {
+function To(t, e, n, r) {
   return t[0] = e[0] + r * (n[0] - e[0]), t[1] = e[1] + r * (n[1] - e[1]), t[2] = e[2] + r * (n[2] - e[2]), t;
 }
-function Gt(t, e, n) {
+function It(t, e, n) {
   return t[0] = Math.min(e[0], n[0]), t[1] = Math.min(e[1], n[1]), t[2] = Math.min(e[2], n[2]), t;
 }
-function Ut(t, e, n) {
+function Vt(t, e, n) {
   return t[0] = Math.max(e[0], n[0]), t[1] = Math.max(e[1], n[1]), t[2] = Math.max(e[2], n[2]), t;
 }
-function vn(t, e, n = 1e-6) {
+function Tn(t, e, n = 1e-6) {
   return Math.abs(t[0] - e[0]) <= n && Math.abs(t[1] - e[1]) <= n && Math.abs(t[2] - e[2]) <= n;
 }
-function lo(t, e, n) {
-  const r = ue(n, e) * 2;
+function $o(t, e, n) {
+  const r = he(n, e) * 2;
   return t[0] = e[0] - n[0] * r, t[1] = e[1] - n[1] * r, t[2] = e[2] - n[2] * r, t;
 }
-function Si(t, e, n) {
+function Fi(t, e, n) {
   const r = e[0], i = e[1], s = e[2];
   return t[0] = n[0] * r + n[3] * i + n[6] * s, t[1] = n[1] * r + n[4] * i + n[7] * s, t[2] = n[2] * r + n[5] * i + n[8] * s, t;
 }
-function Bn(t, e, n) {
+function In(t, e, n) {
   const r = e[0], i = e[1], s = e[2];
   let a = n[3] * r + n[7] * i + n[11] * s + n[15];
   return a = a || 1, t[0] = (n[0] * r + n[4] * i + n[8] * s + n[12]) / a, t[1] = (n[1] * r + n[5] * i + n[9] * s + n[13]) / a, t[2] = (n[2] * r + n[6] * i + n[10] * s + n[14]) / a, t;
 }
-function $i(t, e, n) {
+function Ri(t, e, n) {
   const r = e[0], i = e[1], s = e[2];
   return t[0] = n[0] * r + n[4] * i + n[8] * s, t[1] = n[1] * r + n[5] * i + n[9] * s, t[2] = n[2] * r + n[6] * i + n[10] * s, t;
 }
-function uo(t) {
+function Ao(t) {
   return [t[0], t[1], t[2]];
 }
-function ho(t) {
+function _o(t) {
   return `vec3(${t[0]}, ${t[1]}, ${t[2]})`;
 }
-const Zm = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const bg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  add: He,
-  clone: ro,
-  copy: se,
-  create: F,
-  cross: Ti,
-  distance: yi,
-  div: ao,
-  dot: ue,
-  equals: vn,
-  fromValues: io,
-  length: Oe,
-  lerp: co,
-  max: Ut,
-  min: Gt,
-  mul: so,
-  negate: oo,
-  normalize: Fn,
-  reflect: lo,
-  scale: _t,
-  scaleAndAdd: yt,
+  add: Je,
+  clone: wo,
+  copy: ae,
+  create: R,
+  cross: Mi,
+  distance: Ci,
+  div: xo,
+  dot: he,
+  equals: Tn,
+  fromValues: yo,
+  length: Ie,
+  lerp: To,
+  max: Vt,
+  min: It,
+  mul: vo,
+  negate: So,
+  normalize: Dn,
+  reflect: $o,
+  scale: Mt,
+  scaleAndAdd: _t,
   set: pe,
-  squaredDistance: Rt,
-  squaredLength: xi,
-  sub: oe,
-  toArray: uo,
-  toString: ho,
-  transformDirection: $i,
-  transformMat3: Si,
-  transformMat4: Bn,
-  zero: wn
+  squaredDistance: Dt,
+  squaredLength: Li,
+  sub: le,
+  toArray: Ao,
+  toString: _o,
+  transformDirection: Ri,
+  transformMat3: Fi,
+  transformMat4: In,
+  zero: Sn
 }, Symbol.toStringTag, { value: "Module" }));
-function fo() {
+function Eo() {
   return new Float32Array(4);
 }
-function po(t) {
+function Po(t) {
   const e = new Float32Array(4);
   return e[0] = t[0], e[1] = t[1], e[2] = t[2], e[3] = t[3], e;
 }
-function mo(t, e, n, r) {
+function Lo(t, e, n, r) {
   const i = new Float32Array(4);
   return i[0] = t, i[1] = e, i[2] = n, i[3] = r, i;
 }
-function go(t, e) {
+function Co(t, e) {
   return t[0] = e[0], t[1] = e[1], t[2] = e[2], t[3] = e[3], t;
 }
-function bo(t, e, n, r, i) {
+function Mo(t, e, n, r, i) {
   return t[0] = e, t[1] = n, t[2] = r, t[3] = i, t;
 }
-function wo(t) {
+function Fo(t) {
   return t[0] = 0, t[1] = 0, t[2] = 0, t[3] = 0, t;
 }
-function vo(t, e, n) {
+function Ro(t, e, n) {
   return t[0] = e[0] + n[0], t[1] = e[1] + n[1], t[2] = e[2] + n[2], t[3] = e[3] + n[3], t;
 }
-function xo(t, e, n) {
+function Bo(t, e, n) {
   return t[0] = e[0] - n[0], t[1] = e[1] - n[1], t[2] = e[2] - n[2], t[3] = e[3] - n[3], t;
 }
-function yo(t, e, n) {
+function Go(t, e, n) {
   return t[0] = e[0] * n[0], t[1] = e[1] * n[1], t[2] = e[2] * n[2], t[3] = e[3] * n[3], t;
 }
-function To(t, e, n) {
+function Oo(t, e, n) {
   return t[0] = e[0] / n[0], t[1] = e[1] / n[1], t[2] = e[2] / n[2], t[3] = e[3] / n[3], t;
 }
-function So(t, e, n) {
+function Uo(t, e, n) {
   return t[0] = e[0] * n, t[1] = e[1] * n, t[2] = e[2] * n, t[3] = e[3] * n, t;
 }
-function $o(t, e) {
+function Do(t, e) {
   return t[0] = -e[0], t[1] = -e[1], t[2] = -e[2], t[3] = -e[3], t;
 }
-function Ao(t, e) {
+function Io(t, e) {
   const n = e[0], r = e[1], i = e[2], s = e[3];
   let a = Math.hypot(n, r, i, s);
   return a > 0 && (a = 1 / a), t[0] = n * a, t[1] = r * a, t[2] = i * a, t[3] = s * a, t;
 }
-function _o(t) {
+function Vo(t) {
   return Math.hypot(t[0], t[1], t[2], t[3]);
 }
-function Eo(t) {
+function No(t) {
   return t[0] * t[0] + t[1] * t[1] + t[2] * t[2] + t[3] * t[3];
 }
-function Lo(t, e) {
+function ko(t, e) {
   return t[0] * e[0] + t[1] * e[1] + t[2] * e[2] + t[3] * e[3];
 }
-function Co(t, e, n, r) {
+function zo(t, e, n, r) {
   return t[0] = e[0] + r * (n[0] - e[0]), t[1] = e[1] + r * (n[1] - e[1]), t[2] = e[2] + r * (n[2] - e[2]), t[3] = e[3] + r * (n[3] - e[3]), t;
 }
-function Mo(t, e, n = 1e-6) {
+function Wo(t, e, n = 1e-6) {
   return Math.abs(t[0] - e[0]) <= n && Math.abs(t[1] - e[1]) <= n && Math.abs(t[2] - e[2]) <= n && Math.abs(t[3] - e[3]) <= n;
 }
-function Po(t, e, n) {
+function qo(t, e, n) {
   const r = e[0], i = e[1], s = e[2], a = e[3];
   return t[0] = n[0] * r + n[4] * i + n[8] * s + n[12] * a, t[1] = n[1] * r + n[5] * i + n[9] * s + n[13] * a, t[2] = n[2] * r + n[6] * i + n[10] * s + n[14] * a, t[3] = n[3] * r + n[7] * i + n[11] * s + n[15] * a, t;
 }
-function Fo(t) {
+function jo(t) {
   return [t[0], t[1], t[2], t[3]];
 }
-function Bo(t) {
+function Qo(t) {
   return `vec4(${t[0]}, ${t[1]}, ${t[2]}, ${t[3]})`;
 }
-const Km = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const wg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  add: vo,
-  clone: po,
-  copy: go,
-  create: fo,
-  div: To,
-  dot: Lo,
-  equals: Mo,
-  fromValues: mo,
-  length: _o,
-  lerp: Co,
-  mul: yo,
-  negate: $o,
-  normalize: Ao,
-  scale: So,
-  set: bo,
-  squaredLength: Eo,
-  sub: xo,
-  toArray: Fo,
-  toString: Bo,
-  transformMat4: Po,
-  zero: wo
+  add: Ro,
+  clone: Po,
+  copy: Co,
+  create: Eo,
+  div: Oo,
+  dot: ko,
+  equals: Wo,
+  fromValues: Lo,
+  length: Vo,
+  lerp: zo,
+  mul: Go,
+  negate: Do,
+  normalize: Io,
+  scale: Uo,
+  set: Mo,
+  squaredLength: No,
+  sub: Bo,
+  toArray: jo,
+  toString: Qo,
+  transformMat4: qo,
+  zero: Fo
 }, Symbol.toStringTag, { value: "Module" }));
-function Ai() {
+function Bi() {
   const t = new Float32Array(9);
   return t[0] = 1, t[4] = 1, t[8] = 1, t;
 }
-function _i(t) {
+function Gi(t) {
   return t[0] = 1, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 1, t[5] = 0, t[6] = 0, t[7] = 0, t[8] = 1, t;
 }
-function Ro(t) {
+function Xo(t) {
   const e = new Float32Array(9);
   return e.set(t), e;
 }
-function Go(t, e, n, r, i, s, a, o, l) {
-  const c = new Float32Array(9);
-  return c[0] = t, c[1] = e, c[2] = n, c[3] = r, c[4] = i, c[5] = s, c[6] = a, c[7] = o, c[8] = l, c;
+function Yo(t, e, n, r, i, s, a, o, c) {
+  const l = new Float32Array(9);
+  return l[0] = t, l[1] = e, l[2] = n, l[3] = r, l[4] = i, l[5] = s, l[6] = a, l[7] = o, l[8] = c, l;
 }
-function Uo(t, e) {
+function Ho(t, e) {
   return t.set(e), t;
 }
-function Oo(t, e, n, r, i, s, a, o, l, c) {
-  return t[0] = e, t[1] = n, t[2] = r, t[3] = i, t[4] = s, t[5] = a, t[6] = o, t[7] = l, t[8] = c, t;
+function Zo(t, e, n, r, i, s, a, o, c, l) {
+  return t[0] = e, t[1] = n, t[2] = r, t[3] = i, t[4] = s, t[5] = a, t[6] = o, t[7] = c, t[8] = l, t;
 }
-function Ei(t, e) {
+function Oi(t, e) {
   return t[0] = e[0], t[1] = e[1], t[2] = e[2], t[3] = e[4], t[4] = e[5], t[5] = e[6], t[6] = e[8], t[7] = e[9], t[8] = e[10], t;
 }
-function Li(t, e) {
-  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], l = e[6], c = e[7], h = e[8];
-  return t[0] = n, t[1] = s, t[2] = l, t[3] = r, t[4] = a, t[5] = c, t[6] = i, t[7] = o, t[8] = h, t;
+function Ui(t, e) {
+  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], c = e[6], l = e[7], h = e[8];
+  return t[0] = n, t[1] = s, t[2] = c, t[3] = r, t[4] = a, t[5] = l, t[6] = i, t[7] = o, t[8] = h, t;
 }
-function Do(t) {
-  const e = t[0], n = t[1], r = t[2], i = t[3], s = t[4], a = t[5], o = t[6], l = t[7], c = t[8], h = c * s - a * l, d = -c * i + a * o, f = l * i - s * o;
-  return e * h + n * d + r * f;
+function Ko(t) {
+  const e = t[0], n = t[1], r = t[2], i = t[3], s = t[4], a = t[5], o = t[6], c = t[7], l = t[8], h = l * s - a * c, f = -l * i + a * o, d = c * i - s * o;
+  return e * h + n * f + r * d;
 }
-function Ci(t, e) {
-  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], l = e[6], c = e[7], h = e[8], d = h * a - o * c, f = -h * s + o * l, p = c * s - a * l;
-  let m = n * d + r * f + i * p;
-  return m ? (m = 1 / m, t[0] = d * m, t[1] = (-h * r + i * c) * m, t[2] = (o * r - i * a) * m, t[3] = f * m, t[4] = (h * n - i * l) * m, t[5] = (-o * n + i * s) * m, t[6] = p * m, t[7] = (-c * n + r * l) * m, t[8] = (a * n - r * s) * m, t) : null;
+function Di(t, e) {
+  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], c = e[6], l = e[7], h = e[8], f = h * a - o * l, d = -h * s + o * c, p = l * s - a * c;
+  let m = n * f + r * d + i * p;
+  return m ? (m = 1 / m, t[0] = f * m, t[1] = (-h * r + i * l) * m, t[2] = (o * r - i * a) * m, t[3] = d * m, t[4] = (h * n - i * c) * m, t[5] = (-o * n + i * s) * m, t[6] = p * m, t[7] = (-l * n + r * c) * m, t[8] = (a * n - r * s) * m, t) : null;
 }
-function Io(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], l = e[5], c = e[6], h = e[7], d = e[8], f = n[0], p = n[1], m = n[2], g = n[3], b = n[4], w = n[5], T = n[6], $ = n[7], A = n[8];
-  return t[0] = f * r + p * a + m * c, t[1] = f * i + p * o + m * h, t[2] = f * s + p * l + m * d, t[3] = g * r + b * a + w * c, t[4] = g * i + b * o + w * h, t[5] = g * s + b * l + w * d, t[6] = T * r + $ * a + A * c, t[7] = T * i + $ * o + A * h, t[8] = T * s + $ * l + A * d, t;
+function Jo(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], c = e[5], l = e[6], h = e[7], f = e[8], d = n[0], p = n[1], m = n[2], g = n[3], b = n[4], w = n[5], S = n[6], $ = n[7], A = n[8];
+  return t[0] = d * r + p * a + m * l, t[1] = d * i + p * o + m * h, t[2] = d * s + p * c + m * f, t[3] = g * r + b * a + w * l, t[4] = g * i + b * o + w * h, t[5] = g * s + b * c + w * f, t[6] = S * r + $ * a + A * l, t[7] = S * i + $ * o + A * h, t[8] = S * s + $ * c + A * f, t;
 }
-function Vo(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], l = e[5], c = e[6], h = e[7], d = e[8], f = n[0], p = n[1], m = n[2];
-  return t[0] = f * r, t[1] = f * i, t[2] = f * s, t[3] = p * a, t[4] = p * o, t[5] = p * l, t[6] = m * c, t[7] = m * h, t[8] = m * d, t;
+function el(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], c = e[5], l = e[6], h = e[7], f = e[8], d = n[0], p = n[1], m = n[2];
+  return t[0] = d * r, t[1] = d * i, t[2] = d * s, t[3] = p * a, t[4] = p * o, t[5] = p * c, t[6] = m * l, t[7] = m * h, t[8] = m * f, t;
 }
-function No(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], l = e[5], c = e[6], h = e[7], d = e[8], f = n[0], p = n[1];
-  return t[0] = r, t[1] = i, t[2] = s, t[3] = a, t[4] = o, t[5] = l, t[6] = f * r + p * a + c, t[7] = f * i + p * o + h, t[8] = f * s + p * l + d, t;
+function tl(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], c = e[5], l = e[6], h = e[7], f = e[8], d = n[0], p = n[1];
+  return t[0] = r, t[1] = i, t[2] = s, t[3] = a, t[4] = o, t[5] = c, t[6] = d * r + p * a + l, t[7] = d * i + p * o + h, t[8] = d * s + p * c + f, t;
 }
-function ko(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], l = e[5], c = e[6], h = e[7], d = e[8], f = Math.sin(n), p = Math.cos(n);
-  return t[0] = p * r + f * a, t[1] = p * i + f * o, t[2] = p * s + f * l, t[3] = p * a - f * r, t[4] = p * o - f * i, t[5] = p * l - f * s, t[6] = c, t[7] = h, t[8] = d, t;
+function nl(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], c = e[5], l = e[6], h = e[7], f = e[8], d = Math.sin(n), p = Math.cos(n);
+  return t[0] = p * r + d * a, t[1] = p * i + d * o, t[2] = p * s + d * c, t[3] = p * a - d * r, t[4] = p * o - d * i, t[5] = p * c - d * s, t[6] = l, t[7] = h, t[8] = f, t;
 }
-function Rn(t, e) {
-  return Ei(t, e), Ci(t, t) ? (Li(t, t), t) : null;
+function Vn(t, e) {
+  return Oi(t, e), Di(t, t) ? (Ui(t, t), t) : null;
 }
-function zo(t, e, n = 1e-6) {
+function rl(t, e, n = 1e-6) {
   for (let r = 0; r < 9; r++)
     if (Math.abs(t[r] - e[r]) > n) return !1;
   return !0;
 }
-function Wo(t) {
+function il(t) {
   return `mat3(${t[0]}, ${t[1]}, ${t[2]} | ${t[3]}, ${t[4]}, ${t[5]} | ${t[6]}, ${t[7]}, ${t[8]})`;
 }
-const Qm = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const yg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  clone: Ro,
-  copy: Uo,
-  create: Ai,
-  determinant: Do,
-  equals: zo,
-  fromMat4: Ei,
-  fromValues: Go,
-  identity: _i,
-  invert: Ci,
-  multiply: Io,
-  normalFromMat4: Rn,
-  rotate: ko,
-  scale: Vo,
-  set: Oo,
-  toString: Wo,
-  translate: No,
-  transpose: Li
-}, Symbol.toStringTag, { value: "Module" })), Et = 1e-6, ie = new Float32Array(16), qo = new Float32Array(3);
-function ne() {
+  clone: Xo,
+  copy: Ho,
+  create: Bi,
+  determinant: Ko,
+  equals: rl,
+  fromMat4: Oi,
+  fromValues: Yo,
+  identity: Gi,
+  invert: Di,
+  multiply: Jo,
+  normalFromMat4: Vn,
+  rotate: nl,
+  scale: el,
+  set: Zo,
+  toString: il,
+  translate: tl,
+  transpose: Ui
+}, Symbol.toStringTag, { value: "Module" })), Ft = 1e-6, se = new Float32Array(16), sl = new Float32Array(3);
+function re() {
   const t = new Float32Array(16);
   return t[0] = 1, t[5] = 1, t[10] = 1, t[15] = 1, t;
 }
-function X(t) {
+function Q(t) {
   return t[0] = 1, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = 1, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[10] = 1, t[11] = 0, t[12] = 0, t[13] = 0, t[14] = 0, t[15] = 1, t;
 }
-function jo(t) {
+function al(t) {
   const e = new Float32Array(16);
   return e.set(t), e;
 }
-function Mi(t) {
+function Ii(t) {
   return t.fill(0), t;
 }
-function Xo(...t) {
+function ol(...t) {
   const e = new Float32Array(16);
   for (let n = 0; n < 16; n++) e[n] = t[n] ?? 0;
   return e;
 }
-function Pi(t, e) {
+function Vi(t, e) {
   return t.set(e), t;
 }
-function Yo(t, ...e) {
+function ll(t, ...e) {
   for (let n = 0; n < 16; n++) t[n] = e[n] ?? 0;
   return t;
 }
-function Ho(t, e) {
-  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], l = e[6], c = e[7], h = e[8], d = e[9], f = e[10], p = e[11], m = e[12], g = e[13], b = e[14], w = e[15];
-  return t[0] = n, t[1] = a, t[2] = h, t[3] = m, t[4] = r, t[5] = o, t[6] = d, t[7] = g, t[8] = i, t[9] = l, t[10] = f, t[11] = b, t[12] = s, t[13] = c, t[14] = p, t[15] = w, t;
+function cl(t, e) {
+  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], c = e[6], l = e[7], h = e[8], f = e[9], d = e[10], p = e[11], m = e[12], g = e[13], b = e[14], w = e[15];
+  return t[0] = n, t[1] = a, t[2] = h, t[3] = m, t[4] = r, t[5] = o, t[6] = f, t[7] = g, t[8] = i, t[9] = c, t[10] = d, t[11] = b, t[12] = s, t[13] = l, t[14] = p, t[15] = w, t;
 }
-function Fi(t) {
-  const e = t[0], n = t[1], r = t[2], i = t[3], s = t[4], a = t[5], o = t[6], l = t[7], c = t[8], h = t[9], d = t[10], f = t[11], p = t[12], m = t[13], g = t[14], b = t[15], w = e * a - n * s, T = e * o - r * s, $ = e * l - i * s, A = n * o - r * a, _ = n * l - i * a, C = r * l - i * o, M = c * m - h * p, I = c * g - d * p, V = c * b - f * p, N = h * g - d * m, k = h * b - f * m, Y = d * b - f * g;
-  return w * Y - T * k + $ * N + A * V - _ * I + C * M;
+function Ni(t) {
+  const e = t[0], n = t[1], r = t[2], i = t[3], s = t[4], a = t[5], o = t[6], c = t[7], l = t[8], h = t[9], f = t[10], d = t[11], p = t[12], m = t[13], g = t[14], b = t[15], w = e * a - n * s, S = e * o - r * s, $ = e * c - i * s, A = n * o - r * a, _ = n * c - i * a, L = r * c - i * o, M = l * m - h * p, I = l * g - f * p, V = l * b - d * p, N = h * g - f * m, k = h * b - d * m, X = f * b - d * g;
+  return w * X - S * k + $ * N + A * V - _ * I + L * M;
 }
-function Ot(t, e) {
-  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], l = e[6], c = e[7], h = e[8], d = e[9], f = e[10], p = e[11], m = e[12], g = e[13], b = e[14], w = e[15], T = n * o - r * a, $ = n * l - i * a, A = n * c - s * a, _ = r * l - i * o, C = r * c - s * o, M = i * c - s * l, I = h * g - d * m, V = h * b - f * m, N = h * w - p * m, k = d * b - f * g, Y = d * w - p * g, J = f * w - p * b;
-  let E = T * J - $ * Y + A * k + _ * N - C * V + M * I;
-  return E ? (E = 1 / E, t[0] = (o * J - l * Y + c * k) * E, t[1] = (i * Y - r * J - s * k) * E, t[2] = (g * M - b * C + w * _) * E, t[3] = (f * C - d * M - p * _) * E, t[4] = (l * N - a * J - c * V) * E, t[5] = (n * J - i * N + s * V) * E, t[6] = (b * A - m * M - w * $) * E, t[7] = (h * M - f * A + p * $) * E, t[8] = (a * Y - o * N + c * I) * E, t[9] = (r * N - n * Y - s * I) * E, t[10] = (m * C - g * A + w * T) * E, t[11] = (d * A - h * C - p * T) * E, t[12] = (o * V - a * k - l * I) * E, t[13] = (n * k - r * V + i * I) * E, t[14] = (g * $ - m * _ - b * T) * E, t[15] = (h * _ - d * $ + f * T) * E, t) : null;
+function Nt(t, e) {
+  const n = e[0], r = e[1], i = e[2], s = e[3], a = e[4], o = e[5], c = e[6], l = e[7], h = e[8], f = e[9], d = e[10], p = e[11], m = e[12], g = e[13], b = e[14], w = e[15], S = n * o - r * a, $ = n * c - i * a, A = n * l - s * a, _ = r * c - i * o, L = r * l - s * o, M = i * l - s * c, I = h * g - f * m, V = h * b - d * m, N = h * w - p * m, k = f * b - d * g, X = f * w - p * g, ee = d * w - p * b;
+  let E = S * ee - $ * X + A * k + _ * N - L * V + M * I;
+  return E ? (E = 1 / E, t[0] = (o * ee - c * X + l * k) * E, t[1] = (i * X - r * ee - s * k) * E, t[2] = (g * M - b * L + w * _) * E, t[3] = (d * L - f * M - p * _) * E, t[4] = (c * N - a * ee - l * V) * E, t[5] = (n * ee - i * N + s * V) * E, t[6] = (b * A - m * M - w * $) * E, t[7] = (h * M - d * A + p * $) * E, t[8] = (a * X - o * N + l * I) * E, t[9] = (r * N - n * X - s * I) * E, t[10] = (m * L - g * A + w * S) * E, t[11] = (f * A - h * L - p * S) * E, t[12] = (o * V - a * k - c * I) * E, t[13] = (n * k - r * V + i * I) * E, t[14] = (g * $ - m * _ - b * S) * E, t[15] = (h * _ - f * $ + d * S) * E, t) : null;
 }
-function K(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], l = e[5], c = e[6], h = e[7], d = e[8], f = e[9], p = e[10], m = e[11], g = e[12], b = e[13], w = e[14], T = e[15], $ = n[0], A = n[1], _ = n[2], C = n[3], M = n[4], I = n[5], V = n[6], N = n[7], k = n[8], Y = n[9], J = n[10], E = n[11], nt = n[12], rt = n[13], it = n[14], st = n[15];
-  return t[0] = $ * r + A * o + _ * d + C * g, t[1] = $ * i + A * l + _ * f + C * b, t[2] = $ * s + A * c + _ * p + C * w, t[3] = $ * a + A * h + _ * m + C * T, t[4] = M * r + I * o + V * d + N * g, t[5] = M * i + I * l + V * f + N * b, t[6] = M * s + I * c + V * p + N * w, t[7] = M * a + I * h + V * m + N * T, t[8] = k * r + Y * o + J * d + E * g, t[9] = k * i + Y * l + J * f + E * b, t[10] = k * s + Y * c + J * p + E * w, t[11] = k * a + Y * h + J * m + E * T, t[12] = nt * r + rt * o + it * d + st * g, t[13] = nt * i + rt * l + it * f + st * b, t[14] = nt * s + rt * c + it * p + st * w, t[15] = nt * a + rt * h + it * m + st * T, t;
+function Z(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = e[3], o = e[4], c = e[5], l = e[6], h = e[7], f = e[8], d = e[9], p = e[10], m = e[11], g = e[12], b = e[13], w = e[14], S = e[15], $ = n[0], A = n[1], _ = n[2], L = n[3], M = n[4], I = n[5], V = n[6], N = n[7], k = n[8], X = n[9], ee = n[10], E = n[11], ot = n[12], lt = n[13], ct = n[14], ut = n[15];
+  return t[0] = $ * r + A * o + _ * f + L * g, t[1] = $ * i + A * c + _ * d + L * b, t[2] = $ * s + A * l + _ * p + L * w, t[3] = $ * a + A * h + _ * m + L * S, t[4] = M * r + I * o + V * f + N * g, t[5] = M * i + I * c + V * d + N * b, t[6] = M * s + I * l + V * p + N * w, t[7] = M * a + I * h + V * m + N * S, t[8] = k * r + X * o + ee * f + E * g, t[9] = k * i + X * c + ee * d + E * b, t[10] = k * s + X * l + ee * p + E * w, t[11] = k * a + X * h + ee * m + E * S, t[12] = ot * r + lt * o + ct * f + ut * g, t[13] = ot * i + lt * c + ct * d + ut * b, t[14] = ot * s + lt * l + ct * p + ut * w, t[15] = ot * a + lt * h + ct * m + ut * S, t;
 }
-function Zo(t, ...e) {
-  if (e.length === 0) return X(t);
-  Pi(t, e[0]);
-  for (let n = 1; n < e.length; n++) K(t, t, e[n]);
+function ul(t, ...e) {
+  if (e.length === 0) return Q(t);
+  Vi(t, e[0]);
+  for (let n = 1; n < e.length; n++) Z(t, t, e[n]);
   return t;
 }
-function Bi(t, e) {
-  return X(t), t[12] = e[0], t[13] = e[1], t[14] = e[2], t;
+function ki(t, e) {
+  return Q(t), t[12] = e[0], t[13] = e[1], t[14] = e[2], t;
 }
-function Ko(t, e) {
-  return X(t), t[0] = e[0], t[5] = e[1], t[10] = e[2], t;
+function hl(t, e) {
+  return Q(t), t[0] = e[0], t[5] = e[1], t[10] = e[2], t;
 }
-function Ri(t, e, n) {
+function zi(t, e, n) {
   let r = n[0], i = n[1], s = n[2], a = Math.hypot(r, i, s);
-  if (a < Et) return X(t);
+  if (a < Ft) return Q(t);
   a = 1 / a, r *= a, i *= a, s *= a;
-  const o = Math.sin(e), l = Math.cos(e), c = 1 - l, h = r * r * c + l, d = i * r * c + s * o, f = s * r * c - i * o, p = r * i * c - s * o, m = i * i * c + l, g = s * i * c + r * o, b = r * s * c + i * o, w = i * s * c - r * o, T = s * s * c + l;
-  return t[0] = h, t[1] = d, t[2] = f, t[3] = 0, t[4] = p, t[5] = m, t[6] = g, t[7] = 0, t[8] = b, t[9] = w, t[10] = T, t[11] = 0, t[12] = 0, t[13] = 0, t[14] = 0, t[15] = 1, t;
+  const o = Math.sin(e), c = Math.cos(e), l = 1 - c, h = r * r * l + c, f = i * r * l + s * o, d = s * r * l - i * o, p = r * i * l - s * o, m = i * i * l + c, g = s * i * l + r * o, b = r * s * l + i * o, w = i * s * l - r * o, S = s * s * l + c;
+  return t[0] = h, t[1] = f, t[2] = d, t[3] = 0, t[4] = p, t[5] = m, t[6] = g, t[7] = 0, t[8] = b, t[9] = w, t[10] = S, t[11] = 0, t[12] = 0, t[13] = 0, t[14] = 0, t[15] = 1, t;
 }
-function Gn(t, e) {
+function Nn(t, e) {
   const n = Math.sin(e), r = Math.cos(e);
-  return X(t), t[5] = r, t[6] = n, t[9] = -n, t[10] = r, t;
+  return Q(t), t[5] = r, t[6] = n, t[9] = -n, t[10] = r, t;
 }
-function Un(t, e) {
+function kn(t, e) {
   const n = Math.sin(e), r = Math.cos(e);
-  return X(t), t[0] = r, t[2] = -n, t[8] = n, t[10] = r, t;
+  return Q(t), t[0] = r, t[2] = -n, t[8] = n, t[10] = r, t;
 }
-function On(t, e) {
+function zn(t, e) {
   const n = Math.sin(e), r = Math.cos(e);
-  return X(t), t[0] = r, t[1] = n, t[4] = -n, t[5] = r, t;
+  return Q(t), t[0] = r, t[1] = n, t[4] = -n, t[5] = r, t;
 }
-function Qo(t, e, n, r) {
-  return Dn(t, e, n, r, Jo);
+function dl(t, e, n, r) {
+  return Wn(t, e, n, r, fl);
 }
-const Jo = new Float32Array([1, 1, 1]);
-function Dn(t, e, n, r, i) {
-  let s = n[0], a = n[1], o = n[2], l = Math.hypot(s, a, o);
-  if (l < Et)
-    return X(t), t[12] = r[0], t[13] = r[1], t[14] = r[2], t;
-  l = 1 / l, s *= l, a *= l, o *= l;
-  const c = Math.sin(e), h = Math.cos(e), d = 1 - h, f = s * s * d + h, p = a * s * d + o * c, m = o * s * d - a * c, g = s * a * d - o * c, b = a * a * d + h, w = o * a * d + s * c, T = s * o * d + a * c, $ = a * o * d - s * c, A = o * o * d + h, _ = i[0], C = i[1], M = i[2];
-  return t[0] = f * _, t[1] = p * _, t[2] = m * _, t[3] = 0, t[4] = g * C, t[5] = b * C, t[6] = w * C, t[7] = 0, t[8] = T * M, t[9] = $ * M, t[10] = A * M, t[11] = 0, t[12] = r[0], t[13] = r[1], t[14] = r[2], t[15] = 1, t;
+const fl = new Float32Array([1, 1, 1]);
+function Wn(t, e, n, r, i) {
+  let s = n[0], a = n[1], o = n[2], c = Math.hypot(s, a, o);
+  if (c < Ft)
+    return Q(t), t[12] = r[0], t[13] = r[1], t[14] = r[2], t;
+  c = 1 / c, s *= c, a *= c, o *= c;
+  const l = Math.sin(e), h = Math.cos(e), f = 1 - h, d = s * s * f + h, p = a * s * f + o * l, m = o * s * f - a * l, g = s * a * f - o * l, b = a * a * f + h, w = o * a * f + s * l, S = s * o * f + a * l, $ = a * o * f - s * l, A = o * o * f + h, _ = i[0], L = i[1], M = i[2];
+  return t[0] = d * _, t[1] = p * _, t[2] = m * _, t[3] = 0, t[4] = g * L, t[5] = b * L, t[6] = w * L, t[7] = 0, t[8] = S * M, t[9] = $ * M, t[10] = A * M, t[11] = 0, t[12] = r[0], t[13] = r[1], t[14] = r[2], t[15] = 1, t;
 }
-function ec(t, e, n, r, i, s) {
-  Dn(t, e, n, r, i);
-  const a = s[0], o = s[1], l = s[2];
-  return t[12] = r[0] + a - (t[0] * a + t[4] * o + t[8] * l), t[13] = r[1] + o - (t[1] * a + t[5] * o + t[9] * l), t[14] = r[2] + l - (t[2] * a + t[6] * o + t[10] * l), t;
+function pl(t, e, n, r, i, s) {
+  Wn(t, e, n, r, i);
+  const a = s[0], o = s[1], c = s[2];
+  return t[12] = r[0] + a - (t[0] * a + t[4] * o + t[8] * c), t[13] = r[1] + o - (t[1] * a + t[5] * o + t[9] * c), t[14] = r[2] + c - (t[2] * a + t[6] * o + t[10] * c), t;
 }
-function tc(t, e, n) {
-  return Bi(ie, n), K(t, e, ie);
+function ml(t, e, n) {
+  return ki(se, n), Z(t, e, se);
 }
-function nc(t, e, n) {
+function gl(t, e, n) {
   const r = n[0], i = n[1], s = n[2];
   return t[0] = e[0] * r, t[1] = e[1] * r, t[2] = e[2] * r, t[3] = e[3] * r, t[4] = e[4] * i, t[5] = e[5] * i, t[6] = e[6] * i, t[7] = e[7] * i, t[8] = e[8] * s, t[9] = e[9] * s, t[10] = e[10] * s, t[11] = e[11] * s, t[12] = e[12], t[13] = e[13], t[14] = e[14], t[15] = e[15], t;
 }
-function rc(t, e, n, r) {
-  return Ri(ie, n, r), K(t, e, ie);
+function bl(t, e, n, r) {
+  return zi(se, n, r), Z(t, e, se);
 }
-function ic(t, e, n) {
-  return Gn(ie, n), K(t, e, ie);
+function wl(t, e, n) {
+  return Nn(se, n), Z(t, e, se);
 }
-function sc(t, e, n) {
-  return Un(ie, n), K(t, e, ie);
+function yl(t, e, n) {
+  return kn(se, n), Z(t, e, se);
 }
-function ac(t, e, n) {
-  return On(ie, n), K(t, e, ie);
+function vl(t, e, n) {
+  return zn(se, n), Z(t, e, se);
 }
-function oc(t, e) {
+function xl(t, e) {
   return t[0] = e[12], t[1] = e[13], t[2] = e[14], t;
 }
-function Gi(t, e) {
+function Wi(t, e) {
   return t[0] = Math.hypot(e[0], e[1], e[2]), t[1] = Math.hypot(e[4], e[5], e[6]), t[2] = Math.hypot(e[8], e[9], e[10]), t;
 }
-function cc(t, e) {
-  const n = Gi(qo, e), r = Fi(e) < 0 ? -1 : 1, i = n[0] * r, s = n[1], a = n[2];
+function Sl(t, e) {
+  const n = Wi(sl, e), r = Ni(e) < 0 ? -1 : 1, i = n[0] * r, s = n[1], a = n[2];
   return t[0] = e[0] / i, t[1] = e[1] / i, t[2] = e[2] / i, t[3] = e[4] / s, t[4] = e[5] / s, t[5] = e[6] / s, t[6] = e[8] / a, t[7] = e[9] / a, t[8] = e[10] / a, t;
 }
-function Ui(t, e, n, r, i) {
+function qi(t, e, n, r, i) {
   const s = 1 / Math.tan(e / 2);
   if (t[0] = s / n, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = s, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[11] = -1, t[12] = 0, t[13] = 0, t[15] = 0, Number.isFinite(i)) {
     const a = 1 / (r - i);
@@ -1310,46 +1337,46 @@ function Ui(t, e, n, r, i) {
     t[10] = -1, t[14] = -2 * r;
   return t;
 }
-function Oi(t, e, n, r, i) {
+function ji(t, e, n, r, i) {
   const s = 1 / Math.tan(e / 2);
   return t[0] = s / n, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = s, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[11] = -1, t[12] = 0, t[13] = 0, t[15] = 0, Number.isFinite(i) ? (t[10] = i / (r - i), t[14] = i * r / (r - i)) : (t[10] = -1, t[14] = -r), t;
 }
-function Di(t, e, n, r, i, s, a) {
-  const o = 1 / (e - n), l = 1 / (r - i), c = 1 / (s - a);
-  return t[0] = -2 * o, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = -2 * l, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[10] = 2 * c, t[11] = 0, t[12] = (e + n) * o, t[13] = (i + r) * l, t[14] = (a + s) * c, t[15] = 1, t;
+function Qi(t, e, n, r, i, s, a) {
+  const o = 1 / (e - n), c = 1 / (r - i), l = 1 / (s - a);
+  return t[0] = -2 * o, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = -2 * c, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[10] = 2 * l, t[11] = 0, t[12] = (e + n) * o, t[13] = (i + r) * c, t[14] = (a + s) * l, t[15] = 1, t;
 }
-function Ii(t, e, n, r, i, s, a) {
-  const o = 1 / (e - n), l = 1 / (r - i), c = 1 / (s - a);
-  return t[0] = -2 * o, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = -2 * l, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[10] = c, t[11] = 0, t[12] = (e + n) * o, t[13] = (i + r) * l, t[14] = s * c, t[15] = 1, t;
+function Xi(t, e, n, r, i, s, a) {
+  const o = 1 / (e - n), c = 1 / (r - i), l = 1 / (s - a);
+  return t[0] = -2 * o, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = -2 * c, t[6] = 0, t[7] = 0, t[8] = 0, t[9] = 0, t[10] = l, t[11] = 0, t[12] = (e + n) * o, t[13] = (i + r) * c, t[14] = s * l, t[15] = 1, t;
 }
-function lc(t, e, n, r, i, s, a) {
-  const o = 1 / (n - e), l = 1 / (i - r), c = 1 / (s - a);
-  return t[0] = s * 2 * o, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = s * 2 * l, t[6] = 0, t[7] = 0, t[8] = (n + e) * o, t[9] = (i + r) * l, t[10] = (a + s) * c, t[11] = -1, t[12] = 0, t[13] = 0, t[14] = 2 * a * s * c, t[15] = 0, t;
+function Tl(t, e, n, r, i, s, a) {
+  const o = 1 / (n - e), c = 1 / (i - r), l = 1 / (s - a);
+  return t[0] = s * 2 * o, t[1] = 0, t[2] = 0, t[3] = 0, t[4] = 0, t[5] = s * 2 * c, t[6] = 0, t[7] = 0, t[8] = (n + e) * o, t[9] = (i + r) * c, t[10] = (a + s) * l, t[11] = -1, t[12] = 0, t[13] = 0, t[14] = 2 * a * s * l, t[15] = 0, t;
 }
-function xn(t, e, n, r) {
+function $n(t, e, n, r) {
   let i = e[0] - n[0], s = e[1] - n[1], a = e[2] - n[2], o = Math.hypot(i, s, a);
-  if (o < Et) return Mi(t);
+  if (o < Ft) return Ii(t);
   o = 1 / o, i *= o, s *= o, a *= o;
-  let l = r[1] * a - r[2] * s, c = r[2] * i - r[0] * a, h = r[0] * s - r[1] * i;
-  o = Math.hypot(l, c, h), o < Et ? (l = 0, c = 0, h = 0) : (o = 1 / o, l *= o, c *= o, h *= o);
-  const d = s * h - a * c, f = a * l - i * h, p = i * c - s * l;
-  return t[0] = l, t[1] = d, t[2] = i, t[3] = 0, t[4] = c, t[5] = f, t[6] = s, t[7] = 0, t[8] = h, t[9] = p, t[10] = a, t[11] = 0, t[12] = -(l * e[0] + c * e[1] + h * e[2]), t[13] = -(d * e[0] + f * e[1] + p * e[2]), t[14] = -(i * e[0] + s * e[1] + a * e[2]), t[15] = 1, t;
+  let c = r[1] * a - r[2] * s, l = r[2] * i - r[0] * a, h = r[0] * s - r[1] * i;
+  o = Math.hypot(c, l, h), o < Ft ? (c = 0, l = 0, h = 0) : (o = 1 / o, c *= o, l *= o, h *= o);
+  const f = s * h - a * l, d = a * c - i * h, p = i * l - s * c;
+  return t[0] = c, t[1] = f, t[2] = i, t[3] = 0, t[4] = l, t[5] = d, t[6] = s, t[7] = 0, t[8] = h, t[9] = p, t[10] = a, t[11] = 0, t[12] = -(c * e[0] + l * e[1] + h * e[2]), t[13] = -(f * e[0] + d * e[1] + p * e[2]), t[14] = -(i * e[0] + s * e[1] + a * e[2]), t[15] = 1, t;
 }
-function uc(t, e, n) {
+function $l(t, e, n) {
   const r = n[0], i = n[1], s = n[2];
   let a = e[3] * r + e[7] * i + e[11] * s + e[15];
   return a = a || 1, t[0] = (e[0] * r + e[4] * i + e[8] * s + e[12]) / a, t[1] = (e[1] * r + e[5] * i + e[9] * s + e[13]) / a, t[2] = (e[2] * r + e[6] * i + e[10] * s + e[14]) / a, t;
 }
-function hc(t, e, n) {
+function Al(t, e, n) {
   const r = n[0], i = n[1], s = n[2];
   return t[0] = e[0] * r + e[4] * i + e[8] * s, t[1] = e[1] * r + e[5] * i + e[9] * s, t[2] = e[2] * r + e[6] * i + e[10] * s, t;
 }
-function fc(t, e, n = 1e-6) {
+function _l(t, e, n = 1e-6) {
   for (let r = 0; r < 16; r++)
     if (Math.abs(t[r] - e[r]) > n) return !1;
   return !0;
 }
-function dc(t) {
+function El(t) {
   const e = [];
   for (let n = 0; n < 4; n++)
     e.push(
@@ -1357,120 +1384,120 @@ function dc(t) {
     );
   return `mat4(${e.join(", ")})`;
 }
-const Jm = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const vg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  clone: jo,
-  copy: Pi,
-  create: ne,
-  determinant: Fi,
-  equals: fc,
-  fromRotation: Ri,
-  fromRotationTranslation: Qo,
-  fromRotationTranslationScale: Dn,
-  fromRotationTranslationScaleOrigin: ec,
-  fromScaling: Ko,
-  fromTranslation: Bi,
-  fromValues: Xo,
-  fromXRotation: Gn,
-  fromYRotation: Un,
-  fromZRotation: On,
-  frustum: lc,
-  getRotation: cc,
-  getScaling: Gi,
-  getTranslation: oc,
-  identity: X,
-  invert: Ot,
-  lookAt: xn,
-  multiply: K,
-  multiplyAll: Zo,
-  ortho: Di,
-  orthoZO: Ii,
-  perspective: Ui,
-  perspectiveZO: Oi,
-  rotate: rc,
-  rotateX: ic,
-  rotateY: sc,
-  rotateZ: ac,
-  scale: nc,
-  set: Yo,
-  toString: dc,
-  transformDirection: hc,
-  transformPoint: uc,
-  translate: tc,
-  transpose: Ho,
-  zero: Mi
+  clone: al,
+  copy: Vi,
+  create: re,
+  determinant: Ni,
+  equals: _l,
+  fromRotation: zi,
+  fromRotationTranslation: dl,
+  fromRotationTranslationScale: Wn,
+  fromRotationTranslationScaleOrigin: pl,
+  fromScaling: hl,
+  fromTranslation: ki,
+  fromValues: ol,
+  fromXRotation: Nn,
+  fromYRotation: kn,
+  fromZRotation: zn,
+  frustum: Tl,
+  getRotation: Sl,
+  getScaling: Wi,
+  getTranslation: xl,
+  identity: Q,
+  invert: Nt,
+  lookAt: $n,
+  multiply: Z,
+  multiplyAll: ul,
+  ortho: Qi,
+  orthoZO: Xi,
+  perspective: qi,
+  perspectiveZO: ji,
+  rotate: bl,
+  rotateX: wl,
+  rotateY: yl,
+  rotateZ: vl,
+  scale: gl,
+  set: ll,
+  toString: El,
+  transformDirection: Al,
+  transformPoint: $l,
+  translate: ml,
+  transpose: cl,
+  zero: Ii
 }, Symbol.toStringTag, { value: "Module" }));
-function Vi() {
+function Yi() {
   const t = new Float32Array(4);
   return t[3] = 1, t;
 }
-function pc(t) {
+function Pl(t) {
   const e = new Float32Array(4);
-  return Ni(e, t);
+  return Hi(e, t);
 }
-function Ni(t, e) {
+function Hi(t, e) {
   return t[0] = e[0], t[1] = e[1], t[2] = e[2], t[3] = e[3], t;
 }
-function et(t, e, n, r, i) {
+function st(t, e, n, r, i) {
   return t[0] = e, t[1] = n, t[2] = r, t[3] = i, t;
 }
-function mc(t, e, n, r) {
-  return et(new Float32Array(4), t, e, n, r);
+function Ll(t, e, n, r) {
+  return st(new Float32Array(4), t, e, n, r);
 }
-function Dt(t) {
+function kt(t) {
   return t[0] = 0, t[1] = 0, t[2] = 0, t[3] = 1, t;
 }
-function In(t, e) {
+function qn(t, e) {
   return t[0] * e[0] + t[1] * e[1] + t[2] * e[2] + t[3] * e[3];
 }
-function Vn(t) {
-  return In(t, t);
+function jn(t) {
+  return qn(t, t);
 }
-function ki(t) {
-  return Math.sqrt(Vn(t));
+function Zi(t) {
+  return Math.sqrt(jn(t));
 }
-function Ne(t, e) {
-  const n = ki(e);
-  if (n < 1e-8) return Dt(t);
+function qe(t, e) {
+  const n = Zi(e);
+  if (n < 1e-8) return kt(t);
   const r = 1 / n;
   return t[0] = e[0] * r, t[1] = e[1] * r, t[2] = e[2] * r, t[3] = e[3] * r, t;
 }
-function gc(t, e) {
+function Cl(t, e) {
   return t[0] = -e[0], t[1] = -e[1], t[2] = -e[2], t[3] = e[3], t;
 }
-function bc(t, e) {
-  const n = Vn(e);
-  if (n < 1e-12) return Dt(t);
+function Ml(t, e) {
+  const n = jn(e);
+  if (n < 1e-12) return kt(t);
   const r = 1 / n;
   return t[0] = -e[0] * r, t[1] = -e[1] * r, t[2] = -e[2] * r, t[3] = e[3] * r, t;
 }
-function $e(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = e[3], o = n[0], l = n[1], c = n[2], h = n[3];
-  return t[0] = r * h + a * o + i * c - s * l, t[1] = i * h + a * l + s * o - r * c, t[2] = s * h + a * c + r * l - i * o, t[3] = a * h - r * o - i * l - s * c, t;
+function _e(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = e[3], o = n[0], c = n[1], l = n[2], h = n[3];
+  return t[0] = r * h + a * o + i * l - s * c, t[1] = i * h + a * c + s * o - r * l, t[2] = s * h + a * l + r * c - i * o, t[3] = a * h - r * o - i * c - s * l, t;
 }
-function wc(t, e, n) {
-  return $e(t, n, e);
+function Fl(t, e, n) {
+  return _e(t, n, e);
 }
-function vc(t, e, n) {
+function Rl(t, e, n) {
   const r = n * 0.5, i = Math.sin(r), s = Math.cos(r);
-  return $e(t, e, et(Nn, i, 0, 0, s));
+  return _e(t, e, st(Qn, i, 0, 0, s));
 }
-function xc(t, e, n) {
+function Bl(t, e, n) {
   const r = n * 0.5, i = Math.sin(r), s = Math.cos(r);
-  return $e(t, e, et(Nn, 0, i, 0, s));
+  return _e(t, e, st(Qn, 0, i, 0, s));
 }
-function yc(t, e, n) {
+function Gl(t, e, n) {
   const r = n * 0.5, i = Math.sin(r), s = Math.cos(r);
-  return $e(t, e, et(Nn, 0, 0, i, s));
+  return _e(t, e, st(Qn, 0, 0, i, s));
 }
-const Nn = Vi();
-function Tt(t, e, n) {
+const Qn = Yi();
+function Et(t, e, n) {
   const r = Math.hypot(e[0], e[1], e[2]);
-  if (r < 1e-8) return Dt(t);
+  if (r < 1e-8) return kt(t);
   const i = n * 0.5, s = Math.sin(i) / r;
   return t[0] = e[0] * s, t[1] = e[1] * s, t[2] = e[2] * s, t[3] = Math.cos(i), t;
 }
-function Tc(t, e) {
+function Ol(t, e) {
   const n = e[0], r = e[5], i = e[10], s = n + r + i;
   if (s > 0) {
     const a = Math.sqrt(s + 1) * 2;
@@ -1485,502 +1512,502 @@ function Tc(t, e) {
     const a = Math.sqrt(1 + i - n - r) * 2;
     t[3] = (e[1] - e[4]) / a, t[0] = (e[8] + e[2]) / a, t[1] = (e[9] + e[6]) / a, t[2] = a * 0.25;
   }
-  return Ne(t, t);
+  return qe(t, t);
 }
-function Sc(t, e, n) {
-  const r = e[0], i = e[1], s = e[2], a = n[0], o = n[1], l = n[2];
-  let c = r * a + i * o + s * l + 1;
-  return c < 1e-8 ? (c = 0, Math.abs(r) > Math.abs(s) ? (t[0] = -i, t[1] = r, t[2] = 0) : (t[0] = 0, t[1] = -s, t[2] = i), t[3] = c) : (t[0] = i * l - s * o, t[1] = s * a - r * l, t[2] = r * o - i * a, t[3] = c), Ne(t, t);
+function Ul(t, e, n) {
+  const r = e[0], i = e[1], s = e[2], a = n[0], o = n[1], c = n[2];
+  let l = r * a + i * o + s * c + 1;
+  return l < 1e-8 ? (l = 0, Math.abs(r) > Math.abs(s) ? (t[0] = -i, t[1] = r, t[2] = 0) : (t[0] = 0, t[1] = -s, t[2] = i), t[3] = l) : (t[0] = i * c - s * o, t[1] = s * a - r * c, t[2] = r * o - i * a, t[3] = l), qe(t, t);
 }
-function $c(t, e, n) {
-  const r = n[0], i = n[1], s = n[2], a = e[0], o = e[1], l = e[2], c = e[3], h = 2 * (o * s - l * i), d = 2 * (l * r - a * s), f = 2 * (a * i - o * r);
-  return t[0] = r + c * h + (o * f - l * d), t[1] = i + c * d + (l * h - a * f), t[2] = s + c * f + (a * d - o * h), t;
+function Dl(t, e, n) {
+  const r = n[0], i = n[1], s = n[2], a = e[0], o = e[1], c = e[2], l = e[3], h = 2 * (o * s - c * i), f = 2 * (c * r - a * s), d = 2 * (a * i - o * r);
+  return t[0] = r + l * h + (o * d - c * f), t[1] = i + l * f + (c * h - a * d), t[2] = s + l * d + (a * f - o * h), t;
 }
-function Ac(t, e, n, r) {
-  let i = n[0], s = n[1], a = n[2], o = n[3], l = In(e, n);
-  if (l < 0 && (l = -l, i = -i, s = -s, a = -a, o = -o), l > 0.9995)
-    return t[0] = e[0] + (i - e[0]) * r, t[1] = e[1] + (s - e[1]) * r, t[2] = e[2] + (a - e[2]) * r, t[3] = e[3] + (o - e[3]) * r, Ne(t, t);
-  const c = Math.acos(l), h = Math.sin(c), d = Math.sin((1 - r) * c) / h, f = Math.sin(r * c) / h;
-  return t[0] = e[0] * d + i * f, t[1] = e[1] * d + s * f, t[2] = e[2] * d + a * f, t[3] = e[3] * d + o * f, Ne(t, t);
+function Il(t, e, n, r) {
+  let i = n[0], s = n[1], a = n[2], o = n[3], c = qn(e, n);
+  if (c < 0 && (c = -c, i = -i, s = -s, a = -a, o = -o), c > 0.9995)
+    return t[0] = e[0] + (i - e[0]) * r, t[1] = e[1] + (s - e[1]) * r, t[2] = e[2] + (a - e[2]) * r, t[3] = e[3] + (o - e[3]) * r, qe(t, t);
+  const l = Math.acos(c), h = Math.sin(l), f = Math.sin((1 - r) * l) / h, d = Math.sin(r * l) / h;
+  return t[0] = e[0] * f + i * d, t[1] = e[1] * f + s * d, t[2] = e[2] * f + a * d, t[3] = e[3] * f + o * d, qe(t, t);
 }
-function _c(t, e, n, r) {
-  return t[0] = e[0] + (n[0] - e[0]) * r, t[1] = e[1] + (n[1] - e[1]) * r, t[2] = e[2] + (n[2] - e[2]) * r, t[3] = e[3] + (n[3] - e[3]) * r, Ne(t, t);
+function Vl(t, e, n, r) {
+  return t[0] = e[0] + (n[0] - e[0]) * r, t[1] = e[1] + (n[1] - e[1]) * r, t[2] = e[2] + (n[2] - e[2]) * r, t[3] = e[3] + (n[3] - e[3]) * r, qe(t, t);
 }
-function zi(t, e) {
-  const n = e[0], r = e[1], i = e[2], s = e[3], a = n + n, o = r + r, l = i + i, c = n * a, h = n * o, d = n * l, f = r * o, p = r * l, m = i * l, g = s * a, b = s * o, w = s * l;
-  return t[0] = 1 - (f + m), t[1] = h + w, t[2] = d - b, t[3] = 0, t[4] = h - w, t[5] = 1 - (c + m), t[6] = p + g, t[7] = 0, t[8] = d + b, t[9] = p - g, t[10] = 1 - (c + f), t[11] = 0, t[12] = 0, t[13] = 0, t[14] = 0, t[15] = 1, t;
+function Ki(t, e) {
+  const n = e[0], r = e[1], i = e[2], s = e[3], a = n + n, o = r + r, c = i + i, l = n * a, h = n * o, f = n * c, d = r * o, p = r * c, m = i * c, g = s * a, b = s * o, w = s * c;
+  return t[0] = 1 - (d + m), t[1] = h + w, t[2] = f - b, t[3] = 0, t[4] = h - w, t[5] = 1 - (l + m), t[6] = p + g, t[7] = 0, t[8] = f + b, t[9] = p - g, t[10] = 1 - (l + d), t[11] = 0, t[12] = 0, t[13] = 0, t[14] = 0, t[15] = 1, t;
 }
-function Ec(t, e, n = 1e-6) {
+function Nl(t, e, n = 1e-6) {
   return Math.abs(t[0] - e[0]) <= n && Math.abs(t[1] - e[1]) <= n && Math.abs(t[2] - e[2]) <= n && Math.abs(t[3] - e[3]) <= n;
 }
-function Lc(t) {
+function kl(t) {
   return `quat(${t[0]}, ${t[1]}, ${t[2]}, ${t[3]})`;
 }
-const eg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const xg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  clone: pc,
-  conjugate: gc,
-  copy: Ni,
-  create: Vi,
-  dot: In,
-  equals: Ec,
-  fromValues: mc,
-  identity: Dt,
-  invert: bc,
-  length: ki,
-  lerp: _c,
-  multiply: $e,
-  normalize: Ne,
-  premultiply: wc,
-  rotateX: vc,
-  rotateY: xc,
-  rotateZ: yc,
-  set: et,
-  setAxisAngle: Tt,
-  setFromRotationMatrix: Tc,
-  setFromUnitVectors: Sc,
-  slerp: Ac,
-  squaredLength: Vn,
-  toMat4: zi,
-  toString: Lc,
-  transformVec3: $c
-}, Symbol.toStringTag, { value: "Module" })), Cc = ["XYZ", "YXZ", "ZXY", "ZYX", "YZX", "XZY"];
-function Wi(t = 0, e = 0, n = 0, r = "XYZ") {
+  clone: Pl,
+  conjugate: Cl,
+  copy: Hi,
+  create: Yi,
+  dot: qn,
+  equals: Nl,
+  fromValues: Ll,
+  identity: kt,
+  invert: Ml,
+  length: Zi,
+  lerp: Vl,
+  multiply: _e,
+  normalize: qe,
+  premultiply: Fl,
+  rotateX: Rl,
+  rotateY: Bl,
+  rotateZ: Gl,
+  set: st,
+  setAxisAngle: Et,
+  setFromRotationMatrix: Ol,
+  setFromUnitVectors: Ul,
+  slerp: Il,
+  squaredLength: jn,
+  toMat4: Ki,
+  toString: kl,
+  transformVec3: Dl
+}, Symbol.toStringTag, { value: "Module" })), zl = ["XYZ", "YXZ", "ZXY", "ZYX", "YZX", "XZY"];
+function Ji(t = 0, e = 0, n = 0, r = "XYZ") {
   return { x: t, y: e, z: n, order: r };
 }
-function Mc(t) {
-  return Wi(t.x, t.y, t.z, t.order);
+function Wl(t) {
+  return Ji(t.x, t.y, t.z, t.order);
 }
-function Pc(t, e) {
+function ql(t, e) {
   return t.x = e.x, t.y = e.y, t.z = e.z, t.order = e.order, t;
 }
-function Fc(t, e, n, r, i = t.order) {
+function jl(t, e, n, r, i = t.order) {
   return t.x = e, t.y = n, t.z = r, t.order = i, t;
 }
-function Bc(t, e, n = 1e-6) {
+function Ql(t, e, n = 1e-6) {
   return t.order === e.order && Math.abs(t.x - e.x) <= n && Math.abs(t.y - e.y) <= n && Math.abs(t.z - e.z) <= n;
 }
-const qi = {
+const es = {
   XYZ: ["X", "Y", "Z"],
   YXZ: ["Y", "X", "Z"],
   ZXY: ["Z", "X", "Y"],
   ZYX: ["Z", "Y", "X"],
   YZX: ["Y", "Z", "X"],
   XZY: ["X", "Z", "Y"]
-}, Xt = {
+}, Zt = {
   X: new Float32Array([1, 0, 0]),
   Y: new Float32Array([0, 1, 0]),
   Z: new Float32Array([0, 0, 1])
-}, Rc = X(new Float32Array(16)), Gc = X(new Float32Array(16)), Uc = X(new Float32Array(16)), yn = X(new Float32Array(16)), Oc = new Float32Array(4), Dc = new Float32Array(4), Ic = new Float32Array(4), ir = new Float32Array(4);
-function De(t, e) {
+}, Xl = Q(new Float32Array(16)), Yl = Q(new Float32Array(16)), Hl = Q(new Float32Array(16)), An = Q(new Float32Array(16)), Zl = new Float32Array(4), Kl = new Float32Array(4), Jl = new Float32Array(4), ur = new Float32Array(4);
+function Ve(t, e) {
   return e === "X" ? t.x : e === "Y" ? t.y : t.z;
 }
-function Yt(t, e, n) {
-  return t === "X" ? Gn(n, e) : t === "Y" ? Un(n, e) : On(n, e);
+function Kt(t, e, n) {
+  return t === "X" ? Nn(n, e) : t === "Y" ? kn(n, e) : zn(n, e);
 }
-function Vc(t, e) {
-  const n = qi[e.order], r = Yt(n[0], De(e, n[0]), Rc), i = Yt(n[1], De(e, n[1]), Gc), s = Yt(n[2], De(e, n[2]), Uc);
-  return K(yn, r, i), K(t, yn, s);
+function ec(t, e) {
+  const n = es[e.order], r = Kt(n[0], Ve(e, n[0]), Xl), i = Kt(n[1], Ve(e, n[1]), Yl), s = Kt(n[2], Ve(e, n[2]), Hl);
+  return Z(An, r, i), Z(t, An, s);
 }
-function Nc(t, e) {
-  const n = qi[e.order], r = Tt(Oc, Xt[n[0]], De(e, n[0])), i = Tt(Dc, Xt[n[1]], De(e, n[1])), s = Tt(Ic, Xt[n[2]], De(e, n[2]));
-  return $e(ir, r, i), $e(t, ir, s);
+function tc(t, e) {
+  const n = es[e.order], r = Et(Zl, Zt[n[0]], Ve(e, n[0])), i = Et(Kl, Zt[n[1]], Ve(e, n[1])), s = Et(Jl, Zt[n[2]], Ve(e, n[2]));
+  return _e(ur, r, i), _e(t, ur, s);
 }
-function ji(t, e) {
-  const n = e[0], r = e[1], i = e[2], s = e[4], a = e[5], o = e[6], l = e[8], c = e[9], h = e[10], d = (p) => p < -1 ? -1 : p > 1 ? 1 : p, f = 0.9999999;
+function ts(t, e) {
+  const n = e[0], r = e[1], i = e[2], s = e[4], a = e[5], o = e[6], c = e[8], l = e[9], h = e[10], f = (p) => p < -1 ? -1 : p > 1 ? 1 : p, d = 0.9999999;
   switch (t.order) {
     case "XYZ":
-      t.y = Math.asin(d(l)), Math.abs(l) < f ? (t.x = Math.atan2(-c, h), t.z = Math.atan2(-s, n)) : (t.x = Math.atan2(o, a), t.z = 0);
+      t.y = Math.asin(f(c)), Math.abs(c) < d ? (t.x = Math.atan2(-l, h), t.z = Math.atan2(-s, n)) : (t.x = Math.atan2(o, a), t.z = 0);
       break;
     case "YXZ":
-      t.x = Math.asin(-d(c)), Math.abs(c) < f ? (t.y = Math.atan2(l, h), t.z = Math.atan2(r, a)) : (t.y = Math.atan2(-i, n), t.z = 0);
+      t.x = Math.asin(-f(l)), Math.abs(l) < d ? (t.y = Math.atan2(c, h), t.z = Math.atan2(r, a)) : (t.y = Math.atan2(-i, n), t.z = 0);
       break;
     case "ZXY":
-      t.x = Math.asin(d(o)), Math.abs(o) < f ? (t.y = Math.atan2(-i, h), t.z = Math.atan2(-s, a)) : (t.y = 0, t.z = Math.atan2(r, n));
+      t.x = Math.asin(f(o)), Math.abs(o) < d ? (t.y = Math.atan2(-i, h), t.z = Math.atan2(-s, a)) : (t.y = 0, t.z = Math.atan2(r, n));
       break;
     case "ZYX":
-      t.y = Math.asin(-d(i)), Math.abs(i) < f ? (t.x = Math.atan2(o, h), t.z = Math.atan2(r, n)) : (t.x = 0, t.z = Math.atan2(-s, a));
+      t.y = Math.asin(-f(i)), Math.abs(i) < d ? (t.x = Math.atan2(o, h), t.z = Math.atan2(r, n)) : (t.x = 0, t.z = Math.atan2(-s, a));
       break;
     case "YZX":
-      t.z = Math.asin(d(r)), Math.abs(r) < f ? (t.x = Math.atan2(-c, a), t.y = Math.atan2(-i, n)) : (t.x = 0, t.y = Math.atan2(l, h));
+      t.z = Math.asin(f(r)), Math.abs(r) < d ? (t.x = Math.atan2(-l, a), t.y = Math.atan2(-i, n)) : (t.x = 0, t.y = Math.atan2(c, h));
       break;
     case "XZY":
-      t.z = Math.asin(-d(s)), Math.abs(s) < f ? (t.x = Math.atan2(o, a), t.y = Math.atan2(l, n)) : (t.x = Math.atan2(-c, h), t.y = 0);
+      t.z = Math.asin(-f(s)), Math.abs(s) < d ? (t.x = Math.atan2(o, a), t.y = Math.atan2(c, n)) : (t.x = Math.atan2(-l, h), t.y = 0);
       break;
   }
   return t;
 }
-function kc(t, e) {
-  return ji(t, zi(yn, e));
+function nc(t, e) {
+  return ts(t, Ki(An, e));
 }
-const tg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Sg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  EULER_ORDERS: Cc,
-  clone: Mc,
-  copy: Pc,
-  create: Wi,
-  equals: Bc,
-  fromQuaternion: kc,
-  fromRotationMatrix: ji,
-  set: Fc,
-  toMat4: Vc,
-  toQuaternion: Nc
-}, Symbol.toStringTag, { value: "Module" })), It = 1e-12, ot = new Float32Array(3), zc = new Float32Array(9);
-function xe(t = 0, e = 0, n = 1, r = 0) {
+  EULER_ORDERS: zl,
+  clone: Wl,
+  copy: ql,
+  create: Ji,
+  equals: Ql,
+  fromQuaternion: nc,
+  fromRotationMatrix: ts,
+  set: jl,
+  toMat4: ec,
+  toQuaternion: tc
+}, Symbol.toStringTag, { value: "Module" })), zt = 1e-12, dt = new Float32Array(3), rc = new Float32Array(9);
+function ve(t = 0, e = 0, n = 1, r = 0) {
   return { normal: new Float32Array([t, e, n]), constant: r };
 }
-function Wc(t) {
+function ic(t) {
   return { normal: new Float32Array([t.normal[0], t.normal[1], t.normal[2]]), constant: t.constant };
 }
-function kn(t, e) {
+function Xn(t, e) {
   return t.normal[0] = e.normal[0], t.normal[1] = e.normal[1], t.normal[2] = e.normal[2], t.constant = e.constant, t;
 }
-function qc(t, e, n) {
+function sc(t, e, n) {
   return t.normal[0] = e[0], t.normal[1] = e[1], t.normal[2] = e[2], t.constant = n, t;
 }
-function Xi(t, e, n, r, i) {
+function ns(t, e, n, r, i) {
   return t.normal[0] = e, t.normal[1] = n, t.normal[2] = r, t.constant = i, t;
 }
-function jc(t, e, n) {
-  const r = Math.hypot(e[0], e[1], e[2]), i = r < It ? 1 : 1 / r;
-  return t.normal[0] = e[0] * i, t.normal[1] = e[1] * i, t.normal[2] = e[2] * i, t.constant = -ue(t.normal, n), t;
+function ac(t, e, n) {
+  const r = Math.hypot(e[0], e[1], e[2]), i = r < zt ? 1 : 1 / r;
+  return t.normal[0] = e[0] * i, t.normal[1] = e[1] * i, t.normal[2] = e[2] * i, t.constant = -he(t.normal, n), t;
 }
-function Xc(t, e, n, r) {
+function oc(t, e, n, r) {
   const i = new Float32Array([n[0] - e[0], n[1] - e[1], n[2] - e[2]]), s = new Float32Array([r[0] - e[0], r[1] - e[1], r[2] - e[2]]);
-  Ti(t.normal, i, s);
+  Mi(t.normal, i, s);
   const a = Math.hypot(t.normal[0], t.normal[1], t.normal[2]);
-  return a < It ? null : (t.normal[0] = t.normal[0] / a, t.normal[1] = t.normal[1] / a, t.normal[2] = t.normal[2] / a, t.constant = -ue(t.normal, e), t);
+  return a < zt ? null : (t.normal[0] = t.normal[0] / a, t.normal[1] = t.normal[1] / a, t.normal[2] = t.normal[2] / a, t.constant = -he(t.normal, e), t);
 }
-function Yi(t, e) {
+function rs(t, e) {
   const n = Math.hypot(e.normal[0], e.normal[1], e.normal[2]);
-  if (n < It) return null;
+  if (n < zt) return null;
   const r = 1 / n;
   return t.normal[0] = e.normal[0] * r, t.normal[1] = e.normal[1] * r, t.normal[2] = e.normal[2] * r, t.constant = e.constant * r, t;
 }
-function Yc(t, e) {
+function lc(t, e) {
   return t.normal[0] = -e.normal[0], t.normal[1] = -e.normal[1], t.normal[2] = -e.normal[2], t.constant = -e.constant, t;
 }
 function ce(t, e) {
-  return ue(t.normal, e) + t.constant;
+  return he(t.normal, e) + t.constant;
 }
-function Hc(t, e, n) {
+function cc(t, e, n) {
   const r = ce(e, n);
   return t[0] = n[0] - e.normal[0] * r, t[1] = n[1] - e.normal[1] * r, t[2] = n[2] - e.normal[2] * r, t;
 }
-function Hi(t, e) {
+function is(t, e) {
   return t[0] = e.normal[0] * -e.constant, t[1] = e.normal[1] * -e.constant, t[2] = e.normal[2] * -e.constant, t;
 }
-function Zc(t, e, n) {
-  return kn(t, e), t.constant -= ue(n, e.normal), t;
+function uc(t, e, n) {
+  return Xn(t, e), t.constant -= he(n, e.normal), t;
 }
-function Kc(t, e, n) {
+function hc(t, e, n) {
   const r = ce(t, e), i = ce(t, n);
   return r === 0 ? 0 : i === 0 ? 1 : r > 0 == i > 0 ? null : r / (r - i);
 }
-function Qc(t, e, n) {
-  const r = Rn(zc, n);
+function dc(t, e, n) {
+  const r = Vn(rc, n);
   if (!r)
     throw new RangeError(
       "[gpu-device-api] plane.applyMat4: the matrix is singular, so the transformed plane is undefined."
     );
-  Hi(ot, e), Bn(ot, ot, n), Si(t.normal, e.normal, r);
+  is(dt, e), In(dt, dt, n), Fi(t.normal, e.normal, r);
   const i = Math.hypot(t.normal[0], t.normal[1], t.normal[2]);
-  if (i < It)
+  if (i < zt)
     throw new RangeError(
       "[gpu-device-api] plane.applyMat4: the transformed normal is degenerate (the matrix collapses the plane)."
     );
-  return t.normal[0] = t.normal[0] / i, t.normal[1] = t.normal[1] / i, t.normal[2] = t.normal[2] / i, t.constant = -ue(t.normal, ot), t;
+  return t.normal[0] = t.normal[0] / i, t.normal[1] = t.normal[1] / i, t.normal[2] = t.normal[2] / i, t.constant = -he(t.normal, dt), t;
 }
-function Zi(t, e, n = 1e-6) {
+function ss(t, e, n = 1e-6) {
   const r = Math.abs(t.normal[0] - e.normal[0]) <= n && Math.abs(t.normal[1] - e.normal[1]) <= n && Math.abs(t.normal[2] - e.normal[2]) <= n && Math.abs(t.constant - e.constant) <= n, i = Math.abs(t.normal[0] + e.normal[0]) <= n && Math.abs(t.normal[1] + e.normal[1]) <= n && Math.abs(t.normal[2] + e.normal[2]) <= n && Math.abs(t.constant + e.constant) <= n;
   return r || i;
 }
-function Jc(t) {
+function fc(t) {
   return `plane(${t.normal[0]}, ${t.normal[1]}, ${t.normal[2]}, ${t.constant})`;
 }
-const ng = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Tg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  applyMat4: Qc,
-  clone: Wc,
-  coplanarPoint: Hi,
-  copy: kn,
-  create: xe,
+  applyMat4: dc,
+  clone: ic,
+  coplanarPoint: is,
+  copy: Xn,
+  create: ve,
   distanceToPoint: ce,
-  equals: Zi,
-  intersectLineSegment: Kc,
-  negate: Yc,
-  normalize: Yi,
-  projectPoint: Hc,
-  set: qc,
-  setComponents: Xi,
-  setFromCoplanarPoints: Xc,
-  setFromNormalAndCoplanarPoint: jc,
-  toString: Jc,
-  translate: Zc
-}, Symbol.toStringTag, { value: "Module" })), re = new Float32Array(3);
-function el() {
-  return Ae({ min: new Float32Array(3), max: new Float32Array(3) });
+  equals: ss,
+  intersectLineSegment: hc,
+  negate: lc,
+  normalize: rs,
+  projectPoint: cc,
+  set: sc,
+  setComponents: ns,
+  setFromCoplanarPoints: oc,
+  setFromNormalAndCoplanarPoint: ac,
+  toString: fc,
+  translate: uc
+}, Symbol.toStringTag, { value: "Module" })), ie = new Float32Array(3);
+function pc() {
+  return Ee({ min: new Float32Array(3), max: new Float32Array(3) });
 }
-function Ae(t) {
+function Ee(t) {
   return t.min[0] = Number.POSITIVE_INFINITY, t.min[1] = Number.POSITIVE_INFINITY, t.min[2] = Number.POSITIVE_INFINITY, t.max[0] = Number.NEGATIVE_INFINITY, t.max[1] = Number.NEGATIVE_INFINITY, t.max[2] = Number.NEGATIVE_INFINITY, t;
 }
-function U(t) {
+function D(t) {
   return t.max[0] < t.min[0] || t.max[1] < t.min[1] || t.max[2] < t.min[2];
 }
-function tl(t) {
+function mc(t) {
   return {
     min: new Float32Array([t.min[0], t.min[1], t.min[2]]),
     max: new Float32Array([t.max[0], t.max[1], t.max[2]])
   };
 }
-function Lt(t, e) {
+function Rt(t, e) {
   return t.min[0] = e.min[0], t.min[1] = e.min[1], t.min[2] = e.min[2], t.max[0] = e.max[0], t.max[1] = e.max[1], t.max[2] = e.max[2], t;
 }
-function nl(t, e, n) {
+function gc(t, e, n) {
   return t.min[0] = e[0], t.min[1] = e[1], t.min[2] = e[2], t.max[0] = n[0], t.max[1] = n[1], t.max[2] = n[2], t;
 }
-function rl(t, e, n) {
+function bc(t, e, n) {
   const r = n[0] * 0.5, i = n[1] * 0.5, s = n[2] * 0.5;
   return t.min[0] = e[0] - r, t.min[1] = e[1] - i, t.min[2] = e[2] - s, t.max[0] = e[0] + r, t.max[1] = e[1] + i, t.max[2] = e[2] + s, t;
 }
-function il(t, e) {
-  Ae(t);
-  for (const n of e) zn(t, n);
+function wc(t, e) {
+  Ee(t);
+  for (const n of e) Yn(t, n);
   return t;
 }
-function sl(t, e, n = 3) {
-  Ae(t);
+function yc(t, e, n = 3) {
+  Ee(t);
   const r = Math.max(1, Math.trunc(n));
   for (let i = 0; i + 2 < e.length; i += r)
     t.min[0] = Math.min(t.min[0], e[i]), t.min[1] = Math.min(t.min[1], e[i + 1]), t.min[2] = Math.min(t.min[2], e[i + 2]), t.max[0] = Math.max(t.max[0], e[i]), t.max[1] = Math.max(t.max[1], e[i + 1]), t.max[2] = Math.max(t.max[2], e[i + 2]);
   return t;
 }
-function Ki(t, e) {
-  return U(e) || (t[0] = (e.min[0] + e.max[0]) * 0.5, t[1] = (e.min[1] + e.max[1]) * 0.5, t[2] = (e.min[2] + e.max[2]) * 0.5), t;
+function as(t, e) {
+  return D(e) || (t[0] = (e.min[0] + e.max[0]) * 0.5, t[1] = (e.min[1] + e.max[1]) * 0.5, t[2] = (e.min[2] + e.max[2]) * 0.5), t;
 }
-function al(t, e) {
-  return U(e) ? (t[0] = 0, t[1] = 0, t[2] = 0, t) : oe(t, e.max, e.min);
+function vc(t, e) {
+  return D(e) ? (t[0] = 0, t[1] = 0, t[2] = 0, t) : le(t, e.max, e.min);
 }
-function ol(t, e) {
-  return U(e) ? (t[0] = 0, t[1] = 0, t[2] = 0, -1) : (Ki(t, e), Math.hypot(e.max[0] - t[0], e.max[1] - t[1], e.max[2] - t[2]));
+function xc(t, e) {
+  return D(e) ? (t[0] = 0, t[1] = 0, t[2] = 0, -1) : (as(t, e), Math.hypot(e.max[0] - t[0], e.max[1] - t[1], e.max[2] - t[2]));
 }
-function zn(t, e) {
-  return Gt(t.min, t.min, e), Ut(t.max, t.max, e), t;
+function Yn(t, e) {
+  return It(t.min, t.min, e), Vt(t.max, t.max, e), t;
 }
-function cl(t, e) {
-  return He(t.min, t.min, e), He(t.max, t.max, e), t;
+function Sc(t, e) {
+  return Je(t.min, t.min, e), Je(t.max, t.max, e), t;
 }
-function ll(t, e) {
+function Tc(t, e) {
   return t.min[0] = t.min[0] - e, t.min[1] = t.min[1] - e, t.min[2] = t.min[2] - e, t.max[0] = t.max[0] + e, t.max[1] = t.max[1] + e, t.max[2] = t.max[2] + e, t;
 }
-function ul(t, e) {
+function $c(t, e) {
   return e[0] >= t.min[0] && e[0] <= t.max[0] && e[1] >= t.min[1] && e[1] <= t.max[1] && e[2] >= t.min[2] && e[2] <= t.max[2];
 }
-function hl(t, e) {
+function Ac(t, e) {
   return t.min[0] <= e.min[0] && e.max[0] <= t.max[0] && t.min[1] <= e.min[1] && e.max[1] <= t.max[1] && t.min[2] <= e.min[2] && e.max[2] <= t.max[2];
 }
-function Qi(t, e) {
-  return U(t) || U(e) ? !1 : e.max[0] >= t.min[0] && e.min[0] <= t.max[0] && e.max[1] >= t.min[1] && e.min[1] <= t.max[1] && e.max[2] >= t.min[2] && e.min[2] <= t.max[2];
+function os(t, e) {
+  return D(t) || D(e) ? !1 : e.max[0] >= t.min[0] && e.min[0] <= t.max[0] && e.max[1] >= t.min[1] && e.min[1] <= t.max[1] && e.max[2] >= t.min[2] && e.min[2] <= t.max[2];
 }
-function fl(t, e, n) {
-  return U(t) ? !1 : Rt(Wn(re, t, e), e) <= n * n;
+function _c(t, e, n) {
+  return D(t) ? !1 : Dt(Hn(ie, t, e), e) <= n * n;
 }
-function dl(t, e) {
-  if (U(t)) return !1;
+function Ec(t, e) {
+  if (D(t)) return !1;
   let n = Number.POSITIVE_INFINITY, r = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < 8; i++) {
-    re[0] = i & 1 ? t.max[0] : t.min[0], re[1] = i & 2 ? t.max[1] : t.min[1], re[2] = i & 4 ? t.max[2] : t.min[2];
-    const s = ce(e, re);
+    ie[0] = i & 1 ? t.max[0] : t.min[0], ie[1] = i & 2 ? t.max[1] : t.min[1], ie[2] = i & 4 ? t.max[2] : t.min[2];
+    const s = ce(e, ie);
     n = Math.min(n, s), r = Math.max(r, s);
   }
   return n <= 0 && r >= 0;
 }
-function Wn(t, e, n) {
-  return U(e) || (t[0] = Math.min(Math.max(n[0], e.min[0]), e.max[0]), t[1] = Math.min(Math.max(n[1], e.min[1]), e.max[1]), t[2] = Math.min(Math.max(n[2], e.min[2]), e.max[2])), t;
+function Hn(t, e, n) {
+  return D(e) || (t[0] = Math.min(Math.max(n[0], e.min[0]), e.max[0]), t[1] = Math.min(Math.max(n[1], e.min[1]), e.max[1]), t[2] = Math.min(Math.max(n[2], e.min[2]), e.max[2])), t;
 }
-function pl(t, e) {
-  return U(t) ? 0 : Math.sqrt(Rt(Wn(re, t, e), e));
+function Pc(t, e) {
+  return D(t) ? 0 : Math.sqrt(Dt(Hn(ie, t, e), e));
 }
-function ml(t, e, n) {
-  return Lt(t, e), He(t.min, t.min, n), He(t.max, t.max, n), t;
+function Lc(t, e, n) {
+  return Rt(t, e), Je(t.min, t.min, n), Je(t.max, t.max, n), t;
 }
-function gl(t, e, n) {
-  return U(e) ? Lt(t, n) : U(n) ? Lt(t, e) : (Gt(t.min, e.min, n.min), Ut(t.max, e.max, n.max), t);
+function Cc(t, e, n) {
+  return D(e) ? Rt(t, n) : D(n) ? Rt(t, e) : (It(t.min, e.min, n.min), Vt(t.max, e.max, n.max), t);
 }
-function bl(t, e, n) {
-  return Qi(e, n) ? (Ut(t.min, e.min, n.min), Gt(t.max, e.max, n.max), t) : Ae(t);
+function Mc(t, e, n) {
+  return os(e, n) ? (Vt(t.min, e.min, n.min), It(t.max, e.max, n.max), t) : Ee(t);
 }
-function wl(t, e, n) {
-  if (U(e)) return Ae(t);
-  const r = e.min[0], i = e.min[1], s = e.min[2], a = e.max[0], o = e.max[1], l = e.max[2];
-  Ae(t);
-  for (let c = 0; c < 8; c++) {
-    const h = c & 1 ? a : r, d = c & 2 ? o : i, f = c & 4 ? l : s, p = n[3] * h + n[7] * d + n[11] * f + n[15], m = p === 0 ? 1 : 1 / p;
-    re[0] = (n[0] * h + n[4] * d + n[8] * f + n[12]) * m, re[1] = (n[1] * h + n[5] * d + n[9] * f + n[13]) * m, re[2] = (n[2] * h + n[6] * d + n[10] * f + n[14]) * m, zn(t, re);
+function Fc(t, e, n) {
+  if (D(e)) return Ee(t);
+  const r = e.min[0], i = e.min[1], s = e.min[2], a = e.max[0], o = e.max[1], c = e.max[2];
+  Ee(t);
+  for (let l = 0; l < 8; l++) {
+    const h = l & 1 ? a : r, f = l & 2 ? o : i, d = l & 4 ? c : s, p = n[3] * h + n[7] * f + n[11] * d + n[15], m = p === 0 ? 1 : 1 / p;
+    ie[0] = (n[0] * h + n[4] * f + n[8] * d + n[12]) * m, ie[1] = (n[1] * h + n[5] * f + n[9] * d + n[13]) * m, ie[2] = (n[2] * h + n[6] * f + n[10] * d + n[14]) * m, Yn(t, ie);
   }
   return t;
 }
-function vl(t, e, n) {
-  if (_t(t.min, e.min, n), _t(t.max, e.max, n), n < 0) {
+function Rc(t, e, n) {
+  if (Mt(t.min, e.min, n), Mt(t.max, e.max, n), n < 0) {
     const r = t.min[0], i = t.min[1], s = t.min[2];
     t.min[0] = t.max[0], t.min[1] = t.max[1], t.min[2] = t.max[2], t.max[0] = r, t.max[1] = i, t.max[2] = s;
   }
   return t;
 }
-function xl(t, e, n = 1e-6) {
-  const r = U(t), i = U(e);
+function Bc(t, e, n = 1e-6) {
+  const r = D(t), i = D(e);
   return r || i ? r === i : Math.abs(t.min[0] - e.min[0]) <= n && Math.abs(t.min[1] - e.min[1]) <= n && Math.abs(t.min[2] - e.min[2]) <= n && Math.abs(t.max[0] - e.max[0]) <= n && Math.abs(t.max[1] - e.max[1]) <= n && Math.abs(t.max[2] - e.max[2]) <= n;
 }
-function yl(t) {
-  return U(t) ? "box3(empty)" : `box3(${t.min[0]}, ${t.min[1]}, ${t.min[2]}) - (${t.max[0]}, ${t.max[1]}, ${t.max[2]})`;
+function Gc(t) {
+  return D(t) ? "box3(empty)" : `box3(${t.min[0]}, ${t.min[1]}, ${t.min[2]}) - (${t.max[0]}, ${t.max[1]}, ${t.max[2]})`;
 }
-const rg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const $g = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  applyMat4: wl,
-  clampPoint: Wn,
-  clone: tl,
-  containsBox: hl,
-  containsPoint: ul,
-  copy: Lt,
-  create: el,
-  distanceToPoint: pl,
-  equals: xl,
-  expandByPoint: zn,
-  expandByScalar: ll,
-  expandByVector: cl,
-  getBoundingSphere: ol,
-  getCenter: Ki,
-  getSize: al,
-  intersect: bl,
-  intersectsBox: Qi,
-  intersectsPlane: dl,
-  intersectsSphere: fl,
-  isEmpty: U,
-  makeEmpty: Ae,
-  scaleBox: vl,
-  set: nl,
-  setFromArray: sl,
-  setFromCenterAndSize: rl,
-  setFromPoints: il,
-  toString: yl,
-  translate: ml,
-  union: gl
+  applyMat4: Fc,
+  clampPoint: Hn,
+  clone: mc,
+  containsBox: Ac,
+  containsPoint: $c,
+  copy: Rt,
+  create: pc,
+  distanceToPoint: Pc,
+  equals: Bc,
+  expandByPoint: Yn,
+  expandByScalar: Tc,
+  expandByVector: Sc,
+  getBoundingSphere: xc,
+  getCenter: as,
+  getSize: vc,
+  intersect: Mc,
+  intersectsBox: os,
+  intersectsPlane: Ec,
+  intersectsSphere: _c,
+  isEmpty: D,
+  makeEmpty: Ee,
+  scaleBox: Rc,
+  set: gc,
+  setFromArray: yc,
+  setFromCenterAndSize: bc,
+  setFromPoints: wc,
+  toString: Gc,
+  translate: Lc,
+  union: Cc
 }, Symbol.toStringTag, { value: "Module" }));
-function Tl(t = 0, e = 0, n = 0, r = 0, i = 0, s = -1) {
+function Oc(t = 0, e = 0, n = 0, r = 0, i = 0, s = -1) {
   return {
     origin: new Float32Array([t, e, n]),
     direction: new Float32Array([r, i, s])
   };
 }
-function Sl(t) {
+function Uc(t) {
   return {
     origin: new Float32Array([t.origin[0], t.origin[1], t.origin[2]]),
     direction: new Float32Array([t.direction[0], t.direction[1], t.direction[2]])
   };
 }
-function $l(t, e) {
+function Dc(t, e) {
   return t.origin[0] = e.origin[0], t.origin[1] = e.origin[1], t.origin[2] = e.origin[2], t.direction[0] = e.direction[0], t.direction[1] = e.direction[1], t.direction[2] = e.direction[2], t;
 }
-function Vt(t, e, n) {
+function Wt(t, e, n) {
   t.origin[0] = e[0], t.origin[1] = e[1], t.origin[2] = e[2];
   const r = Math.hypot(n[0], n[1], n[2]), i = r > 1e-12 ? 1 / r : 1;
   return t.direction[0] = n[0] * i, t.direction[1] = n[1] * i, t.direction[2] = n[2] * i, t;
 }
-function qn(t, e, n) {
+function Zn(t, e, n) {
   return t[0] = e.origin[0] + e.direction[0] * n, t[1] = e.origin[1] + e.direction[1] * n, t[2] = e.origin[2] + e.direction[2] * n, t;
 }
-function Al(t, e, n) {
+function Ic(t, e, n) {
   const r = e.origin[0], i = e.origin[1], s = e.origin[2];
   return t.direction[0] = e.direction[0], t.direction[1] = e.direction[1], t.direction[2] = e.direction[2], t.origin[0] = r + t.direction[0] * n, t.origin[1] = i + t.direction[1] * n, t.origin[2] = s + t.direction[2] * n, t;
 }
-function Ji(t, e, n) {
-  const r = Math.max(0, ue(oe(ts, n, e.origin), e.direction));
-  return qn(t, e, r);
+function ls(t, e, n) {
+  const r = Math.max(0, he(le(us, n, e.origin), e.direction));
+  return Zn(t, e, r);
 }
-function _l(t, e) {
-  return Math.sqrt(es(t, e));
+function Vc(t, e) {
+  return Math.sqrt(cs(t, e));
 }
-function es(t, e) {
-  return Rt(e, Ji(ts, t, e));
+function cs(t, e) {
+  return Dt(e, ls(us, t, e));
 }
-const ts = new Float32Array(3);
-function El(t, e, n) {
-  Bn(t.origin, e.origin, n), $i(t.direction, e.direction, n);
+const us = new Float32Array(3);
+function Nc(t, e, n) {
+  In(t.origin, e.origin, n), Ri(t.direction, e.direction, n);
   const r = Math.hypot(t.direction[0], t.direction[1], t.direction[2]), i = r > 1e-12 ? 1 / r : 1;
   return t.direction[0] = t.direction[0] * i, t.direction[1] = t.direction[1] * i, t.direction[2] = t.direction[2] * i, t;
 }
-function ns(t, e) {
-  const n = ue(e.normal, t.direction);
+function hs(t, e) {
+  const n = he(e.normal, t.direction);
   if (Math.abs(n) < 1e-12) return null;
   const r = -ce(e, t.origin) / n;
   return r >= 0 ? r : null;
 }
-function rs(t, e, n) {
-  const r = t.origin[0] - e[0], i = t.origin[1] - e[1], s = t.origin[2] - e[2], a = t.direction[0], o = t.direction[1], l = t.direction[2], c = r * a + i * o + s * l, h = r * r + i * i + s * s - n * n, d = c * c - h;
-  if (d < 0) return null;
-  const f = Math.sqrt(d), p = -c - f;
+function ds(t, e, n) {
+  const r = t.origin[0] - e[0], i = t.origin[1] - e[1], s = t.origin[2] - e[2], a = t.direction[0], o = t.direction[1], c = t.direction[2], l = r * a + i * o + s * c, h = r * r + i * i + s * s - n * n, f = l * l - h;
+  if (f < 0) return null;
+  const d = Math.sqrt(f), p = -l - d;
   if (p >= 0) return p;
-  const m = -c + f;
+  const m = -l + d;
   return m >= 0 ? m : null;
 }
-function is(t, e) {
-  if (U(e)) return null;
+function fs(t, e) {
+  if (D(e)) return null;
   let n = 0, r = Number.POSITIVE_INFINITY;
   for (let i = 0; i < 3; i++) {
-    const s = t.origin[i], a = t.direction[i], o = e.min[i], l = e.max[i];
+    const s = t.origin[i], a = t.direction[i], o = e.min[i], c = e.max[i];
     if (Math.abs(a) < 1e-12) {
-      if (s < o || s > l) return null;
+      if (s < o || s > c) return null;
       continue;
     }
-    const c = 1 / a;
-    let h = (o - s) * c, d = (l - s) * c;
-    if (h > d) {
-      const f = h;
-      h = d, d = f;
+    const l = 1 / a;
+    let h = (o - s) * l, f = (c - s) * l;
+    if (h > f) {
+      const d = h;
+      h = f, f = d;
     }
-    if (h > n && (n = h), d < r && (r = d), n > r) return null;
+    if (h > n && (n = h), f < r && (r = f), n > r) return null;
   }
   return Number.isFinite(r) ? n : null;
 }
-function ss(t, e, n, r, i = !1) {
-  const s = n[0] - e[0], a = n[1] - e[1], o = n[2] - e[2], l = r[0] - e[0], c = r[1] - e[1], h = r[2] - e[2], d = t.direction[0], f = t.direction[1], p = t.direction[2], m = f * h - p * c, g = p * l - d * h, b = d * c - f * l, w = s * m + a * g + o * b;
+function ps(t, e, n, r, i = !1) {
+  const s = n[0] - e[0], a = n[1] - e[1], o = n[2] - e[2], c = r[0] - e[0], l = r[1] - e[1], h = r[2] - e[2], f = t.direction[0], d = t.direction[1], p = t.direction[2], m = d * h - p * l, g = p * c - f * h, b = f * l - d * c, w = s * m + a * g + o * b;
   if (i ? w < 1e-12 : Math.abs(w) < 1e-12) return null;
-  const T = 1 / w, $ = t.origin[0] - e[0], A = t.origin[1] - e[1], _ = t.origin[2] - e[2], C = ($ * m + A * g + _ * b) * T;
-  if (C < 0 || C > 1) return null;
-  const M = A * o - _ * a, I = _ * s - $ * o, V = $ * a - A * s, N = (d * M + f * I + p * V) * T;
-  if (N < 0 || C + N > 1) return null;
-  const k = (l * M + c * I + h * V) * T;
+  const S = 1 / w, $ = t.origin[0] - e[0], A = t.origin[1] - e[1], _ = t.origin[2] - e[2], L = ($ * m + A * g + _ * b) * S;
+  if (L < 0 || L > 1) return null;
+  const M = A * o - _ * a, I = _ * s - $ * o, V = $ * a - A * s, N = (f * M + d * I + p * V) * S;
+  if (N < 0 || L + N > 1) return null;
+  const k = (c * M + l * I + h * V) * S;
   return k >= 0 ? k : null;
 }
-function Ll(t, e, n = 1e-6) {
+function kc(t, e, n = 1e-6) {
   return Math.abs(t.origin[0] - e.origin[0]) <= n && Math.abs(t.origin[1] - e.origin[1]) <= n && Math.abs(t.origin[2] - e.origin[2]) <= n && Math.abs(t.direction[0] - e.direction[0]) <= n && Math.abs(t.direction[1] - e.direction[1]) <= n && Math.abs(t.direction[2] - e.direction[2]) <= n;
 }
-function Cl(t) {
+function zc(t) {
   return `ray(origin: ${t.origin[0]}, ${t.origin[1]}, ${t.origin[2]}; direction: ${t.direction[0]}, ${t.direction[1]}, ${t.direction[2]})`;
 }
-function Ml(t) {
-  return Number.isFinite(t.origin[0]) && Number.isFinite(t.origin[1]) && Number.isFinite(t.origin[2]) && Number.isFinite(t.direction[0]) && Number.isFinite(t.direction[1]) && Number.isFinite(t.direction[2]) && xi(t.direction) > 1e-24;
+function Wc(t) {
+  return Number.isFinite(t.origin[0]) && Number.isFinite(t.origin[1]) && Number.isFinite(t.origin[2]) && Number.isFinite(t.direction[0]) && Number.isFinite(t.direction[1]) && Number.isFinite(t.direction[2]) && Li(t.direction) > 1e-24;
 }
-const ig = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Ag = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  applyMat4: El,
-  at: qn,
-  clone: Sl,
-  closestPointToPoint: Ji,
-  copy: $l,
-  create: Tl,
-  distanceToPoint: _l,
-  equals: Ll,
-  intersectBox: is,
-  intersectPlane: ns,
-  intersectSphere: rs,
-  intersectTriangle: ss,
-  isWellFormed: Ml,
-  recast: Al,
-  set: Vt,
-  squaredDistanceToPoint: es,
-  toString: Cl
-}, Symbol.toStringTag, { value: "Module" })), Pl = {
+  applyMat4: Nc,
+  at: Zn,
+  clone: Uc,
+  closestPointToPoint: ls,
+  copy: Dc,
+  create: Oc,
+  distanceToPoint: Vc,
+  equals: kc,
+  intersectBox: fs,
+  intersectPlane: hs,
+  intersectSphere: ds,
+  intersectTriangle: ps,
+  isWellFormed: Wc,
+  recast: Ic,
+  set: Wt,
+  squaredDistanceToPoint: cs,
+  toString: zc
+}, Symbol.toStringTag, { value: "Module" })), qc = {
   Left: 0,
   Right: 1,
   Bottom: 2,
@@ -1988,33 +2015,33 @@ const ig = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   Near: 4,
   Far: 5
 };
-function as() {
+function ms() {
   return {
     planes: [
-      xe(),
-      xe(),
-      xe(),
-      xe(),
-      xe(),
-      xe()
+      ve(),
+      ve(),
+      ve(),
+      ve(),
+      ve(),
+      ve()
     ]
   };
 }
-function Fl(t) {
-  const e = as();
-  return os(e, t);
+function jc(t) {
+  const e = ms();
+  return gs(e, t);
 }
-function os(t, e) {
-  for (let n = 0; n < 6; n++) kn(t.planes[n], e.planes[n]);
+function gs(t, e) {
+  for (let n = 0; n < 6; n++) Xn(t.planes[n], e.planes[n]);
   return t;
 }
-function Bl(t, e, n = "gl") {
-  const r = [e[0], e[4], e[8], e[12]], i = [e[1], e[5], e[9], e[13]], s = [e[2], e[6], e[10], e[14]], a = [e[3], e[7], e[11], e[15]], o = (c, h, d) => [
-    c[0] + d * h[0],
-    c[1] + d * h[1],
-    c[2] + d * h[2],
-    c[3] + d * h[3]
-  ], l = [
+function Qc(t, e, n = "gl") {
+  const r = [e[0], e[4], e[8], e[12]], i = [e[1], e[5], e[9], e[13]], s = [e[2], e[6], e[10], e[14]], a = [e[3], e[7], e[11], e[15]], o = (l, h, f) => [
+    l[0] + f * h[0],
+    l[1] + f * h[1],
+    l[2] + f * h[2],
+    l[3] + f * h[3]
+  ], c = [
     o(a, r, 1),
     // left：row3 + row0
     o(a, r, -1),
@@ -2028,31 +2055,31 @@ function Bl(t, e, n = "gl") {
     o(a, s, -1)
     // far
   ];
-  for (let c = 0; c < 6; c++) {
-    const [h, d, f, p] = l[c];
-    Xi(t.planes[c], h, d, f, p), Yi(t.planes[c], t.planes[c]);
+  for (let l = 0; l < 6; l++) {
+    const [h, f, d, p] = c[l];
+    ns(t.planes[l], h, f, d, p), rs(t.planes[l], t.planes[l]);
   }
   return t;
 }
-function Rl(t, e) {
+function Xc(t, e) {
   for (const n of t.planes)
     if (ce(n, e) < 0) return !1;
   return !0;
 }
-function Gl(t, e, n) {
+function Yc(t, e, n) {
   for (const r of t.planes)
     if (ce(r, e) < -n) return !1;
   return !0;
 }
-function Ul(t, e) {
+function Hc(t, e) {
   for (const n of t.planes) {
-    const r = n.normal[0], i = n.normal[1], s = n.normal[2], a = r >= 0 ? e.max[0] : e.min[0], o = i >= 0 ? e.max[1] : e.min[1], l = s >= 0 ? e.max[2] : e.min[2];
-    if (r * a + i * o + s * l + n.constant < 0) return !1;
+    const r = n.normal[0], i = n.normal[1], s = n.normal[2], a = r >= 0 ? e.max[0] : e.min[0], o = i >= 0 ? e.max[1] : e.min[1], c = s >= 0 ? e.max[2] : e.min[2];
+    if (r * a + i * o + s * c + n.constant < 0) return !1;
   }
   return !0;
 }
-function Ol(t, e) {
-  const n = Dl(t);
+function Zc(t, e) {
+  const n = Kc(t);
   if (!n) return !0;
   let r = !1, i = !1;
   for (const s of n) {
@@ -2061,45 +2088,45 @@ function Ol(t, e) {
   }
   return !1;
 }
-function Dl(t) {
+function Kc(t) {
   const [e, n, r, i, s, a] = t.planes, o = [];
-  for (const l of [s, a])
-    for (const c of [r, i])
+  for (const c of [s, a])
+    for (const l of [r, i])
       for (const h of [e, n]) {
-        const d = Il(h, c, l);
-        if (!d) return null;
-        o.push(d);
+        const f = Jc(h, l, c);
+        if (!f) return null;
+        o.push(f);
       }
   return o;
 }
-function Il(t, e, n) {
-  const r = t.normal[0], i = t.normal[1], s = t.normal[2], a = e.normal[0], o = e.normal[1], l = e.normal[2], c = n.normal[0], h = n.normal[1], d = n.normal[2], f = r * (o * d - l * h) - i * (a * d - l * c) + s * (a * h - o * c);
-  if (Math.abs(f) < 1e-12) return null;
-  const p = 1 / f, m = -t.constant, g = -e.constant, b = -n.constant;
+function Jc(t, e, n) {
+  const r = t.normal[0], i = t.normal[1], s = t.normal[2], a = e.normal[0], o = e.normal[1], c = e.normal[2], l = n.normal[0], h = n.normal[1], f = n.normal[2], d = r * (o * f - c * h) - i * (a * f - c * l) + s * (a * h - o * l);
+  if (Math.abs(d) < 1e-12) return null;
+  const p = 1 / d, m = -t.constant, g = -e.constant, b = -n.constant;
   return new Float32Array([
-    (m * (o * d - l * h) - i * (g * d - l * b) + s * (g * h - o * b)) * p,
-    (r * (g * d - l * b) - m * (a * d - l * c) + s * (a * b - g * c)) * p,
-    (r * (o * b - g * h) - i * (a * b - g * c) + m * (a * h - o * c)) * p
+    (m * (o * f - c * h) - i * (g * f - c * b) + s * (g * h - o * b)) * p,
+    (r * (g * f - c * b) - m * (a * f - c * l) + s * (a * b - g * l)) * p,
+    (r * (o * b - g * h) - i * (a * b - g * l) + m * (a * h - o * l)) * p
   ]);
 }
-function Vl(t, e, n = 1e-6) {
+function eu(t, e, n = 1e-6) {
   for (let r = 0; r < 6; r++)
-    if (!Zi(t.planes[r], e.planes[r], n)) return !1;
+    if (!ss(t.planes[r], e.planes[r], n)) return !1;
   return !0;
 }
-const sg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const _g = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  FRUSTUM_PLANE: Pl,
-  clone: Fl,
-  containsPoint: Rl,
-  copy: os,
-  create: as,
-  equals: Vl,
-  intersectsBox: Ul,
-  intersectsPlane: Ol,
-  intersectsSphere: Gl,
-  setFromProjectionView: Bl
-}, Symbol.toStringTag, { value: "Module" })), Nl = {
+  FRUSTUM_PLANE: qc,
+  clone: jc,
+  containsPoint: Xc,
+  copy: gs,
+  create: ms,
+  equals: eu,
+  intersectsBox: Hc,
+  intersectsPlane: Zc,
+  intersectsSphere: Yc,
+  setFromProjectionView: Qc
+}, Symbol.toStringTag, { value: "Module" })), tu = {
   transparent: [0, 0, 0],
   black: [0, 0, 0],
   white: [1, 1, 1],
@@ -2120,31 +2147,31 @@ const sg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   navy: [0, 0, 0.5019607843137255],
   teal: [0, 0.5019607843137255, 0.5019607843137255]
 };
-function kl(t = 0, e = 0, n = 0, r = 1) {
+function nu(t = 0, e = 0, n = 0, r = 1) {
   return { r: t, g: e, b: n, a: r };
 }
-function zl(t) {
+function ru(t) {
   return { r: t.r, g: t.g, b: t.b, a: t.a };
 }
-function Wl(t, e) {
+function iu(t, e) {
   return t.r = e.r, t.g = e.g, t.b = e.b, t.a = e.a, t;
 }
-function ql(t, e, n, r, i = 1) {
+function su(t, e, n, r, i = 1) {
   return t.r = e, t.g = n, t.b = r, t.a = i, t;
 }
-function jl(t, e, n, r) {
+function au(t, e, n, r) {
   return t.r = e, t.g = n, t.b = r, t;
 }
-function Xl(t, e, n) {
+function ou(t, e, n) {
   const r = Math.trunc(e);
   return t.r = (r >> 16 & 255) / 255, t.g = (r >> 8 & 255) / 255, t.b = (r & 255) / 255, n !== void 0 && (t.a = n), t;
 }
-function Yl(t) {
+function lu(t) {
   const e = (n) => Math.round(Math.min(Math.max(n, 0), 1) * 255);
   return e(t.r) << 16 | e(t.g) << 8 | e(t.b);
 }
-function Hl(t, e) {
-  const n = e.trim().toLowerCase(), r = Nl[n];
+function cu(t, e) {
+  const n = e.trim().toLowerCase(), r = tu[n];
   if (r)
     return t.r = r[0], t.g = r[1], t.b = r[2], n === "transparent" && (t.a = 0), t;
   if (n.startsWith("#")) {
@@ -2154,7 +2181,7 @@ function Hl(t, e) {
       if (s.length === 3 || s.length === 4)
         return t.r = a(s[0]), t.g = a(s[1]), t.b = a(s[2]), s.length === 4 && (t.a = a(s[3])), t;
       if (s.length === 6 || s.length === 8) {
-        const o = (l) => parseInt(s.slice(l, l + 2), 16) / 255;
+        const o = (c) => parseInt(s.slice(c, c + 2), 16) / 255;
         return t.r = o(0), t.g = o(2), t.b = o(4), s.length === 8 && (t.a = o(6)), t;
       }
     }
@@ -2171,33 +2198,33 @@ function Hl(t, e) {
     `[gpu-device-api] color.setStyle: unknown color "${e}". Supported: #rgb / #rrggbb / #rrggbbaa, rgb() / rgba(), and a small set of CSS color names.`
   );
 }
-function Zl(t, e = !1) {
+function uu(t, e = !1) {
   const n = (s) => Math.round(Math.min(Math.max(s, 0), 1) * 255), r = (s) => s.toString(16).padStart(2, "0"), i = `#${r(n(t.r))}${r(n(t.g))}${r(n(t.b))}`;
   return e ? `${i}${r(n(t.a))}` : i;
 }
-function Kl(t, e) {
+function hu(t, e) {
   return t.r = Math.min(Math.max(e.r, 0), 1), t.g = Math.min(Math.max(e.g, 0), 1), t.b = Math.min(Math.max(e.b, 0), 1), t.a = Math.min(Math.max(e.a, 0), 1), t;
 }
-function Ql(t, e, n, r) {
+function du(t, e, n, r) {
   return t.r = e.r + (n.r - e.r) * r, t.g = e.g + (n.g - e.g) * r, t.b = e.b + (n.b - e.b) * r, t.a = e.a + (n.a - e.a) * r, t;
 }
-function Jl(t, e, n) {
+function fu(t, e, n) {
   return t.r = e.r + n.r, t.g = e.g + n.g, t.b = e.b + n.b, t.a = e.a + n.a, t;
 }
-function eu(t, e, n) {
+function pu(t, e, n) {
   return t.r = e.r * n.r, t.g = e.g * n.g, t.b = e.b * n.b, t.a = e.a * n.a, t;
 }
-function tu(t, e, n, r, i = t.a) {
+function mu(t, e, n, r, i = t.a) {
   const s = (e % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2), a = Math.min(Math.max(n, 0), 1), o = Math.min(Math.max(r, 0), 1);
   if (a === 0)
     return t.r = o, t.g = o, t.b = o, t.a = i, t;
-  const l = o < 0.5 ? o * (1 + a) : o + a - o * a, c = 2 * o - l, h = (f) => {
-    let p = f;
-    return p < 0 && (p += 1), p > 1 && (p -= 1), p < 1 / 6 ? c + (l - c) * 6 * p : p < 1 / 2 ? l : p < 2 / 3 ? c + (l - c) * (2 / 3 - p) * 6 : c;
-  }, d = s / (Math.PI * 2);
-  return t.r = h(d + 1 / 3), t.g = h(d), t.b = h(d - 1 / 3), t.a = i, t;
+  const c = o < 0.5 ? o * (1 + a) : o + a - o * a, l = 2 * o - c, h = (d) => {
+    let p = d;
+    return p < 0 && (p += 1), p > 1 && (p -= 1), p < 1 / 6 ? l + (c - l) * 6 * p : p < 1 / 2 ? c : p < 2 / 3 ? l + (c - l) * (2 / 3 - p) * 6 : l;
+  }, f = s / (Math.PI * 2);
+  return t.r = h(f + 1 / 3), t.g = h(f), t.b = h(f - 1 / 3), t.a = i, t;
 }
-function nu(t, e) {
+function gu(t, e) {
   const n = Math.max(e.r, e.g, e.b), r = Math.min(e.r, e.g, e.b), i = (r + n) / 2, s = n - r;
   if (s === 0)
     return t[0] = 0, t[1] = 0, t[2] = i, t;
@@ -2205,56 +2232,56 @@ function nu(t, e) {
   let o;
   return n === e.r ? o = (e.g - e.b) / s + (e.g < e.b ? 6 : 0) : n === e.g ? o = (e.b - e.r) / s + 2 : o = (e.r - e.g) / s + 4, t[0] = o / 6 * Math.PI * 2, t[1] = a, t[2] = i, t;
 }
-function ru(t, e, n = !0) {
+function bu(t, e, n = !0) {
   const r = e ?? new Float32Array(n ? 4 : 3);
   return r[0] = t.r, r[1] = t.g, r[2] = t.b, n && r.length >= 4 && (r[3] = t.a), r;
 }
-function iu(t, e, n = 0) {
+function wu(t, e, n = 0) {
   return t.r = e[n] ?? 0, t.g = e[n + 1] ?? 0, t.b = e[n + 2] ?? 0, e.length > n + 3 && (t.a = e[n + 3]), t;
 }
-function su(t, e) {
+function yu(t, e) {
   const n = (r) => r < 0.04045 ? r * 0.0773993808 : Math.pow(r * 0.9478672986 + 0.0521327014, 2.4);
   return t.r = n(e.r), t.g = n(e.g), t.b = n(e.b), t.a = e.a, t;
 }
-function au(t, e) {
+function vu(t, e) {
   const n = (r) => r <= 31308e-7 ? r * 12.92 : 1.055 * Math.pow(r, 0.41666) - 0.055;
   return t.r = n(e.r), t.g = n(e.g), t.b = n(e.b), t.a = e.a, t;
 }
-function ou(t, e = 1e-6) {
+function xu(t, e = 1e-6) {
   return t.r >= -e && t.r <= 1 + e && t.g >= -e && t.g <= 1 + e && t.b >= -e && t.b <= 1 + e;
 }
-function cu(t, e, n = 1e-6) {
+function Su(t, e, n = 1e-6) {
   return Math.abs(t.r - e.r) <= n && Math.abs(t.g - e.g) <= n && Math.abs(t.b - e.b) <= n && Math.abs(t.a - e.a) <= n;
 }
-function lu(t) {
+function Tu(t) {
   return `rgba(${t.r}, ${t.g}, ${t.b}, ${t.a})`;
 }
-const ag = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Eg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  add: Jl,
-  clampColor: Kl,
-  clone: zl,
-  convertLinearToSRGB: au,
-  convertSRGBToLinear: su,
-  copy: Wl,
-  create: kl,
-  equals: cu,
-  fromArray: iu,
-  getHSL: nu,
-  getHex: Yl,
-  getStyle: Zl,
-  isInGamut: ou,
-  lerp: Ql,
-  multiply: eu,
-  set: ql,
-  setHSL: tu,
-  setHex: Xl,
-  setRGB: jl,
-  setStyle: Hl,
-  toArray: ru,
-  toString: lu
-}, Symbol.toStringTag, { value: "Module" })), uu = new Float32Array(16), sr = new Float32Array(16), hu = { origin: new Float32Array(3), direction: new Float32Array(3) }, Te = new Float32Array(3), Ct = new Float32Array(3), ar = new Float32Array(3), or = new Float32Array(3), cs = new Float32Array(3);
-function fu(t = 0, e = 0, n = 0, r = -1) {
+  add: fu,
+  clampColor: hu,
+  clone: ru,
+  convertLinearToSRGB: vu,
+  convertSRGBToLinear: yu,
+  copy: iu,
+  create: nu,
+  equals: Su,
+  fromArray: wu,
+  getHSL: gu,
+  getHex: lu,
+  getStyle: uu,
+  isInGamut: xu,
+  lerp: du,
+  multiply: pu,
+  set: su,
+  setHSL: mu,
+  setHex: ou,
+  setRGB: au,
+  setStyle: cu,
+  toArray: bu,
+  toString: Tu
+}, Symbol.toStringTag, { value: "Module" })), $u = new Float32Array(16), hr = new Float32Array(16), Au = { origin: new Float32Array(3), direction: new Float32Array(3) }, Se = new Float32Array(3), Bt = new Float32Array(3), dr = new Float32Array(3), fr = new Float32Array(3), bs = new Float32Array(3);
+function _u(t = 0, e = 0, n = 0, r = -1) {
   return {
     ray: { origin: new Float32Array([t, e, n]), direction: new Float32Array([0, 0, r]) },
     near: 0,
@@ -2262,7 +2289,7 @@ function fu(t = 0, e = 0, n = 0, r = -1) {
     doubleSided: !0
   };
 }
-function du(t) {
+function Eu(t) {
   return {
     ray: { origin: new Float32Array(t.ray.origin), direction: new Float32Array(t.ray.direction) },
     near: t.near,
@@ -2270,317 +2297,317 @@ function du(t) {
     doubleSided: t.doubleSided
   };
 }
-function pu(t, e) {
-  return Vt(t.ray, e.ray.origin, e.ray.direction), t.near = e.near, t.far = e.far, t.doubleSided = e.doubleSided, t;
+function Pu(t, e) {
+  return Wt(t.ray, e.ray.origin, e.ray.direction), t.near = e.near, t.far = e.far, t.doubleSided = e.doubleSided, t;
 }
-function jn(t, e, n) {
-  return Vt(t.ray, e, n), t;
+function Kn(t, e, n) {
+  return Wt(t.ray, e, n), t;
 }
-function mu(t, e, n) {
-  return jn(t, e, oe(cs, n, e));
+function Lu(t, e, n) {
+  return Kn(t, e, le(bs, n, e));
 }
-function gu(t, e, n, r, i = "gl") {
+function Cu(t, e, n, r, i = "gl") {
   const s = i === "zo" ? 0 : -1, a = 1;
-  return Mt(Te, e, n, s, r), Mt(Ct, e, n, a, r), jn(t, Te, oe(cs, Ct, Te));
+  return Gt(Se, e, n, s, r), Gt(Bt, e, n, a, r), Kn(t, Se, le(bs, Bt, Se));
 }
-function Mt(t, e, n, r, i) {
+function Gt(t, e, n, r, i) {
   const s = i[3] * e + i[7] * n + i[11] * r + i[15], a = s === 0 ? 1 : 1 / s;
   return t[0] = (i[0] * e + i[4] * n + i[8] * r + i[12]) * a, t[1] = (i[1] * e + i[5] * n + i[9] * r + i[13]) * a, t[2] = (i[2] * e + i[6] * n + i[10] * r + i[14]) * a, t;
 }
-function bu(t, e, n) {
-  const r = rs(t.ray, e, n);
-  return r !== null && Nt(t, r) ? r : null;
+function Mu(t, e, n) {
+  const r = ds(t.ray, e, n);
+  return r !== null && qt(t, r) ? r : null;
 }
-function wu(t, e) {
-  const n = is(t.ray, e);
-  return n !== null && Nt(t, n) ? n : null;
+function Fu(t, e) {
+  const n = fs(t.ray, e);
+  return n !== null && qt(t, n) ? n : null;
 }
-function vu(t, e) {
-  const n = ns(t.ray, e);
-  return n !== null && Nt(t, n) ? n : null;
+function Ru(t, e) {
+  const n = hs(t.ray, e);
+  return n !== null && qt(t, n) ? n : null;
 }
-function Nt(t, e) {
+function qt(t, e) {
   return e >= t.near && e <= t.far;
 }
-function ls(t, e, n, r, i = []) {
+function ws(t, e, n, r, i = []) {
   i.length = 0;
-  const s = r ? yu(hu, t.ray, r) : t.ray;
+  const s = r ? Gu(Au, t.ray, r) : t.ray;
   if (!s) return i;
-  const a = Math.floor(e.length / 3), o = Math.floor(n ? n.length / 3 : a / 3), l = !t.doubleSided;
-  for (let c = 0; c < o; c++) {
-    const h = n ? n[c * 3] ?? 0 : c * 3, d = n ? n[c * 3 + 1] ?? 0 : c * 3 + 1, f = n ? n[c * 3 + 2] ?? 0 : c * 3 + 2;
-    if (h >= a || d >= a || f >= a) continue;
-    Ht(Ct, e, h), Ht(ar, e, d), Ht(or, e, f);
-    const p = ss(s, Ct, ar, or, l);
+  const a = Math.floor(e.length / 3), o = Math.floor(n ? n.length / 3 : a / 3), c = !t.doubleSided;
+  for (let l = 0; l < o; l++) {
+    const h = n ? n[l * 3] ?? 0 : l * 3, f = n ? n[l * 3 + 1] ?? 0 : l * 3 + 1, d = n ? n[l * 3 + 2] ?? 0 : l * 3 + 2;
+    if (h >= a || f >= a || d >= a) continue;
+    Jt(Bt, e, h), Jt(dr, e, f), Jt(fr, e, d);
+    const p = ps(s, Bt, dr, fr, c);
     if (p === null) continue;
-    qn(Te, s, p);
-    const m = new Float32Array([Te[0], Te[1], Te[2]]);
-    r && Mt(m, m[0], m[1], m[2], r);
-    const g = yi(t.ray.origin, m);
-    Nt(t, g) && i.push({ distance: g, point: m, triangleIndex: c, vertexIndices: [h, d, f] });
+    Zn(Se, s, p);
+    const m = new Float32Array([Se[0], Se[1], Se[2]]);
+    r && Gt(m, m[0], m[1], m[2], r);
+    const g = Ci(t.ray.origin, m);
+    qt(t, g) && i.push({ distance: g, point: m, triangleIndex: l, vertexIndices: [h, f, d] });
   }
-  return i.sort((c, h) => c.distance - h.distance), i;
+  return i.sort((l, h) => l.distance - h.distance), i;
 }
-function xu(t, e, n, r) {
-  const i = ls(t, e, n, r, []);
+function Bu(t, e, n, r) {
+  const i = ws(t, e, n, r, []);
   return i.length > 0 ? i[0] : null;
 }
-function yu(t, e, n) {
-  const r = Ot(uu, n);
+function Gu(t, e, n) {
+  const r = Nt($u, n);
   if (!r) return null;
-  const i = Mt(
+  const i = Gt(
     new Float32Array(3),
     e.origin[0],
     e.origin[1],
     e.origin[2],
     r
-  ), s = Tu(new Float32Array(3), e.direction, r);
-  return Vt(t, i, s);
+  ), s = Ou(new Float32Array(3), e.direction, r);
+  return Wt(t, i, s);
 }
-function Tu(t, e, n) {
+function Ou(t, e, n) {
   const r = e[0], i = e[1], s = e[2];
-  return t[0] = n[0] * r + n[4] * i + n[8] * s, t[1] = n[1] * r + n[5] * i + n[9] * s, t[2] = n[2] * r + n[6] * i + n[10] * s, Fn(t, t);
+  return t[0] = n[0] * r + n[4] * i + n[8] * s, t[1] = n[1] * r + n[5] * i + n[9] * s, t[2] = n[2] * r + n[6] * i + n[10] * s, Dn(t, t);
 }
-function Ht(t, e, n) {
+function Jt(t, e, n) {
   return t[0] = e[n * 3] ?? 0, t[1] = e[n * 3 + 1] ?? 0, t[2] = e[n * 3 + 2] ?? 0, t;
 }
-function Su(t, e) {
-  return Ot(t, e);
+function Uu(t, e) {
+  return Nt(t, e);
 }
-function $u(t, e, n) {
-  return K(sr, e, n), Ot(t, sr);
+function Du(t, e, n) {
+  return Z(hr, e, n), Nt(t, hr);
 }
-const og = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Pg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  clone: du,
-  copy: pu,
-  create: fu,
-  intersectBox: wu,
-  intersectPlane: vu,
-  intersectSphere: bu,
-  intersectTriangles: ls,
-  intersectTrianglesFirst: xu,
-  inverseProjectionView: Su,
-  inverseProjectionViewOf: $u,
-  set: jn,
-  setFromNdc: gu,
-  setFromPoints: mu
-}, Symbol.toStringTag, { value: "Module" })), cg = 1e-6, Au = Math.PI / 180, _u = 180 / Math.PI;
-function us(t) {
-  return t * Au;
+  clone: Eu,
+  copy: Pu,
+  create: _u,
+  intersectBox: Fu,
+  intersectPlane: Ru,
+  intersectSphere: Mu,
+  intersectTriangles: ws,
+  intersectTrianglesFirst: Bu,
+  inverseProjectionView: Uu,
+  inverseProjectionViewOf: Du,
+  set: Kn,
+  setFromNdc: Cu,
+  setFromPoints: Lu
+}, Symbol.toStringTag, { value: "Module" })), Lg = 1e-6, Iu = Math.PI / 180, Vu = 180 / Math.PI;
+function ys(t) {
+  return t * Iu;
 }
-function lg(t) {
-  return t * _u;
+function Cg(t) {
+  return t * Vu;
 }
-function Ue(t, e, n) {
+function De(t, e, n) {
   return t < e ? e : t > n ? n : t;
 }
-function Eu(t, e, n) {
-  return e === t ? 0 : Ue((n - t) / (e - t), 0, 1);
+function Nu(t, e, n) {
+  return e === t ? 0 : De((n - t) / (e - t), 0, 1);
 }
-function ug(t, e, n) {
+function Mg(t, e, n) {
   return t + (e - t) * n;
 }
-function hg(t, e, n) {
-  const r = Eu(t, e, n);
+function Fg(t, e, n) {
+  const r = Nu(t, e, n);
   return r * r * (3 - 2 * r);
 }
-function fg(t, e) {
+function Rg(t, e) {
   return Number.isNaN(t) || Number.isNaN(e) ? Number.NaN : t === e ? t : t === 0 ? e > 0 ? Number.MIN_VALUE : -Number.MIN_VALUE : t + (e > t ? 1 : -1) * Math.abs(t) * Number.EPSILON;
 }
-function hs(t) {
+function vs(t) {
   return t === "webgl2" ? "glsl" : "wgsl";
 }
-function fs(t) {
+function xs(t) {
   return t === 1 ? "vs" : t === 2 ? "fs" : t === 4 ? "cs" : null;
 }
-function Lu(t, e, n) {
+function ku(t, e, n) {
   if (e === "wgsl") return t.wgsl;
-  const r = fs(n);
+  const r = xs(n);
   return r ? t[r] : void 0;
 }
-function Cu(t) {
+function zu(t) {
   const e = [];
   return t.vs && e.push("vs（GLSL）"), t.fs && e.push("fs（GLSL）"), t.cs && e.push("cs（GLSL）"), t.wgsl && e.push("wgsl"), e.length > 0 ? e.join("、") : "空";
 }
-function Mu(t, e, n, r) {
-  const i = e === 1 ? "vertex" : e === 2 ? "fragment" : "compute", a = hs(t) === "glsl" ? `请在 \`code\` 里提供 \`${fs(e) ?? "vs/fs/cs"}\`（GLSL ES 3.00）` : "请在 `code` 里提供 `wgsl`（单个包含所有 entry point 的 WGSL 源码）", o = t === "webgl2" ? "WebGPU" : "WebGL2";
+function Wu(t, e, n, r) {
+  const i = e === 1 ? "vertex" : e === 2 ? "fragment" : "compute", a = vs(t) === "glsl" ? `请在 \`code\` 里提供 \`${xs(e) ?? "vs/fs/cs"}\`（GLSL ES 3.00）` : "请在 `code` 里提供 `wgsl`（单个包含所有 entry point 的 WGSL 源码）", o = t === "webgl2" ? "WebGPU" : "WebGL2";
   return `[gpu-device-api] ShaderModule「${r}」缺少 ${t} 后端需要的 ${i} 阶段源码。
   ${a}；
-  当前提供的源码：${Cu(n)}。
+  当前提供的源码：${zu(n)}。
   （${o} 后端使用的语言与之不同，不能互相替代。）`;
 }
-const ds = `#version 300 es
-`, ps = `precision highp float;
+const Ss = `#version 300 es
+`, Ts = `precision highp float;
 precision highp int;
 precision highp sampler2D;
 precision highp samplerCube;
 precision highp sampler3D;
 precision highp sampler2DArray;
-`, dg = ds + ps;
-function ms(t) {
-  const e = t?.preamble ?? !0, n = e === !0 ? ps : e === !1 || e === "" ? !1 : e;
+`, Bg = Ss + Ts;
+function $s(t) {
+  const e = t?.preamble ?? !0, n = e === !0 ? Ts : e === !1 || e === "" ? !1 : e;
   return { version: t?.version ?? !0, preamble: n };
 }
-const Pu = /^\s*#version[^\n]*\n?/, Fu = /^(\s*#version[^\n]*\n?)([\s\S]*)$/;
-function Bu(t) {
+const qu = /^\s*#version[^\n]*\n?/, ju = /^(\s*#version[^\n]*\n?)([\s\S]*)$/;
+function Qu(t) {
   return t ? Object.entries(t).map(([e, n]) => typeof n == "boolean" ? `#define ${e} ${n ? 1 : 0}` : `#define ${e} ${n}`).join(`
 `) : "";
 }
-function Ru(t) {
+function Xu(t) {
   return t ? Object.entries(t).map(([e, n]) => typeof n == "boolean" ? `const ${e}: bool = ${n};` : typeof n == "number" ? Number.isInteger(n) ? `const ${e}: i32 = ${n};` : `const ${e}: f32 = ${n};` : `const ${e}: f32 = ${n};`).join(`
 `) : "";
 }
-function Gu(t, e, n = "shader", r) {
-  const { version: i, preamble: s } = ms(r), a = Bu(e);
+function Yu(t, e, n = "shader", r) {
+  const { version: i, preamble: s } = $s(r), a = Qu(e);
   if (!i && !s && !a) return t;
-  let o = "", l = t;
+  let o = "", c = t;
   if (i) {
     const h = /^\s*#version\s+([^\n]*)/.exec(t);
     if (h) {
-      const d = h[1].trim();
-      if (!/^300\s+es\b/.test(d))
+      const f = h[1].trim();
+      if (!/^300\s+es\b/.test(f))
         throw new u(
-          `[gpu-device-api] ShaderModule「${n}」声明了 \`#version ${d}\`，但 WebGL2 后端只接受 GLSL ES 3.00（\`#version 300 es\`）。请删掉 \`#version\` 行，或改为 \`#version 300 es\`。
+          `[gpu-device-api] ShaderModule「${n}」声明了 \`#version ${f}\`，但 WebGL2 后端只接受 GLSL ES 3.00（\`#version 300 es\`）。请删掉 \`#version\` 行，或改为 \`#version 300 es\`。
 （要自己掌控 \`#version\`，可以在 createShaderModule 里传 \`glsl: { version: false }\`。）`
         );
     }
-    o = ds, l = t.replace(Pu, "");
+    o = Ss, c = t.replace(qu, "");
   } else {
-    const h = Fu.exec(t);
-    h && (o = h[1], l = h[2]);
+    const h = ju.exec(t);
+    h && (o = h[1], c = h[2]);
   }
-  const c = [o];
-  return s && c.push(s), a && c.push(`${a}
-`), c.push(l.trim()), `${c.join("")}
+  const l = [o];
+  return s && l.push(s), a && l.push(`${a}
+`), l.push(c.trim()), `${l.join("")}
 `;
 }
-function Uu(t, e) {
-  const n = Ru(e);
+function Hu(t, e) {
+  const n = Xu(e);
   return n ? `${n}
 
 ${t.trim()}
 ` : `${t.trim()}
 `;
 }
-function Tn(t) {
-  const { backend: e, source: n, stage: r, label: i = "shader" } = t, s = hs(e), a = Lu(n, s, r);
+function _n(t) {
+  const { backend: e, source: n, stage: r, label: i = "shader" } = t, s = vs(e), a = ku(n, s, r);
   if (a === void 0)
-    throw new u(Mu(e, r, n, i));
+    throw new u(Wu(e, r, n, i));
   return s === "glsl" ? {
     language: s,
     stage: r,
-    code: Gu(a, t.defines, i, t.glsl),
-    hasPreamble: ms(t.glsl).preamble !== !1
+    code: Yu(a, t.defines, i, t.glsl),
+    hasPreamble: $s(t.glsl).preamble !== !1
   } : {
     language: s,
     stage: r,
-    code: Uu(a, t.defines),
+    code: Hu(a, t.defines),
     hasPreamble: !1
   };
 }
-function pg(t, e, n) {
+function Gg(t, e, n) {
   const r = e.split(`
 `), i = `[gpu-device-api] 着色器「${n}」编译失败：
 ${t.trim()}
 `, s = /* @__PURE__ */ new Set(), a = /ERROR:\s*\d+:(\d+)/g;
   let o;
   for (; (o = a.exec(t)) !== null; ) {
-    const c = Number(o[1]);
-    c > 0 && s.add(c);
+    const l = Number(o[1]);
+    l > 0 && s.add(l);
   }
   if (s.size === 0)
     return `${i}
 ----- 完整源码 -----
-${Sn(r)}
+${En(r)}
 `;
-  const l = [];
-  for (const c of [...s].sort((h, d) => h - d)) {
-    l.push(`----- 第 ${c} 行附近 -----`);
-    const h = Math.max(1, c - 3), d = Math.min(r.length, c + 3);
-    l.push(Sn(r.slice(h - 1, d), h));
+  const c = [];
+  for (const l of [...s].sort((h, f) => h - f)) {
+    c.push(`----- 第 ${l} 行附近 -----`);
+    const h = Math.max(1, l - 3), f = Math.min(r.length, l + 3);
+    c.push(En(r.slice(h - 1, f), h));
   }
   return `${i}
-${l.join(`
+${c.join(`
 `)}
 `;
 }
-function Sn(t, e = 1) {
+function En(t, e = 1) {
   const n = String(e + t.length - 1).length;
   return t.map((r, i) => `${String(e + i).padStart(n, " ")} | ${r}`).join(`
 `);
 }
-function mg(t) {
-  return Sn(t.split(`
+function Og(t) {
+  return En(t.split(`
 `));
 }
-const le = /* @__PURE__ */ new Map();
-function Ou(t, e) {
-  if (le.has(t))
+const ue = /* @__PURE__ */ new Map();
+function Zu(t, e) {
+  if (ue.has(t))
     throw new u(
       `[gpu-device-api] 着色器 key「${t}」已经注册过了。如需替换请先调用 unregisterShader('${t}')。`
     );
-  return le.set(t, e), e;
+  return ue.set(t, e), e;
 }
-function gg(t) {
-  for (const [e, n] of Object.entries(t)) Ou(e, n);
+function Ug(t) {
+  for (const [e, n] of Object.entries(t)) Zu(e, n);
 }
-function bg(t, e) {
-  return le.set(t, e), e;
+function Dg(t, e) {
+  return ue.set(t, e), e;
 }
-function wg(t) {
-  return le.has(t);
+function Ig(t) {
+  return ue.has(t);
 }
-function vg(t) {
-  return le.get(t);
+function Vg(t) {
+  return ue.get(t);
 }
-function xg(t) {
-  const e = le.get(t);
+function Ng(t) {
+  const e = ue.get(t);
   if (!e) {
-    const n = Du();
+    const n = Ku();
     throw new u(
       `[gpu-device-api] 找不到 key 为「${t}」的着色器。` + (n.length > 0 ? `已注册：${n.join("、")}。` : "当前注册表为空。")
     );
   }
   return e;
 }
-function yg(t) {
-  return le.delete(t);
+function kg(t) {
+  return ue.delete(t);
 }
-function Du() {
-  return [...le.keys()].sort();
+function Ku() {
+  return [...ue.keys()].sort();
 }
-function Tg() {
-  le.clear();
+function zg() {
+  ue.clear();
 }
-function gs(t) {
+function As(t) {
   return t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
 }
-const Iu = String.raw`@group\s*\(\s*(\d+)\s*\)\s*@binding\s*\(\s*(\d+)\s*\)`, Vu = String.raw`@binding\s*\(\s*(\d+)\s*\)\s*@group\s*\(\s*(\d+)\s*\)`, cr = String.raw`var\s*(?:<\s*([^>]*)>)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;]+);`;
-function Sg(t) {
-  const e = gs(t), n = [], r = [
-    { regex: new RegExp(`${Iu}\\s*${cr}`, "g"), swapped: !1 },
-    { regex: new RegExp(`${Vu}\\s*${cr}`, "g"), swapped: !0 }
+const Ju = String.raw`@group\s*\(\s*(\d+)\s*\)\s*@binding\s*\(\s*(\d+)\s*\)`, eh = String.raw`@binding\s*\(\s*(\d+)\s*\)\s*@group\s*\(\s*(\d+)\s*\)`, pr = String.raw`var\s*(?:<\s*([^>]*)>)?\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;]+);`;
+function Wg(t) {
+  const e = As(t), n = [], r = [
+    { regex: new RegExp(`${Ju}\\s*${pr}`, "g"), swapped: !1 },
+    { regex: new RegExp(`${eh}\\s*${pr}`, "g"), swapped: !0 }
   ];
   for (const { regex: i, swapped: s } of r) {
     let a;
     for (; (a = i.exec(e)) !== null; ) {
-      const o = Number(a[s ? 2 : 1]), l = Number(a[s ? 1 : 2]), c = (a[3] ?? "").trim(), h = a[4], d = a[5].trim().replace(/\s+/g, " ");
-      n.some((f) => f.group === o && f.binding === l) || n.push(Nu(o, l, c, h, d));
+      const o = Number(a[s ? 2 : 1]), c = Number(a[s ? 1 : 2]), l = (a[3] ?? "").trim(), h = a[4], f = a[5].trim().replace(/\s+/g, " ");
+      n.some((d) => d.group === o && d.binding === c) || n.push(th(o, c, l, h, f));
     }
   }
   return n.sort((i, s) => i.group - s.group || i.binding - s.binding);
 }
-function Nu(t, e, n, r, i) {
+function th(t, e, n, r, i) {
   let s = "handle", a;
   if (n.startsWith("uniform"))
     s = "uniform";
   else if (n.startsWith("storage")) {
     s = "storage";
-    const c = n.split(",").map((h) => h.trim())[1];
-    c === "read" ? a = "read" : c === "read_write" ? a = "read_write" : c === "write" && (a = "write");
+    const l = n.split(",").map((h) => h.trim())[1];
+    l === "read" ? a = "read" : l === "read_write" ? a = "read_write" : l === "write" && (a = "write");
   }
-  const o = ku(s, i);
+  const o = nh(s, i);
   return {
     group: t,
     binding: e,
@@ -2593,31 +2620,31 @@ function Nu(t, e, n, r, i) {
     multisampled: i.startsWith("texture_multisampled")
   };
 }
-function ku(t, e) {
+function nh(t, e) {
   return t === "uniform" ? "uniform-buffer" : t === "storage" ? "storage-buffer" : e.startsWith("texture_storage_") ? "storage-texture" : e.startsWith("sampler_comparison") ? "comparison-sampler" : e.startsWith("sampler") ? "sampler" : (e.startsWith("texture_"), "texture");
 }
-const lr = /@(vertex|fragment|compute)\b([\s\S]{0,200}?)\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g, zu = /@workgroup_size\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+)\s*)?\)/;
-function Wu(t) {
-  const e = gs(t), n = [];
+const mr = /@(vertex|fragment|compute)\b([\s\S]{0,200}?)\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g, rh = /@workgroup_size\s*\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+)\s*)?\)/;
+function ih(t) {
+  const e = As(t), n = [];
   let r;
-  for (lr.lastIndex = 0; (r = lr.exec(e)) !== null; ) {
+  for (mr.lastIndex = 0; (r = mr.exec(e)) !== null; ) {
     const i = r[1], s = r[2] ?? "", a = r[3];
     let o = null;
     if (i === "compute") {
-      const l = zu.exec(s);
-      o = l ? [Number(l[1]), Number(l[2] ?? 1), Number(l[3] ?? 1)] : [1, 1, 1];
+      const c = rh.exec(s);
+      o = c ? [Number(c[1]), Number(c[2] ?? 1), Number(c[3] ?? 1)] : [1, 1, 1];
     }
     n.push({ stage: i, name: a, workgroupSize: o });
   }
   return n;
 }
-function $g(t, e, n) {
-  return Wu(t).find((r) => r.stage === e && r.name === n);
+function qg(t, e, n) {
+  return ih(t).find((r) => r.stage === e && r.name === n);
 }
-function Ag(t) {
+function jg(t) {
   return new Set(t.map((e) => `${e.group}:${e.binding}`));
 }
-const qu = {
+const sh = {
   5126: "float",
   5124: "int",
   5125: "uint",
@@ -2659,10 +2686,10 @@ const qu = {
   36308: "usamplerCube",
   36311: "usampler2DArray"
 };
-function ju(t) {
-  return qu[t] ?? `0x${t.toString(16)}`;
+function ah(t) {
+  return sh[t] ?? `0x${t.toString(16)}`;
 }
-const Xu = [
+const oh = [
   35678,
   // sampler2D
   35679,
@@ -2694,47 +2721,47 @@ const Xu = [
   36311
   // usampler2DArray
 ];
-function bs(t) {
-  return Xu.includes(t);
+function _s(t) {
+  return oh.includes(t);
 }
-function Yu(t, e) {
+function lh(t, e) {
   const n = [], r = t.getProgramParameter(e, t.ACTIVE_ATTRIBUTES);
-  for (let l = 0; l < r; l++) {
-    const c = t.getActiveAttrib(e, l);
-    c && n.push({
-      name: c.name,
-      location: t.getAttribLocation(e, c.name),
-      glType: c.type,
-      size: c.size
+  for (let c = 0; c < r; c++) {
+    const l = t.getActiveAttrib(e, c);
+    l && n.push({
+      name: l.name,
+      location: t.getAttribLocation(e, l.name),
+      glType: l.type,
+      size: l.size
     });
   }
   const i = [], s = t.getProgramParameter(e, t.ACTIVE_UNIFORMS);
-  for (let l = 0; l < s; l++) {
-    const c = t.getActiveUniform(e, l);
-    c && i.push({
-      name: c.name,
-      location: t.getUniformLocation(e, c.name),
-      glType: c.type,
-      size: c.size,
-      isArray: /\[\d+\]$/.test(c.name)
+  for (let c = 0; c < s; c++) {
+    const l = t.getActiveUniform(e, c);
+    l && i.push({
+      name: l.name,
+      location: t.getUniformLocation(e, l.name),
+      glType: l.type,
+      size: l.size,
+      isArray: /\[\d+\]$/.test(l.name)
     });
   }
   const a = [], o = t.getProgramParameter(e, t.ACTIVE_UNIFORM_BLOCKS);
-  for (let l = 0; l < o; l++) {
-    const c = t.getActiveUniformBlockName(e, l) ?? `block${l}`;
+  for (let c = 0; c < o; c++) {
+    const l = t.getActiveUniformBlockName(e, c) ?? `block${c}`;
     a.push({
-      name: c,
-      index: l,
-      dataSize: t.getActiveUniformBlockParameter(e, l, t.UNIFORM_BLOCK_DATA_SIZE),
-      activeUniforms: t.getActiveUniformBlockParameter(e, l, t.UNIFORM_BLOCK_ACTIVE_UNIFORMS)
+      name: l,
+      index: c,
+      dataSize: t.getActiveUniformBlockParameter(e, c, t.UNIFORM_BLOCK_DATA_SIZE),
+      activeUniforms: t.getActiveUniformBlockParameter(e, c, t.UNIFORM_BLOCK_ACTIVE_UNIFORMS)
     });
   }
   return { attributes: n, uniforms: i, uniformBlocks: a };
 }
-function Hu(t) {
-  return t.uniforms.filter((e) => bs(e.glType));
+function ch(t) {
+  return t.uniforms.filter((e) => _s(e.glType));
 }
-function Zu(t, e) {
+function uh(t, e) {
   const n = [];
   t.uniformBlocks.slice().sort((i, s) => i.name.localeCompare(s.name)).forEach((i, s) => {
     n.push({
@@ -2745,7 +2772,7 @@ function Zu(t, e) {
       buffer: { type: "uniform", minBindingSize: i.dataSize }
     });
   });
-  const r = Hu(t).sort((i, s) => i.name.localeCompare(s.name));
+  const r = ch(t).sort((i, s) => i.name.localeCompare(s.name));
   return r.forEach((i, s) => {
     n.push({
       binding: t.uniformBlocks.length + s,
@@ -2762,7 +2789,7 @@ function Zu(t, e) {
     });
   }), n;
 }
-class Ku {
+class hh {
   factories = /* @__PURE__ */ new Map();
   register(e) {
     return this.factories.set(e.kind, e), this;
@@ -2824,35 +2851,35 @@ const be = Object.freeze({
   maxColorAttachmentBytesPerSample: 32,
   maxVertexBuffers: 16
 });
-function B(t, e, n) {
+function G(t, e, n) {
   const r = t.getParameter(e);
   return typeof r == "number" && r > 0 ? r : n;
 }
-const Qu = 16777215;
-function Ju(t) {
+const dh = 16777215;
+function fh(t) {
   return {
-    maxTextureSize: B(t, 3379, 2048),
-    max3dTextureSize: B(t, 32883, 256),
-    maxArrayTextureLayers: B(t, 35071, 256),
-    maxSamples: B(t, 36183, 4),
-    maxUniformBufferBindings: B(t, 35375, 12),
-    maxUniformBlockSize: B(t, 35376, 16384),
-    maxUniformBufferOffsetAlignment: B(t, 35380, 256),
-    maxVertexAttribs: B(t, 34921, 16),
-    maxVertexUniformVectors: B(t, 36347, 128),
-    maxFragmentUniformVectors: B(t, 36349, 128),
-    maxVaryingVectors: B(t, 36348, 8),
-    maxTextureImageUnits: B(t, 34930, 16),
-    maxCombinedTextureImageUnits: B(t, 35661, 32),
-    maxCubeMapTextureSize: B(t, 34076, 2048),
-    maxRenderbufferSize: B(t, 34024, 2048),
-    maxElementIndex: Qu,
-    maxElementsVertices: B(t, 33001, 2147483647),
-    maxElementsIndices: B(t, 33e3, 2147483647)
+    maxTextureSize: G(t, 3379, 2048),
+    max3dTextureSize: G(t, 32883, 256),
+    maxArrayTextureLayers: G(t, 35071, 256),
+    maxSamples: G(t, 36183, 4),
+    maxUniformBufferBindings: G(t, 35375, 12),
+    maxUniformBlockSize: G(t, 35376, 16384),
+    maxUniformBufferOffsetAlignment: G(t, 35380, 256),
+    maxVertexAttribs: G(t, 34921, 16),
+    maxVertexUniformVectors: G(t, 36347, 128),
+    maxFragmentUniformVectors: G(t, 36349, 128),
+    maxVaryingVectors: G(t, 36348, 8),
+    maxTextureImageUnits: G(t, 34930, 16),
+    maxCombinedTextureImageUnits: G(t, 35661, 32),
+    maxCubeMapTextureSize: G(t, 34076, 2048),
+    maxRenderbufferSize: G(t, 34024, 2048),
+    maxElementIndex: dh,
+    maxElementsVertices: G(t, 33001, 2147483647),
+    maxElementsIndices: G(t, 33e3, 2147483647)
   };
 }
-function eh(t) {
-  const e = Ju(t);
+function ph(t) {
+  const e = fh(t);
   return {
     // WebGL2 没有 1D 纹理，用 2D 上限代替，上层代码读到的是一个安全的正数。
     maxTextureDimension1D: e.maxTextureSize,
@@ -2892,21 +2919,21 @@ function eh(t) {
     maxComputeWorkgroupsPerDimension: 0
   };
 }
-function th(t) {
+function mh(t) {
   const e = /* @__PURE__ */ new Set();
-  return t.getExtension("EXT_texture_filter_anisotropic") && e.add("texture-anisotropy"), t.getExtension("OES_texture_float_linear") && e.add("texture-float32-filterable"), t.getExtension("EXT_color_buffer_float") && e.add("color-buffer-float"), t.getExtension("WEBGL_debug_renderer_info") && e.add("debug-renderer-info"), e;
+  return t.getExtension("EXT_texture_filter_anisotropic") && e.add("texture-anisotropy"), t.getExtension("OES_texture_float_linear") && e.add("texture-float32-filterable"), t.getExtension("EXT_color_buffer_float") && e.add("color-buffer-float"), t.getExtension("WEBGL_debug_renderer_info") && e.add("debug-renderer-info"), t.getExtension("EXT_disjoint_timer_query_webgl2") && e.add("timestamp-query"), e;
 }
-function nh(t) {
+function gh(t) {
   const e = t.getExtension("WEBGL_debug_renderer_info");
   if (!e) return { vendor: "", device: "" };
   const n = t.getParameter(e.UNMASKED_VENDOR_WEBGL) ?? "", r = t.getParameter(e.UNMASKED_RENDERER_WEBGL) ?? "";
   return { vendor: n, device: r };
 }
-function rh(t) {
+function bh(t) {
   const e = t.getExtension("EXT_texture_filter_anisotropic");
   return e ? t.getParameter(e.MAX_TEXTURE_MAX_ANISOTROPY_EXT) ?? 1 : 1;
 }
-function ih(t, e) {
+function wh(t, e) {
   const n = t.getContext("webgl2", e);
   if (!n)
     throw new u(
@@ -2914,7 +2941,7 @@ function ih(t, e) {
     );
   return n;
 }
-class sh {
+class yh {
   gl;
   program = null;
   vertexArray = null;
@@ -3071,13 +3098,13 @@ class sh {
    * 用一条签名字符串做比较，避免为每个字段单独维护缓存。
    */
   setBlend(e, n, r, i, s, a, o) {
-    const l = e ? `1:${n}:${r}:${i}:${s}:${a}:${o}` : "0";
-    if (this.blendSignature === l) return;
-    const c = this.gl;
-    e ? (c.enable(c.BLEND), c.blendFuncSeparate(n, r, s, a), c.blendEquationSeparate(i, o)) : c.disable(c.BLEND), this.blendSignature = l;
+    const c = e ? `1:${n}:${r}:${i}:${s}:${a}:${o}` : "0";
+    if (this.blendSignature === c) return;
+    const l = this.gl;
+    e ? (l.enable(l.BLEND), l.blendFuncSeparate(n, r, s, a), l.blendEquationSeparate(i, o)) : l.disable(l.BLEND), this.blendSignature = c;
   }
   setBlendConstant(e) {
-    Zt(this.blendConstant, e) || (this.gl.blendColor(e[0], e[1], e[2], e[3]), this.blendConstant = [e[0], e[1], e[2], e[3]]);
+    en(this.blendConstant, e) || (this.gl.blendColor(e[0], e[1], e[2], e[3]), this.blendConstant = [e[0], e[1], e[2], e[3]]);
   }
   setColorMask(e) {
     this.colorMask && this.colorMask[0] === e[0] && this.colorMask[1] === e[1] && this.colorMask[2] === e[2] && this.colorMask[3] === e[3] || (this.gl.colorMask(e[0], e[1], e[2], e[3]), this.colorMask = [e[0], e[1], e[2], e[3]]);
@@ -3093,7 +3120,7 @@ class sh {
     const s = this.gl;
     this.depthEnabled !== e && (e ? s.enable(s.DEPTH_TEST) : s.disable(s.DEPTH_TEST), this.depthEnabled = e), this.depthWrite !== n && (s.depthMask(n), this.depthWrite = n), this.depthFunc !== r && (s.depthFunc(r), this.depthFunc = r);
     const a = i ?? [0, 0, 0];
-    ah(this.depthBias, a) || (a[0] !== 0 || a[1] !== 0 || a[2] !== 0 ? (s.enable(s.POLYGON_OFFSET_FILL), s.polygonOffset(a[0], a[1])) : s.disable(s.POLYGON_OFFSET_FILL), this.depthBias = [a[0], a[1], a[2]]);
+    vh(this.depthBias, a) || (a[0] !== 0 || a[1] !== 0 || a[2] !== 0 ? (s.enable(s.POLYGON_OFFSET_FILL), s.polygonOffset(a[0], a[1])) : s.disable(s.POLYGON_OFFSET_FILL), this.depthBias = [a[0], a[1], a[2]]);
   }
   setStencilTest(e, n) {
     const r = this.gl;
@@ -3104,11 +3131,11 @@ class sh {
     this.cullEnabled !== e && (e ? i.enable(i.CULL_FACE) : i.disable(i.CULL_FACE), this.cullEnabled = e), e && this.cullFace !== n && (i.cullFace(n), this.cullFace = n), this.frontFace !== r && (i.frontFace(r), this.frontFace = r);
   }
   setViewport(e, n, r, i) {
-    Zt(this.viewport, [e, n, r, i]) || (this.gl.viewport(e, n, r, i), this.viewport = [e, n, r, i]);
+    en(this.viewport, [e, n, r, i]) || (this.gl.viewport(e, n, r, i), this.viewport = [e, n, r, i]);
   }
   setScissor(e, n, r, i, s) {
     const a = this.gl;
-    this.scissorEnabled !== e && (e ? a.enable(a.SCISSOR_TEST) : a.disable(a.SCISSOR_TEST), this.scissorEnabled = e), e && !Zt(this.scissor, [n, r, i, s]) && (a.scissor(n, r, i, s), this.scissor = [n, r, i, s]);
+    this.scissorEnabled !== e && (e ? a.enable(a.SCISSOR_TEST) : a.disable(a.SCISSOR_TEST), this.scissorEnabled = e), e && !en(this.scissor, [n, r, i, s]) && (a.scissor(n, r, i, s), this.scissor = [n, r, i, s]);
   }
   /** 当前生效的 program（未设置时为 `null`）。 */
   get currentProgram() {
@@ -3119,30 +3146,30 @@ class sh {
     return this.vertexArray;
   }
 }
-function Zt(t, e) {
+function en(t, e) {
   return t ? t[0] === e[0] && t[1] === e[1] && t[2] === e[2] && t[3] === e[3] : !1;
 }
-function ah(t, e) {
+function vh(t, e) {
   return t ? t[0] === e[0] && t[1] === e[1] && t[2] === e[2] : !1;
 }
-const oh = [
+const xh = [
   {
-    flag: O.Storage,
+    flag: C.Storage,
     name: "Storage",
     reason: "shader storage buffer 需要 GLES 3.1，WebGL2 只有 GLES 3.0。请改用 uniform buffer 传数据。"
   },
   {
-    flag: O.Indirect,
+    flag: C.Indirect,
     name: "Indirect",
     reason: "WebGL2 没有 indirect draw。请改用一次性的 uniform 数据 + 普通 draw 调用。"
   },
   {
-    flag: O.QueryResolve,
+    flag: C.QueryResolve,
     name: "QueryResolve",
     reason: "WebGL2 的遮挡查询结果只能同步读回，没有查询结果缓冲区的概念。"
   }
 ];
-class ch {
+class Sh {
   label;
   size;
   usage;
@@ -3166,16 +3193,16 @@ class ch {
   mapping = null;
   _disposed = !1;
   constructor(e, n, r, i) {
-    if (Ye(r.size, "BufferDescriptor.size"), r.size % 4 !== 0)
+    if (We(r.size, "BufferDescriptor.size"), r.size % 4 !== 0)
       throw new u(
         `[gpu-device-api] BufferDescriptor.size 必须是 4 的倍数，实际是 ${r.size}。（WebGPU 也有同样的限制，这里提前拦下以免两个后端行为不一致。）`
       );
-    for (const a of oh)
+    for (const a of xh)
       if (r.usage & a.flag)
         throw new u(
           `[gpu-device-api] BufferUsage.${a.name} 在 WebGL2 后端不可用：${a.reason}`
         );
-    this.gl = e, this.state = n, this.onDestroy = i, this.label = r.label ?? G("buffer"), this.id = G("buf"), this.size = r.size, this.usage = r.usage, this.usages = r.usage, this.bindingTarget = r.usage & O.Index ? e.ELEMENT_ARRAY_BUFFER : e.COPY_WRITE_BUFFER;
+    this.gl = e, this.state = n, this.onDestroy = i, this.label = r.label ?? B("buffer"), this.id = B("buf"), this.size = r.size, this.usage = r.usage, this.usages = r.usage, this.bindingTarget = r.usage & C.Index ? e.ELEMENT_ARRAY_BUFFER : e.COPY_WRITE_BUFFER;
     const s = e.createBuffer();
     if (!s) throw new u("[gpu-device-api] gl.createBuffer() 返回 null，无法分配 buffer。");
     this.native = s, this.withTarget(() => e.bufferData(this.bindingTarget, r.size, e.DYNAMIC_DRAW));
@@ -3197,7 +3224,7 @@ class ch {
   async mapAsync(e, n = 0, r = this.size - n) {
     if (this.assertUsable("mapAsync"), this.mapping)
       throw new u(`[gpu-device-api] buffer「${this.label}」已经处于映射状态，请先 unmap()。`);
-    if (Bt(n, "mapAsync 的 offset"), Ye(r, "mapAsync 的 size"), n % 4 !== 0)
+    if (Te(n, "mapAsync 的 offset"), We(r, "mapAsync 的 size"), n % 4 !== 0)
       throw new u(
         `[gpu-device-api] mapAsync 的 offset 必须是 4 的倍数，实际是 ${n}。（WebGPU 要求 8 的倍数，这里按更宽松的 4 处理。）`
       );
@@ -3269,8 +3296,8 @@ class ch {
       );
   }
 }
-const ct = 6403, lt = 33319, lh = 6407, Le = 6408, Ce = 36244, Me = 33320, Pe = 36249, Kt = 6402, uh = 34041, we = 5121, Fe = 5120, ut = 5123, Qt = 5122, We = 5125, Jt = 5124, ht = 5126, en = 5131, hh = 33640, fh = 34042, dh = 33321, ph = 36756, mh = 33330, gh = 33329, bh = 33332, wh = 33331, vh = 33325, xh = 33323, yh = 36757, Th = 33336, Sh = 33335, $h = 33334, Ah = 33333, _h = 33326, Eh = 33338, Lh = 33337, Ch = 33327, Mh = 32856, Ph = 35907, Fh = 36759, Bh = 36220, Rh = 36222, Gh = 32857, Uh = 35898, Oh = 33340, Dh = 33339, Ih = 33328, Vh = 36214, Nh = 36216, kh = 34842, zh = 36208, Wh = 36226, qh = 34836, jh = 33189, Xh = 33190, Yh = 35056, Hh = 36012;
-function y(t, e, n, r, i = {}) {
+const ft = 6403, pt = 33319, Th = 6407, Ce = 6408, Me = 36244, Fe = 33320, Re = 36249, tn = 6402, $h = 34041, we = 5121, Be = 5120, mt = 5123, nn = 5122, Xe = 5125, rn = 5124, gt = 5126, sn = 5131, Ah = 33640, _h = 34042, Eh = 33321, Ph = 36756, Lh = 33330, Ch = 33329, Mh = 33332, Fh = 33331, Rh = 33325, Bh = 33323, Gh = 36757, Oh = 33336, Uh = 33335, Dh = 33334, Ih = 33333, Vh = 33326, Nh = 33338, kh = 33337, zh = 33327, Wh = 32856, qh = 35907, jh = 36759, Qh = 36220, Xh = 36222, Yh = 32857, Hh = 35898, Zh = 33340, Kh = 33339, Jh = 33328, ed = 36214, td = 36216, nd = 34842, rd = 36208, id = 36226, sd = 34836, ad = 33189, od = 33190, ld = 35056, cd = 36012;
+function x(t, e, n, r, i = {}) {
   return {
     internalFormat: t,
     format: e,
@@ -3283,80 +3310,80 @@ function y(t, e, n, r, i = {}) {
     uploadType: i.uploadType === void 0 ? "Uint8Array" : i.uploadType
   };
 }
-const Zh = Object.freeze({
-  r8unorm: y(dh, ct, we, 1, { uploadType: "Uint8Array" }),
-  r8snorm: y(ph, ct, Fe, 1, { attachment: !1, uploadType: "Int8Array" }),
-  r8uint: y(mh, Ce, we, 1, { sampleType: "uint", uploadType: "Uint8Array" }),
-  r8sint: y(gh, Ce, Fe, 1, { sampleType: "sint", uploadType: "Int8Array" }),
-  r16uint: y(bh, Ce, ut, 2, { sampleType: "uint", uploadType: "Uint16Array" }),
-  r16sint: y(wh, Ce, Qt, 2, { sampleType: "sint", uploadType: "Int16Array" }),
-  r16float: y(vh, ct, en, 2, { uploadType: "Uint16Array" }),
-  rg8unorm: y(xh, lt, we, 2, { uploadType: "Uint8Array" }),
-  rg8snorm: y(yh, lt, Fe, 2, { attachment: !1, uploadType: "Int8Array" }),
-  rg8uint: y(Th, Me, we, 2, { sampleType: "uint", uploadType: "Uint8Array" }),
-  rg8sint: y(Sh, Me, Fe, 2, { sampleType: "sint", uploadType: "Int8Array" }),
-  r32uint: y($h, Ce, We, 4, { sampleType: "uint", uploadType: "Uint32Array" }),
-  r32sint: y(Ah, Ce, Jt, 4, { sampleType: "sint", uploadType: "Int32Array" }),
-  r32float: y(_h, ct, ht, 4, { attachment: !1, uploadType: "Float32Array" }),
-  rg16uint: y(Eh, Me, ut, 4, { sampleType: "uint", uploadType: "Uint16Array" }),
-  rg16sint: y(Lh, Me, Qt, 4, { sampleType: "sint", uploadType: "Int16Array" }),
-  rg16float: y(Ch, lt, en, 4, { uploadType: "Uint16Array" }),
-  rgba8unorm: y(Mh, Le, we, 4, { uploadType: "Uint8Array" }),
-  "rgba8unorm-srgb": y(Ph, Le, we, 4, { uploadType: "Uint8Array" }),
-  rgba8snorm: y(Fh, Le, Fe, 4, { attachment: !1, uploadType: "Int8Array" }),
-  rgba8uint: y(Bh, Pe, we, 4, { sampleType: "uint", uploadType: "Uint8Array" }),
-  rgba8sint: y(Rh, Pe, Fe, 4, { sampleType: "sint", uploadType: "Int8Array" }),
-  rgb10a2unorm: y(Gh, Le, hh, 4, { uploadType: "Uint32Array" }),
-  rg11b10ufloat: y(Uh, lh, We, 4, { attachment: !1, uploadType: null }),
-  rg32uint: y(Oh, Me, We, 8, { sampleType: "uint", uploadType: "Uint32Array" }),
-  rg32sint: y(Dh, Me, Jt, 8, { sampleType: "sint", uploadType: "Int32Array" }),
-  rg32float: y(Ih, lt, ht, 8, { attachment: !1, uploadType: "Float32Array" }),
-  rgba16uint: y(Vh, Pe, ut, 8, { sampleType: "uint", uploadType: "Uint16Array" }),
-  rgba16sint: y(Nh, Pe, Qt, 8, { sampleType: "sint", uploadType: "Int16Array" }),
-  rgba16float: y(kh, Le, en, 8, { uploadType: "Uint16Array" }),
-  rgba32uint: y(zh, Pe, We, 16, { sampleType: "uint", uploadType: "Uint32Array" }),
-  rgba32sint: y(Wh, Pe, Jt, 16, { sampleType: "sint", uploadType: "Int32Array" }),
-  rgba32float: y(qh, Le, ht, 16, { uploadType: "Float32Array" }),
-  depth16unorm: y(jh, Kt, ut, 2, {
+const ud = Object.freeze({
+  r8unorm: x(Eh, ft, we, 1, { uploadType: "Uint8Array" }),
+  r8snorm: x(Ph, ft, Be, 1, { attachment: !1, uploadType: "Int8Array" }),
+  r8uint: x(Lh, Me, we, 1, { sampleType: "uint", uploadType: "Uint8Array" }),
+  r8sint: x(Ch, Me, Be, 1, { sampleType: "sint", uploadType: "Int8Array" }),
+  r16uint: x(Mh, Me, mt, 2, { sampleType: "uint", uploadType: "Uint16Array" }),
+  r16sint: x(Fh, Me, nn, 2, { sampleType: "sint", uploadType: "Int16Array" }),
+  r16float: x(Rh, ft, sn, 2, { uploadType: "Uint16Array" }),
+  rg8unorm: x(Bh, pt, we, 2, { uploadType: "Uint8Array" }),
+  rg8snorm: x(Gh, pt, Be, 2, { attachment: !1, uploadType: "Int8Array" }),
+  rg8uint: x(Oh, Fe, we, 2, { sampleType: "uint", uploadType: "Uint8Array" }),
+  rg8sint: x(Uh, Fe, Be, 2, { sampleType: "sint", uploadType: "Int8Array" }),
+  r32uint: x(Dh, Me, Xe, 4, { sampleType: "uint", uploadType: "Uint32Array" }),
+  r32sint: x(Ih, Me, rn, 4, { sampleType: "sint", uploadType: "Int32Array" }),
+  r32float: x(Vh, ft, gt, 4, { attachment: !1, uploadType: "Float32Array" }),
+  rg16uint: x(Nh, Fe, mt, 4, { sampleType: "uint", uploadType: "Uint16Array" }),
+  rg16sint: x(kh, Fe, nn, 4, { sampleType: "sint", uploadType: "Int16Array" }),
+  rg16float: x(zh, pt, sn, 4, { uploadType: "Uint16Array" }),
+  rgba8unorm: x(Wh, Ce, we, 4, { uploadType: "Uint8Array" }),
+  "rgba8unorm-srgb": x(qh, Ce, we, 4, { uploadType: "Uint8Array" }),
+  rgba8snorm: x(jh, Ce, Be, 4, { attachment: !1, uploadType: "Int8Array" }),
+  rgba8uint: x(Qh, Re, we, 4, { sampleType: "uint", uploadType: "Uint8Array" }),
+  rgba8sint: x(Xh, Re, Be, 4, { sampleType: "sint", uploadType: "Int8Array" }),
+  rgb10a2unorm: x(Yh, Ce, Ah, 4, { uploadType: "Uint32Array" }),
+  rg11b10ufloat: x(Hh, Th, Xe, 4, { attachment: !1, uploadType: null }),
+  rg32uint: x(Zh, Fe, Xe, 8, { sampleType: "uint", uploadType: "Uint32Array" }),
+  rg32sint: x(Kh, Fe, rn, 8, { sampleType: "sint", uploadType: "Int32Array" }),
+  rg32float: x(Jh, pt, gt, 8, { attachment: !1, uploadType: "Float32Array" }),
+  rgba16uint: x(ed, Re, mt, 8, { sampleType: "uint", uploadType: "Uint16Array" }),
+  rgba16sint: x(td, Re, nn, 8, { sampleType: "sint", uploadType: "Int16Array" }),
+  rgba16float: x(nd, Ce, sn, 8, { uploadType: "Uint16Array" }),
+  rgba32uint: x(rd, Re, Xe, 16, { sampleType: "uint", uploadType: "Uint32Array" }),
+  rgba32sint: x(id, Re, rn, 16, { sampleType: "sint", uploadType: "Int32Array" }),
+  rgba32float: x(sd, Ce, gt, 16, { uploadType: "Float32Array" }),
+  depth16unorm: x(ad, tn, mt, 2, {
     depth: !0,
     sampleType: "depth",
     uploadType: "Uint16Array"
   }),
-  depth24plus: y(Xh, Kt, We, 4, {
+  depth24plus: x(od, tn, Xe, 4, {
     depth: !0,
     sampleType: "depth",
     uploadType: "Uint32Array"
   }),
-  "depth24plus-stencil8": y(Yh, uh, fh, 4, {
+  "depth24plus-stencil8": x(ld, $h, _h, 4, {
     depth: !0,
     stencil: !0,
     sampleType: "depth",
     uploadType: null
   }),
-  depth32float: y(Hh, Kt, ht, 4, {
+  depth32float: x(cd, tn, gt, 4, {
     depth: !0,
     sampleType: "depth",
     uploadType: "Float32Array"
   })
-}), Kh = Object.freeze({
+}), hd = Object.freeze({
   bgra8unorm: "WebGL2 没有 bgra8unorm 纹理格式（BGRA 只是默认帧缓冲的隐含排布）。请改用 rgba8unorm。",
   "bgra8unorm-srgb": "WebGL2 没有 bgra8unorm-srgb 纹理格式。请改用 rgba8unorm-srgb。",
   rgb9e5ufloat: "WebGL2 不支持 rgb9e5ufloat（无法作为纹理存储格式，也不能从主机上传）。请改用 rg11b10ufloat 或 rgba16float。",
   stencil8: "WebGL2 的 STENCIL_INDEX8 只能用作 renderbuffer，不能作为纹理格式。请改用 depth24plus-stencil8。"
 });
 function z(t) {
-  const e = Kh[t];
+  const e = hd[t];
   if (e)
     throw new u(`[gpu-device-api] 纹理格式「${t}」在 WebGL2 后端不可用：${e}`);
-  const n = Zh[t];
+  const n = ud[t];
   if (!n)
     throw new u(`[gpu-device-api] WebGL2 后端不认识纹理格式「${t}」。`);
   return n;
 }
-function Qh(t) {
+function dd(t) {
   return z(t).attachment;
 }
-function Jh(t, e) {
+function fd(t, e) {
   const n = z(t);
   if (n.uploadType === null)
     throw new u(
@@ -3370,13 +3397,13 @@ function Jh(t, e) {
     );
   }
 }
-class ws {
+class Es {
   label;
   texture;
   descriptor;
   _disposed = !1;
   constructor(e, n) {
-    const r = $t(e, n);
+    const r = Lt(e, n);
     if (r.baseMipLevel + r.mipLevelCount > e.mipLevelCount)
       throw new u(
         `[gpu-device-api] texture view 的 mip 范围 [${r.baseMipLevel}, ${r.baseMipLevel + r.mipLevelCount}) 超出了纹理「${e.label}」的 ${e.mipLevelCount} 层。`
@@ -3385,7 +3412,7 @@ class ws {
       throw new u(
         `[gpu-device-api] texture view 的层范围 [${r.baseArrayLayer}, ${r.baseArrayLayer + r.arrayLayerCount}) 超出了纹理「${e.label}」的 ${e.depthOrArrayLayers} 层。`
       );
-    this.texture = e, this.descriptor = r, this.label = n.label ?? G("textureView");
+    this.texture = e, this.descriptor = r, this.label = n.label ?? B("textureView");
   }
   /** WebGL2 里 view 就是纹理本身，所以直接返回 GL 纹理句柄。 */
   get native() {
@@ -3410,14 +3437,14 @@ class ws {
     this._disposed = !0;
   }
 }
-function ef(t, e) {
+function pd(t, e) {
   if (t === "1d")
     throw new u(
       "[gpu-device-api] WebGL2 不支持 1D 纹理。请改用高度为 1 的 2D 纹理（`size: { width: n, height: 1 }`）。"
     );
   return t === "3d" ? 32879 : e > 1 ? 35866 : 3553;
 }
-class ur {
+class gr {
   label;
   dimension;
   format;
@@ -3437,52 +3464,52 @@ class ur {
   _disposed = !1;
   constructor(e, n, r, i) {
     this.gl = e, this.state = n, this.onDestroy = i;
-    const s = Cn(r.size);
-    if (Ye(s.width, "TextureDescriptor.size.width"), s.height <= 0 || s.depthOrArrayLayers <= 0)
+    const s = Gn(r.size);
+    if (We(s.width, "TextureDescriptor.size.width"), s.height <= 0 || s.depthOrArrayLayers <= 0)
       throw new u(
         `[gpu-device-api] 纹理尺寸必须为正数，实际是 ${s.width}x${s.height}x${s.depthOrArrayLayers}。`
       );
-    const a = z(r.format), o = r.dimension ?? xt.D2, l = r.sampleCount ?? 1, c = r.mipLevelCount ?? 1;
-    if (l > 1) {
-      if (o !== xt.D2 || s.depthOrArrayLayers > 1)
+    const a = z(r.format), o = r.dimension ?? At.D2, c = r.sampleCount ?? 1, l = r.mipLevelCount ?? 1;
+    if (c > 1) {
+      if (o !== At.D2 || s.depthOrArrayLayers > 1)
         throw new u(
           "[gpu-device-api] 多重采样纹理只能是单层 2D 纹理（`dimension: '2d'` 且 `depthOrArrayLayers: 1`）。"
         );
-      if (c > 1)
+      if (l > 1)
         throw new u("[gpu-device-api] 多重采样纹理不能有 mipmap（`mipLevelCount` 必须为 1）。");
     }
-    if (c > 1) {
-      const d = Math.floor(Math.log2(Math.max(s.width, s.height))) + 1;
-      if (c > d)
+    if (l > 1) {
+      const f = Math.floor(Math.log2(Math.max(s.width, s.height))) + 1;
+      if (l > f)
         throw new u(
-          `[gpu-device-api] mipLevelCount=${c} 超过了 ${s.width}x${s.height} 能容纳的最大层数 ${d}。`
+          `[gpu-device-api] mipLevelCount=${l} 超过了 ${s.width}x${s.height} 能容纳的最大层数 ${f}。`
         );
     }
-    this.label = r.label ?? G("texture"), this.dimension = o, this.format = r.format, this.usage = r.usage, this.width = s.width, this.height = s.height, this.depthOrArrayLayers = s.depthOrArrayLayers, this.mipLevelCount = c, this.sampleCount = l, this.glTarget = ef(o, s.depthOrArrayLayers);
+    this.label = r.label ?? B("texture"), this.dimension = o, this.format = r.format, this.usage = r.usage, this.width = s.width, this.height = s.height, this.depthOrArrayLayers = s.depthOrArrayLayers, this.mipLevelCount = l, this.sampleCount = c, this.glTarget = pd(o, s.depthOrArrayLayers);
     const h = e.createTexture();
     if (!h) throw new u("[gpu-device-api] gl.createTexture() 返回 null，无法分配纹理。");
-    this.native = h, e.bindTexture(this.glTarget, h), l > 1 ? e.texStorage2DMultisample(
+    this.native = h, e.bindTexture(this.glTarget, h), c > 1 ? e.texStorage2DMultisample(
       this.glTarget,
-      l,
+      c,
       a.internalFormat,
       s.width,
       s.height,
       !1
-    ) : o === xt.D3 ? e.texStorage3D(
+    ) : o === At.D3 ? e.texStorage3D(
       this.glTarget,
-      c,
+      l,
       a.internalFormat,
       s.width,
       s.height,
       s.depthOrArrayLayers
     ) : s.depthOrArrayLayers > 1 ? e.texStorage3D(
       this.glTarget,
-      c,
+      l,
       a.internalFormat,
       s.width,
       s.height,
       s.depthOrArrayLayers
-    ) : e.texStorage2D(this.glTarget, c, a.internalFormat, s.width, s.height), this.applyDefaultSamplerParameters();
+    ) : e.texStorage2D(this.glTarget, l, a.internalFormat, s.width, s.height), this.applyDefaultSamplerParameters();
   }
   get size() {
     return { width: this.width, height: this.height, depthOrArrayLayers: this.depthOrArrayLayers };
@@ -3497,7 +3524,7 @@ class ur {
   createView(e = {}) {
     if (this._disposed)
       throw new u(`[gpu-device-api] 纹理「${this.label}」已销毁，不能再创建 view。`);
-    const n = new ws(this, e);
+    const n = new Es(this, e);
     return this.views.push(n), n;
   }
   /**
@@ -3532,7 +3559,7 @@ class ur {
     e.texParameteri(n, e.TEXTURE_MIN_FILTER, e.NEAREST), e.texParameteri(n, e.TEXTURE_MAG_FILTER, e.NEAREST), e.texParameteri(n, e.TEXTURE_WRAP_S, e.CLAMP_TO_EDGE), e.texParameteri(n, e.TEXTURE_WRAP_T, e.CLAMP_TO_EDGE), e.texParameteri(n, e.TEXTURE_WRAP_R, e.CLAMP_TO_EDGE), e.texParameteri(n, e.TEXTURE_BASE_LEVEL, 0), e.texParameteri(n, e.TEXTURE_MAX_LEVEL, this.mipLevelCount - 1);
   }
 }
-const tf = {
+const md = {
   "point-list": 0,
   // POINTS
   "line-list": 1,
@@ -3543,7 +3570,7 @@ const tf = {
   // TRIANGLES
   "triangle-strip": 5
   // TRIANGLE_STRIP
-}, vs = {
+}, Ps = {
   never: 512,
   less: 513,
   equal: 514,
@@ -3552,7 +3579,7 @@ const tf = {
   "not-equal": 517,
   "greater-equal": 518,
   always: 519
-}, nf = {
+}, gd = {
   zero: 0,
   one: 1,
   src: 768,
@@ -3566,63 +3593,63 @@ const tf = {
   "src-alpha-saturated": 776,
   constant: 32769,
   "one-minus-constant": 32770
-}, ft = {
+}, bt = {
   add: 32774,
   subtract: 32778,
   "reverse-subtract": 32779,
   min: 32775,
   max: 32776
-}, hr = {
+}, br = {
   front: 1028,
   back: 1029
-}, rf = {
+}, bd = {
   ccw: 2305,
   cw: 2304
-}, tn = {
+}, an = {
   "clamp-to-edge": 33071,
   repeat: 10497,
   "mirror-repeat": 33648
-}, fr = {
+}, wr = {
   nearest: 9728,
   linear: 9729
-}, sf = {
+}, wd = {
   uint16: 5123,
   // UNSIGNED_SHORT
   uint32: 5125
   // UNSIGNED_INT
-}, dr = 5121, pr = 5120, mr = 5123, gr = 5122, af = 5125, of = 5124, cf = 5126, lf = 5131, uf = {
-  float32: { type: cf, normalized: !1, integer: !1 },
-  float16: { type: lf, normalized: !1, integer: !1 },
-  unorm8: { type: dr, normalized: !0, integer: !1 },
-  snorm8: { type: pr, normalized: !0, integer: !1 },
-  uint8: { type: dr, normalized: !1, integer: !0 },
-  sint8: { type: pr, normalized: !1, integer: !0 },
-  unorm16: { type: mr, normalized: !0, integer: !1 },
-  snorm16: { type: gr, normalized: !0, integer: !1 },
-  uint16: { type: mr, normalized: !1, integer: !0 },
-  sint16: { type: gr, normalized: !1, integer: !0 },
-  uint32: { type: af, normalized: !1, integer: !0 },
-  sint32: { type: of, normalized: !1, integer: !0 }
-}, hf = /^(float16|float32|unorm8|snorm8|uint8|sint8|unorm16|snorm16|uint16|sint16|uint32|sint32)(?:x([1-4]))?$/;
-function ff(t) {
-  const e = hf.exec(t);
+}, yr = 5121, vr = 5120, xr = 5123, Sr = 5122, yd = 5125, vd = 5124, xd = 5126, Sd = 5131, Td = {
+  float32: { type: xd, normalized: !1, integer: !1 },
+  float16: { type: Sd, normalized: !1, integer: !1 },
+  unorm8: { type: yr, normalized: !0, integer: !1 },
+  snorm8: { type: vr, normalized: !0, integer: !1 },
+  uint8: { type: yr, normalized: !1, integer: !0 },
+  sint8: { type: vr, normalized: !1, integer: !0 },
+  unorm16: { type: xr, normalized: !0, integer: !1 },
+  snorm16: { type: Sr, normalized: !0, integer: !1 },
+  uint16: { type: xr, normalized: !1, integer: !0 },
+  sint16: { type: Sr, normalized: !1, integer: !0 },
+  uint32: { type: yd, normalized: !1, integer: !0 },
+  sint32: { type: vd, normalized: !1, integer: !0 }
+}, $d = /^(float16|float32|unorm8|snorm8|uint8|sint8|unorm16|snorm16|uint16|sint16|uint32|sint32)(?:x([1-4]))?$/;
+function Ad(t) {
+  const e = $d.exec(t);
   if (!e)
     throw new u(`[gpu-device-api] WebGL2 后端不认识顶点格式「${t}」。`);
-  const n = uf[e[1]];
+  const n = Td[e[1]];
   if (!n)
     throw new u(`[gpu-device-api] WebGL2 后端不认识顶点格式「${t}」。`);
   return {
-    size: Se(t).components,
+    size: Ae(t).components,
     type: n.type,
     normalized: n.normalized,
     integer: n.integer
   };
 }
-function St(t) {
+function Pt(t) {
   if (t === void 0) return [0, 0, 0, 1];
   if (typeof t == "number")
     return [(t >> 16 & 255) / 255, (t >> 8 & 255) / 255, (t & 255) / 255, 1];
-  if (typeof t == "string") return pf(t);
+  if (typeof t == "string") return Ed(t);
   if (Array.isArray(t) || ArrayBuffer.isView(t)) {
     const n = t;
     return [n[0] ?? 0, n[1] ?? 0, n[2] ?? 0, n[3] ?? 1];
@@ -3630,7 +3657,7 @@ function St(t) {
   const e = t;
   return [e.r, e.g, e.b, e.a ?? 1];
 }
-const df = {
+const _d = {
   transparent: [0, 0, 0, 0],
   black: [0, 0, 0, 1],
   white: [1, 1, 1, 1],
@@ -3651,8 +3678,8 @@ const df = {
   navy: [0, 0, 0.5019607843137255, 1],
   teal: [0, 0.5019607843137255, 0.5019607843137255, 1]
 };
-function pf(t) {
-  const e = t.trim().toLowerCase(), n = df[e];
+function Ed(t) {
+  const e = t.trim().toLowerCase(), n = _d[e];
   if (n) return n;
   if (e.startsWith("#")) {
     const i = e.slice(1), s = (a) => parseInt(a + a, 16) / 255;
@@ -3674,7 +3701,7 @@ function pf(t) {
     `[gpu-device-api] 无法解析颜色「${t}」。支持 CSS 十六进制、rgb()/rgba()、少量颜色名、0xRRGGBB、[r,g,b,a] 与 { r, g, b, a }。`
   );
 }
-class mf {
+class Pd {
   label;
   descriptor;
   native;
@@ -3682,15 +3709,15 @@ class mf {
   state;
   _disposed = !1;
   constructor(e, n, r = {}) {
-    this.gl = e, this.state = n, this.descriptor = li(r), this.label = r.label ?? G("sampler");
+    this.gl = e, this.state = n, this.descriptor = bi(r), this.label = r.label ?? B("sampler");
     const i = e.createSampler();
     if (!i) throw new u("[gpu-device-api] gl.createSampler() 返回 null，无法分配 sampler。");
     this.native = i;
     const s = this.descriptor;
-    if (e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, fr[s.minFilter]), e.samplerParameteri(i, e.TEXTURE_MAG_FILTER, fr[s.magFilter]), s.minFilter === "linear" && s.mipmapFilter === "linear" ? e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.LINEAR_MIPMAP_LINEAR) : s.minFilter === "linear" ? e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.LINEAR_MIPMAP_NEAREST) : s.mipmapFilter === "linear" ? e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.NEAREST_MIPMAP_LINEAR) : e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.NEAREST), e.samplerParameteri(i, e.TEXTURE_WRAP_S, tn[s.addressModeU]), e.samplerParameteri(i, e.TEXTURE_WRAP_T, tn[s.addressModeV]), e.samplerParameteri(i, e.TEXTURE_WRAP_R, tn[s.addressModeW]), e.samplerParameterf(i, e.TEXTURE_MIN_LOD, s.lodMinClamp), e.samplerParameterf(i, e.TEXTURE_MAX_LOD, s.lodMaxClamp), s.compare !== void 0 ? (e.samplerParameteri(i, e.TEXTURE_COMPARE_MODE, e.COMPARE_REF_TO_TEXTURE), e.samplerParameteri(i, e.TEXTURE_COMPARE_FUNC, vs[s.compare])) : e.samplerParameteri(i, e.TEXTURE_COMPARE_MODE, e.NONE), s.maxAnisotropy > 1) {
+    if (e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, wr[s.minFilter]), e.samplerParameteri(i, e.TEXTURE_MAG_FILTER, wr[s.magFilter]), s.minFilter === "linear" && s.mipmapFilter === "linear" ? e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.LINEAR_MIPMAP_LINEAR) : s.minFilter === "linear" ? e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.LINEAR_MIPMAP_NEAREST) : s.mipmapFilter === "linear" ? e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.NEAREST_MIPMAP_LINEAR) : e.samplerParameteri(i, e.TEXTURE_MIN_FILTER, e.NEAREST), e.samplerParameteri(i, e.TEXTURE_WRAP_S, an[s.addressModeU]), e.samplerParameteri(i, e.TEXTURE_WRAP_T, an[s.addressModeV]), e.samplerParameteri(i, e.TEXTURE_WRAP_R, an[s.addressModeW]), e.samplerParameterf(i, e.TEXTURE_MIN_LOD, s.lodMinClamp), e.samplerParameterf(i, e.TEXTURE_MAX_LOD, s.lodMaxClamp), s.compare !== void 0 ? (e.samplerParameteri(i, e.TEXTURE_COMPARE_MODE, e.COMPARE_REF_TO_TEXTURE), e.samplerParameteri(i, e.TEXTURE_COMPARE_FUNC, Ps[s.compare])) : e.samplerParameteri(i, e.TEXTURE_COMPARE_MODE, e.NONE), s.maxAnisotropy > 1) {
       const a = e.getExtension("EXT_texture_filter_anisotropic");
       if (a) {
-        const o = rh(e);
+        const o = bh(e);
         e.samplerParameterf(
           i,
           a.TEXTURE_MAX_ANISOTROPY_EXT,
@@ -3709,14 +3736,14 @@ class mf {
     this.destroy();
   }
 }
-class gf {
+class Ld {
   label;
   source;
   defines;
   glsl;
   _disposed = !1;
   constructor(e) {
-    this.label = e.label ?? G("shaderModule"), this.source = ui(e.code), this.defines = e.defines ? { ...e.defines } : {}, this.glsl = e.glsl ? { ...e.glsl } : {};
+    this.label = e.label ?? B("shaderModule"), this.source = wi(e.code), this.defines = e.defines ? { ...e.defines } : {}, this.glsl = e.glsl ? { ...e.glsl } : {};
   }
   get disposed() {
     return this._disposed;
@@ -3732,13 +3759,88 @@ class gf {
     this._disposed = !0;
   }
 }
-class br {
+const Ls = "EXT_disjoint_timer_query_webgl2", Pn = 35887;
+function Cd(t) {
+  return t.getExtension(Ls) ?? null;
+}
+class Cs {
+  label;
+  type;
+  count;
+  /** 原生表示：GL 的 query 对象数组（每条查询一个对象，见类注释）。 */
+  native;
+  /** 每条查询对应的 GL 目标（`TIME_ELAPSED_EXT` 或 `ANY_SAMPLES_PASSED`）。 */
+  target;
+  /** timestamp 查询用的扩展；occlusion 查询为 null。 */
+  timerExtension;
+  gl;
+  onDestroy;
+  _disposed = !1;
+  constructor(e, n, r = () => {
+  }) {
+    if (this.gl = e, this.onDestroy = r, this.label = n.label ?? B("querySet"), !Number.isInteger(n.count) || n.count <= 0)
+      throw new u(
+        `[gpu-device-api] QuerySet "${this.label}": count must be a positive integer, got ${String(n.count)}.`
+      );
+    if (n.type === ze.Timestamp) {
+      const s = Cd(e);
+      if (!s)
+        throw new u(
+          `[gpu-device-api] QuerySet "${this.label}": WebGL2 timestamp queries need the "${Ls}" extension, which this context does not expose. That extension is the only way to measure GPU time on WebGL2; without it, GPU timing is unavailable. Use the WebGPU backend (feature "timestamp-query") or a driver/browser build that implements it.`
+        );
+      this.timerExtension = s, this.target = s.TIME_ELAPSED_EXT;
+    } else
+      this.timerExtension = null, this.target = Pn;
+    const i = [];
+    for (let s = 0; s < n.count; s++) {
+      const a = e.createQuery();
+      if (!a) {
+        for (const o of i) e.deleteQuery(o);
+        throw new u(
+          `[gpu-device-api] QuerySet "${this.label}": gl.createQuery() returned null for entry ${s} (the context ran out of query objects or was lost).`
+        );
+      }
+      i.push(a);
+    }
+    this.type = n.type, this.count = n.count, this.native = i;
+  }
+  get disposed() {
+    return this._disposed;
+  }
+  /** 取第 index 条 GL query；越界时抛错。 */
+  queryAt(e, n) {
+    if (!Number.isInteger(e) || e < 0 || e >= this.count)
+      throw new u(
+        `[gpu-device-api] ${n}: query index ${String(e)} is outside the query set "${this.label}" range [0, ${this.count}).`
+      );
+    return this.native[e];
+  }
+  /** 销毁全部 GL query 对象。幂等。 */
+  destroy() {
+    if (!this._disposed) {
+      this._disposed = !0;
+      for (const e of this.native) this.gl.deleteQuery(e);
+      this.onDestroy(this);
+    }
+  }
+  /** `Disposable` 的别名。 */
+  dispose() {
+    this.destroy();
+  }
+}
+function Ln(t, e) {
+  if (t instanceof Cs) return t;
+  throw new u(
+    `[gpu-device-api] ${e}: expected a WebGL2 query set created by WebGL2Device.createQuerySet().`
+  );
+}
+class Tr {
   label;
   entries;
   sortedEntries;
   _disposed = !1;
   constructor(e) {
-    this.label = e.label ?? G("bindGroupLayout"), this.sortedEntries = hi(e.entries), this.entries = this.sortedEntries;
+    this.label = e.label ?? B("bindGroupLayout"), this.sortedEntries = vi(e.entries), this.entries = this.sortedEntries;
   }
   /** GL 没有布局对象，这里把条目列表本身作为「原生句柄」暴露出来。 */
   get native() {
@@ -3754,14 +3856,14 @@ class br {
     this._disposed = !0;
   }
 }
-class bf {
+class Md {
   label;
   layout;
   entries;
   byBinding;
   _disposed = !1;
   constructor(e) {
-    this.label = e.label ?? G("bindGroup"), this.layout = e.layout, this.entries = [...e.entries], this.byBinding = new Map(this.entries.map((n) => [n.binding, n])), this.validate();
+    this.label = e.label ?? B("bindGroup"), this.layout = e.layout, this.entries = [...e.entries], this.byBinding = new Map(this.entries.map((n) => [n.binding, n])), this.validate();
   }
   /** GL 没有 bind group 对象，这里暴露校验后的条目映射。 */
   get native() {
@@ -3798,13 +3900,13 @@ class bf {
     }
   }
 }
-class wr {
+class $r {
   label;
   bindGroupLayouts;
   isAuto;
   plan;
   constructor(e, n, r) {
-    if (this.label = e.label ?? G("pipelineLayout"), this.bindGroupLayouts = [...e.bindGroupLayouts], this.isAuto = n, this.bindGroupLayouts.length > 4)
+    if (this.label = e.label ?? B("pipelineLayout"), this.bindGroupLayouts = [...e.bindGroupLayouts], this.isAuto = n, this.bindGroupLayouts.length > 4)
       throw new u(
         `[gpu-device-api] pipeline layout 声明了 ${this.bindGroupLayouts.length} 个 bind group，WebGL2 后端最多支持 4 个（与 WebGPU 默认的 maxBindGroups 一致）。`
       );
@@ -3824,17 +3926,17 @@ class wr {
   dispose() {
   }
 }
-function vr(t, e) {
+function Ar(t, e) {
   return `${t}:${e}`;
 }
-function wf(t, e) {
+function Fd(t, e) {
   const n = /* @__PURE__ */ new Map(), r = /* @__PURE__ */ new Map(), i = [];
   let s = 0, a = 0;
-  t.forEach((f, p) => {
-    const m = [...f].sort((b, w) => b.binding - w.binding), g = m.filter((b) => b.type === R.Sampler || b.type === R.ComparisonSampler);
+  t.forEach((d, p) => {
+    const m = [...d].sort((b, w) => b.binding - w.binding), g = m.filter((b) => b.type === O.Sampler || b.type === O.ComparisonSampler);
     for (const b of m)
       switch (i.push(`${p}:${b.binding}:${b.type}:${b.name ?? ""}:${b.buffer?.hasDynamicOffset ? "dyn" : ""}`), b.type) {
-        case R.Uniform: {
+        case O.Uniform: {
           if (!b.name)
             throw new u(
               `[gpu-device-api] group ${p} 的 binding ${b.binding} 是 uniform buffer，但没有给 \`name\`。WebGL2 后端必须靠名字去 \`gl.getUniformBlockIndex\` 定位 GLSL 里的 uniform block，请在 BindGroupLayoutEntry 上填上着色器里使用的块名。`
@@ -3843,7 +3945,7 @@ function wf(t, e) {
             throw new u(
               `[gpu-device-api] uniform block 数量超出了 WebGL2 的 ${e.maxUniformBufferBindings} 个 binding 点。请合并 uniform block，或减少同时使用的 bind group。`
             );
-          n.set(vr(p, b.binding), {
+          n.set(Ar(p, b.binding), {
             group: p,
             binding: b.binding,
             name: b.name,
@@ -3853,7 +3955,7 @@ function wf(t, e) {
           });
           break;
         }
-        case R.Texture: {
+        case O.Texture: {
           if (!b.name)
             throw new u(
               `[gpu-device-api] group ${p} 的 binding ${b.binding} 是纹理，但没有给 \`name\`。WebGL2 后端靠它给 GLSL 的 sampler uniform 赋纹理单元，请填上着色器里的变量名。`
@@ -3862,8 +3964,8 @@ function wf(t, e) {
             throw new u(
               `[gpu-device-api] 纹理数量超出了 WebGL2 的 ${e.maxTextureUnits} 个纹理单元。请减少同时绑定的纹理，或把它们合并进纹理数组。`
             );
-          const w = vf(b, g);
-          r.set(vr(p, b.binding), {
+          const w = Rd(b, g);
+          r.set(Ar(p, b.binding), {
             group: p,
             binding: b.binding,
             name: b.name,
@@ -3873,15 +3975,15 @@ function wf(t, e) {
           });
           break;
         }
-        case R.Sampler:
-        case R.ComparisonSampler:
+        case O.Sampler:
+        case O.ComparisonSampler:
           break;
-        case R.Storage:
-        case R.ReadOnlyStorage:
+        case O.Storage:
+        case O.ReadOnlyStorage:
           throw new u(
             `[gpu-device-api] group ${p} 的 binding ${b.binding} 是 storage buffer，WebGL2 不支持（shader storage buffer 需要 GLES 3.1）。请改用 uniform buffer。`
           );
-        case R.StorageTexture:
+        case O.StorageTexture:
           throw new u(
             `[gpu-device-api] group ${p} 的 binding ${b.binding} 是 storage texture，WebGL2 不支持。请改用「渲染到纹理 + 采样」的方式。`
           );
@@ -3892,42 +3994,42 @@ function wf(t, e) {
       }
   });
   const o = new Set(
-    [...r.values()].map((f) => f.samplerBinding).filter((f) => f !== null)
+    [...r.values()].map((d) => d.samplerBinding).filter((d) => d !== null)
   );
-  for (const [f, p] of t.entries())
+  for (const [d, p] of t.entries())
     for (const m of p)
-      if ((m.type === R.Sampler || m.type === R.ComparisonSampler) && !o.has(m.binding))
+      if ((m.type === O.Sampler || m.type === O.ComparisonSampler) && !o.has(m.binding))
         throw new u(
-          `[gpu-device-api] group ${f} 的 sampler binding ${m.binding}` + (m.name ? `（「${m.name}」）` : "") + " 找不到配对的纹理条目。请把纹理命名为 `<名字>` 并把 sampler 命名为 `<名字>_sampler`，或把 sampler 的 binding 设为「纹理 binding + 1」。"
+          `[gpu-device-api] group ${d} 的 sampler binding ${m.binding}` + (m.name ? `（「${m.name}」）` : "") + " 找不到配对的纹理条目。请把纹理命名为 `<名字>` 并把 sampler 命名为 `<名字>_sampler`，或把 sampler 的 binding 设为「纹理 binding + 1」。"
         );
-  const l = /* @__PURE__ */ new Map(), c = /* @__PURE__ */ new Map(), h = /* @__PURE__ */ new Map(), d = /* @__PURE__ */ new Set();
-  for (const f of n.values())
-    Be(l, f.group).push(f), f.dynamic && Be(c, f.group).push(f), d.add(f.group);
-  for (const f of r.values())
-    Be(h, f.group).push(f), d.add(f.group);
-  for (const f of d)
-    Be(l, f), Be(c, f), Be(h, f);
+  const c = /* @__PURE__ */ new Map(), l = /* @__PURE__ */ new Map(), h = /* @__PURE__ */ new Map(), f = /* @__PURE__ */ new Set();
+  for (const d of n.values())
+    Ge(c, d.group).push(d), d.dynamic && Ge(l, d.group).push(d), f.add(d.group);
+  for (const d of r.values())
+    Ge(h, d.group).push(d), f.add(d.group);
+  for (const d of f)
+    Ge(c, d), Ge(l, d), Ge(h, d);
   return {
     uniformBlocks: n,
     textures: r,
-    uniformBlocksByGroup: l,
-    dynamicBlocksByGroup: c,
+    uniformBlocksByGroup: c,
+    dynamicBlocksByGroup: l,
     texturesByGroup: h,
-    requiredGroups: [...d].sort((f, p) => f - p),
+    requiredGroups: [...f].sort((d, p) => d - p),
     key: i.join("|"),
     textureUnitCount: a,
     uniformBlockCount: s
   };
 }
-function Be(t, e) {
+function Ge(t, e) {
   let n = t.get(e);
   return n || (n = [], t.set(e, n)), n;
 }
-function vf(t, e) {
+function Rd(t, e) {
   const n = t.name ?? "", r = e.find((i) => i.name === `${n}_sampler`);
   return r || e.find((i) => i.binding === t.binding + 1);
 }
-class xf {
+class Bd {
   plans = /* @__PURE__ */ new Map();
   limits;
   constructor(e) {
@@ -3936,10 +4038,10 @@ class xf {
   /** 按布局内容取计划，未命中则构建。 */
   get(e) {
     const n = e.map(
-      (s, a) => [...s].sort((o, l) => o.binding - l.binding).map((o) => `${a}:${o.binding}:${o.type}:${o.name ?? ""}:${o.buffer?.hasDynamicOffset ? "dyn" : ""}`).join(",")
+      (s, a) => [...s].sort((o, c) => o.binding - c.binding).map((o) => `${a}:${o.binding}:${o.type}:${o.name ?? ""}:${o.buffer?.hasDynamicOffset ? "dyn" : ""}`).join(",")
     ).join(";"), r = this.plans.get(n);
     if (r) return r;
-    const i = wf(e, this.limits);
+    const i = Fd(e, this.limits);
     return this.plans.set(n, i), i;
   }
   get size() {
@@ -3949,7 +4051,7 @@ class xf {
     this.plans.clear();
   }
 }
-class yf {
+class Gd {
   gl;
   state;
   programs = /* @__PURE__ */ new Map();
@@ -3971,27 +4073,27 @@ class yf {
   acquire(e, n, r) {
     const i = `${n}\0${r}`, s = this.programs.get(i);
     if (s) return s;
-    const a = this.gl, o = this.compileShader(a.VERTEX_SHADER, n, `${e} / vertex`), l = this.compileShader(a.FRAGMENT_SHADER, r, `${e} / fragment`), c = a.createProgram();
-    if (!c)
-      throw a.deleteShader(o), a.deleteShader(l), new u("[gpu-device-api] gl.createProgram() 返回 null，无法创建 program。");
-    if (a.attachShader(c, o), a.attachShader(c, l), a.linkProgram(c), a.detachShader(c, o), a.detachShader(c, l), a.deleteShader(o), a.deleteShader(l), !a.getProgramParameter(c, a.LINK_STATUS)) {
-      const p = a.getProgramInfoLog(c) ?? "(无日志)";
-      throw a.deleteProgram(c), new u(
+    const a = this.gl, o = this.compileShader(a.VERTEX_SHADER, n, `${e} / vertex`), c = this.compileShader(a.FRAGMENT_SHADER, r, `${e} / fragment`), l = a.createProgram();
+    if (!l)
+      throw a.deleteShader(o), a.deleteShader(c), new u("[gpu-device-api] gl.createProgram() 返回 null，无法创建 program。");
+    if (a.attachShader(l, o), a.attachShader(l, c), a.linkProgram(l), a.detachShader(l, o), a.detachShader(l, c), a.deleteShader(o), a.deleteShader(c), !a.getProgramParameter(l, a.LINK_STATUS)) {
+      const p = a.getProgramInfoLog(l) ?? "(无日志)";
+      throw a.deleteProgram(l), new u(
         `[gpu-device-api] program「${e}」链接失败。vertex 与 fragment 的 varying（in/out）名字、
 类型与数量必须完全对应。
 GL 日志：${p}`
       );
     }
-    const d = Yu(a, c), f = {
-      program: c,
-      reflection: d,
+    const f = lh(a, l), d = {
+      program: l,
+      reflection: f,
       blockBindings: /* @__PURE__ */ new Map(),
       samplerLocations: /* @__PURE__ */ new Map(),
       optimizedOutBlocks: [],
       label: e,
       boundPlanKey: null
     };
-    return this.programs.set(i, f), f;
+    return this.programs.set(i, d), d;
   }
   /**
    * 把绑定计划写进 program：设置 uniform block 的 binding 点、给 sampler uniform 赋纹理单元，
@@ -4029,7 +4131,7 @@ GL 日志：${p}`
 ${a}
 
 ----- 源码 -----
-${Tf(n)}`);
+${Od(n)}`);
     }
     return s;
   }
@@ -4037,32 +4139,32 @@ ${Tf(n)}`);
    * 把计划里的 block binding 与纹理单元写进 program，并做交叉校验。
    */
   bindResources(e, n, r, i) {
-    const s = this.gl, a = /* @__PURE__ */ new Map(), o = /* @__PURE__ */ new Map(), l = [], c = new Set(n.uniformBlocks.map((d) => d.name));
+    const s = this.gl, a = /* @__PURE__ */ new Map(), o = /* @__PURE__ */ new Map(), c = [], l = new Set(n.uniformBlocks.map((f) => f.name));
     if (r)
-      for (const [d, f] of r.uniformBlocks) {
-        if (!c.has(f.name)) {
-          l.push(f.name);
+      for (const [f, d] of r.uniformBlocks) {
+        if (!l.has(d.name)) {
+          c.push(d.name);
           continue;
         }
-        const p = s.getUniformBlockIndex(e, f.name);
+        const p = s.getUniformBlockIndex(e, d.name);
         if (p === s.INVALID_INDEX) {
-          l.push(f.name);
+          c.push(d.name);
           continue;
         }
-        s.uniformBlockBinding(e, p, f.blockBinding), a.set(d, f.blockBinding);
+        s.uniformBlockBinding(e, p, d.blockBinding), a.set(f, d.blockBinding);
       }
-    const h = n.uniforms.filter((d) => bs(d.glType));
+    const h = n.uniforms.filter((f) => _s(f.glType));
     if (r)
-      for (const [, d] of r.textures) {
-        const f = h.find((p) => p.name === d.name)?.location ?? s.getUniformLocation(e, d.name);
-        f && (s.uniform1i(f, d.unit), o.set(d.name, f));
+      for (const [, f] of r.textures) {
+        const d = h.find((p) => p.name === f.name)?.location ?? s.getUniformLocation(e, f.name);
+        d && (s.uniform1i(d, f.unit), o.set(f.name, d));
       }
     if (r) {
-      const d = new Set([...r.uniformBlocks.values()].map((g) => g.name)), f = n.uniformBlocks.map((g) => g.name).filter((g) => !d.has(g));
-      if (f.length > 0)
+      const f = new Set([...r.uniformBlocks.values()].map((g) => g.name)), d = n.uniformBlocks.map((g) => g.name).filter((g) => !f.has(g));
+      if (d.length > 0)
         throw new u(
-          `[gpu-device-api] program「${i}」使用了未声明的 uniform block：${f.join("、")}。
-布局里声明的块名：${[...d].join("、") || "(空)"}。
+          `[gpu-device-api] program「${i}」使用了未声明的 uniform block：${d.join("、")}。
+布局里声明的块名：${[...f].join("、") || "(空)"}。
 WebGL2 后端靠 \`BindGroupLayoutEntry.name\` 去定位 GLSL 的 uniform block，请检查两边的名字是否一致（注意 GLSL 里块名与实例名是两回事，这里要的是**块名**）。`
         );
       const p = new Set([...r.textures.values()].map((g) => g.name)), m = h.map((g) => g.name.replace(/\[0\]$/, "")).filter((g) => !p.has(g));
@@ -4075,53 +4177,53 @@ WebGL2 后端靠 \`BindGroupLayoutEntry.name\` 去定位 GLSL 的 uniform block�
     } else {
       if (n.uniformBlocks.length > 0)
         throw new u(
-          `[gpu-device-api] program「${i}」使用了 uniform block（${n.uniformBlocks.map((d) => d.name).join("、")}），但管线没有声明任何 bind group layout。`
+          `[gpu-device-api] program「${i}」使用了 uniform block（${n.uniformBlocks.map((f) => f.name).join("、")}），但管线没有声明任何 bind group layout。`
         );
       if (h.length > 0)
         throw new u(
-          `[gpu-device-api] program「${i}」使用了 sampler（${h.map((d) => `${d.name}: ${ju(d.glType)}`).join("、")}），但管线没有声明任何 bind group layout。`
+          `[gpu-device-api] program「${i}」使用了 sampler（${h.map((f) => `${f.name}: ${ah(f.glType)}`).join("、")}），但管线没有声明任何 bind group layout。`
         );
     }
-    return { blockBindings: a, samplerLocations: o, optimizedOutBlocks: l };
+    return { blockBindings: a, samplerLocations: o, optimizedOutBlocks: c };
   }
 }
-function Tf(t) {
+function Od(t) {
   const e = t.split(`
 `), n = String(e.length).length;
   return e.map((r, i) => `${String(i + 1).padStart(n, " ")} | ${r}`).join(`
 `);
 }
-function Sf(t, e) {
-  const n = t.depthStencil, r = n !== void 0 && n.format !== null, i = r && e.depth, s = t.render?.blend, a = t.fragment?.targets, l = a?.find((f) => f?.blend)?.blend ?? s;
-  let c = null;
-  l && (c = {
-    colorSrc: dt(l.color.srcFactor, "color.srcFactor"),
-    colorDst: dt(l.color.dstFactor, "color.dstFactor"),
-    colorOp: l.color.operation ? ft[l.color.operation] : ft.add,
-    alphaSrc: dt(l.alpha.srcFactor, "alpha.srcFactor"),
-    alphaDst: dt(l.alpha.dstFactor, "alpha.dstFactor"),
-    alphaOp: l.alpha.operation ? ft[l.alpha.operation] : ft.add
+function Ud(t, e) {
+  const n = t.depthStencil, r = n !== void 0 && n.format !== null, i = r && e.depth, s = t.render?.blend, a = t.fragment?.targets, c = a?.find((d) => d?.blend)?.blend ?? s;
+  let l = null;
+  c && (l = {
+    colorSrc: wt(c.color.srcFactor, "color.srcFactor"),
+    colorDst: wt(c.color.dstFactor, "color.dstFactor"),
+    colorOp: c.color.operation ? bt[c.color.operation] : bt.add,
+    alphaSrc: wt(c.alpha.srcFactor, "alpha.srcFactor"),
+    alphaDst: wt(c.alpha.dstFactor, "alpha.dstFactor"),
+    alphaOp: c.alpha.operation ? bt[c.alpha.operation] : bt.add
   });
-  const h = a?.[0]?.writeMask ?? t.render?.writeMask ?? ae.All, d = t.primitive?.cullMode ?? "none";
+  const h = a?.[0]?.writeMask ?? t.render?.writeMask ?? oe.All, f = t.primitive?.cullMode ?? "none";
   return {
     depthTest: i,
     depthWrite: n?.depthWriteEnabled ?? !0,
-    depthCompare: vs[n?.depthCompare ?? "less"],
+    depthCompare: Ps[n?.depthCompare ?? "less"],
     depthBias: [n?.depthBiasSlopeScale ?? 0, n?.depthBias ?? 0, n?.depthBiasClamp ?? 0],
     stencilEnabled: r && e.stencil,
-    blend: c,
+    blend: l,
     writeMask: [
-      (h & ae.Red) !== 0,
-      (h & ae.Green) !== 0,
-      (h & ae.Blue) !== 0,
-      (h & ae.Alpha) !== 0
+      (h & oe.Red) !== 0,
+      (h & oe.Green) !== 0,
+      (h & oe.Blue) !== 0,
+      (h & oe.Alpha) !== 0
     ],
-    cullEnabled: d !== "none",
-    cullFace: d === "none" ? hr.back : hr[d],
-    frontFace: rf[t.primitive?.frontFace ?? "ccw"]
+    cullEnabled: f !== "none",
+    cullFace: f === "none" ? br.back : br[f],
+    frontFace: bd[t.primitive?.frontFace ?? "ccw"]
   };
 }
-function $f(t, e, n = 0) {
+function Dd(t, e, n = 0) {
   e.blend ? t.setBlend(
     !0,
     e.blend.colorSrc,
@@ -4132,13 +4234,13 @@ function $f(t, e, n = 0) {
     e.blend.alphaOp
   ) : t.setBlend(!1, 0, 0, 0, 0, 0, 0), t.setColorMask(e.writeMask), t.setDepthTest(e.depthTest, e.depthWrite, e.depthCompare, e.depthBias), t.setStencilTest(e.stencilEnabled, n), t.setCull(e.cullEnabled, e.cullFace, e.frontFace);
 }
-function dt(t, e) {
-  const n = nf[t];
+function wt(t, e) {
+  const n = gd[t];
   if (n === void 0)
     throw new u(`[gpu-device-api] 未知的混合因子「${t}」（${e}）。`);
   return n;
 }
-class Af {
+class Id {
   label;
   descriptor;
   layout;
@@ -4156,7 +4258,7 @@ class Af {
       throw new u(
         "[gpu-device-api] WebGL2 后端不支持只有深度、没有片元着色器的管线（GL 的 program 必须同时链接两个阶段）。\n请提供一个写深度或写颜色的片元着色器；若只想写深度，可以在片元着色器里 `discard` 而不输出颜色。"
       );
-    this.label = e.label ?? G("renderPipeline"), this.descriptor = e, this.layout = r, this.vertexLayouts = e.vertex.buffers ? [...e.vertex.buffers] : null, this.gl = i.gl, this.state = i.state, this.limits = i.limits, this.program = n, this.plan = r === "auto" ? null : r.bindingPlan ?? null, this.topologyMode = tf[e.primitive?.topology ?? "triangle-list"];
+    this.label = e.label ?? B("renderPipeline"), this.descriptor = e, this.layout = r, this.vertexLayouts = e.vertex.buffers ? [...e.vertex.buffers] : null, this.gl = i.gl, this.state = i.state, this.limits = i.limits, this.program = n, this.plan = r === "auto" ? null : r.bindingPlan ?? null, this.topologyMode = md[e.primitive?.topology ?? "triangle-list"];
   }
   /** WebGL2 在创建时就完成了编译。 */
   get compiled() {
@@ -4183,19 +4285,19 @@ class Af {
    * 按渲染目标形态解析状态。同一形态只解析一次；顶点布局也在这里做一次校验。
    */
   resolveVariant(e = {}) {
-    const n = e.depthFormat ?? null, r = e.sampleCount ?? 1, i = e.vertexLayouts ?? this.vertexLayouts ?? [], s = `${n ?? "none"}|${r}|${di(i)}`, a = this.variantCache.get(s);
+    const n = e.depthFormat ?? null, r = e.sampleCount ?? 1, i = e.vertexLayouts ?? this.vertexLayouts ?? [], s = `${n ?? "none"}|${r}|${Si(i)}`, a = this.variantCache.get(s);
     if (a) return a;
     if (i.length > 0)
-      for (const h of i) fi(h, this.limits);
-    const o = new Set(i.flatMap((h) => h.attributes.map((d) => d.shaderLocation))), l = new Set(this.program.reflection.attributes.map((h) => h.location));
-    for (const h of l)
+      for (const h of i) xi(h, this.limits);
+    const o = new Set(i.flatMap((h) => h.attributes.map((f) => f.shaderLocation))), c = new Set(this.program.reflection.attributes.map((h) => h.location));
+    for (const h of c)
       if (!o.has(h))
         throw new u(
           `[gpu-device-api] 管线「${this.label}」的顶点着色器声明了 location ${h}，但 vertex.buffers 里没有对应的属性。请检查 VertexBufferLayout 的 shaderLocation。`
         );
-    const c = {
+    const l = {
       key: s,
-      renderState: Sf(this.descriptor, {
+      renderState: Ud(this.descriptor, {
         depth: n !== null,
         stencil: n === "depth24plus-stencil8"
       }),
@@ -4205,7 +4307,7 @@ class Af {
       vertexArrays: /* @__PURE__ */ new Map(),
       vertexArrayLookup: null
     };
-    return this.variantCache.set(s, c), c;
+    return this.variantCache.set(s, l), l;
   }
   /** core 接口要求的 `resolve`；WebGL2 下它只做一次形态缓存查询。 */
   resolve(e = {}) {
@@ -4213,7 +4315,7 @@ class Af {
   }
   /** 把该管线的固定功能状态写入 GL 状态缓存。 */
   applyState(e, n = 0) {
-    this.state.useProgram(this.program.program), $f(this.state, e.renderState, n);
+    this.state.useProgram(this.program.program), Dd(this.state, e.renderState, n);
   }
   /**
    * 取得（必要时创建）一个顶点数组对象。
@@ -4230,31 +4332,31 @@ class Af {
     const a = e.vertexArrayLookup;
     if (i > 0 && a !== null && a.revision === i)
       return a.vertexArray;
-    const o = _f(s, n, r), l = e.vertexArrays.get(o);
-    if (l)
-      return i > 0 && (e.vertexArrayLookup = { revision: i, vertexArray: l }), l;
-    const c = this.gl, h = c.createVertexArray();
+    const o = Vd(s, n, r), c = e.vertexArrays.get(o);
+    if (c)
+      return i > 0 && (e.vertexArrayLookup = { revision: i, vertexArray: c }), c;
+    const l = this.gl, h = l.createVertexArray();
     if (!h)
       throw new u("[gpu-device-api] gl.createVertexArray() 返回 null，无法创建 VAO。");
     this.state.bindVertexArray(h);
-    for (let d = 0; d < s.length; d++) {
-      const f = s[d], p = n[d];
-      if (!f || !p) continue;
-      c.bindBuffer(c.ARRAY_BUFFER, p.buffer.native);
-      const m = f.stepMode === "instance" ? 1 : 0;
-      for (const g of f.attributes) {
-        const b = ff(g.format), w = p.offset + g.offset;
-        c.enableVertexAttribArray(g.shaderLocation), b.integer ? c.vertexAttribIPointer(g.shaderLocation, b.size, b.type, f.arrayStride, w) : c.vertexAttribPointer(
+    for (let f = 0; f < s.length; f++) {
+      const d = s[f], p = n[f];
+      if (!d || !p) continue;
+      l.bindBuffer(l.ARRAY_BUFFER, p.buffer.native);
+      const m = d.stepMode === "instance" ? 1 : 0;
+      for (const g of d.attributes) {
+        const b = Ad(g.format), w = p.offset + g.offset;
+        l.enableVertexAttribArray(g.shaderLocation), b.integer ? l.vertexAttribIPointer(g.shaderLocation, b.size, b.type, d.arrayStride, w) : l.vertexAttribPointer(
           g.shaderLocation,
           b.size,
           b.type,
           b.normalized,
-          f.arrayStride,
+          d.arrayStride,
           w
-        ), c.vertexAttribDivisor(g.shaderLocation, m);
+        ), l.vertexAttribDivisor(g.shaderLocation, m);
       }
     }
-    return r && c.bindBuffer(c.ELEMENT_ARRAY_BUFFER, r), this.state.invalidateBufferBindings(), e.vertexArrays.set(o, h), i > 0 && (e.vertexArrayLookup = { revision: i, vertexArray: h }), h;
+    return r && l.bindBuffer(l.ELEMENT_ARRAY_BUFFER, r), this.state.invalidateBufferBindings(), e.vertexArrays.set(o, h), i > 0 && (e.vertexArrayLookup = { revision: i, vertexArray: h }), h;
   }
   /** 当前缓存了多少个 VAO（跨全部形态）。 */
   get vertexArrayCount() {
@@ -4274,7 +4376,7 @@ class Af {
     }
   }
 }
-function _f(t, e, n) {
+function Vd(t, e, n) {
   const r = [];
   for (let i = 0; i < t.length; i++) {
     const s = e[i], a = t[i];
@@ -4282,17 +4384,17 @@ function _f(t, e, n) {
       r.push(`${i}:-`);
       continue;
     }
-    Bt(s.offset, "setVertexBuffer 的 offset"), r.push(`${i}:${s.buffer.id}:${s.offset}:${s.size}:${a.arrayStride}:${a.stepMode ?? "vertex"}`);
+    Te(s.offset, "setVertexBuffer 的 offset"), r.push(`${i}:${s.buffer.id}:${s.offset}:${s.size}:${a.arrayStride}:${a.stepMode ?? "vertex"}`);
   }
-  return r.push(`idx:${n ? Lf(n) : "-"}`), r.join("|");
+  return r.push(`idx:${n ? kd(n) : "-"}`), r.join("|");
 }
-const xr = /* @__PURE__ */ new WeakMap();
-let Ef = 1;
-function Lf(t) {
-  let e = xr.get(t);
-  return e === void 0 && (e = Ef++, xr.set(t, e)), e;
+const _r = /* @__PURE__ */ new WeakMap();
+let Nd = 1;
+function kd(t) {
+  let e = _r.get(t);
+  return e === void 0 && (e = Nd++, _r.set(t, e)), e;
 }
-class Cf {
+class zd {
   label;
   descriptor;
   layout = "auto";
@@ -4316,16 +4418,16 @@ class Cf {
   dispose() {
   }
 }
-function Mf(t, e, n) {
+function Wd(t, e, n) {
   throw new u(
     `[gpu-device-api] 传入了不属于 WebGL2 后端的${t}（期望 ${n}，实际是 ${e?.constructor?.name ?? typeof e}）。
 资源不能跨后端混用：WebGPU 后端创建的资源只能交给 WebGPU 后端使用，反之亦然。`
   );
 }
-function yr(t) {
-  return t instanceof ws ? t : Mf("texture view", t, "WebGL2TextureView");
+function Er(t) {
+  return t instanceof Es ? t : Wd("texture view", t, "WebGL2TextureView");
 }
-class Pf {
+class qd {
   label;
   colorFormats;
   depthFormat;
@@ -4353,19 +4455,19 @@ class Pf {
       throw new u(
         `[gpu-device-api] 渲染目标尺寸必须为正数，实际是 ${r}x${i}。未显式指定 width/height 时会取当前绘制缓冲大小，请确认 canvas 已经完成布局。`
       );
-    this.gl = n.gl, this.state = n.state, this.options = n, this.label = e.label ?? G("renderTarget"), this._width = r, this._height = i, this.mipLevelCount = e.mipLevelCount ?? 1;
-    const s = Ff(e.color);
+    this.gl = n.gl, this.state = n.state, this.options = n, this.label = e.label ?? B("renderTarget"), this._width = r, this._height = i, this.mipLevelCount = e.mipLevelCount ?? 1;
+    const s = jd(e.color);
     if (s.length > 4)
       throw new u(
         `[gpu-device-api] 渲染目标最多支持 4 个颜色附件，实际请求了 ${s.length} 个。`
       );
-    for (const l of s)
-      if (!z(l).attachment)
+    for (const c of s)
+      if (!z(c).attachment)
         throw new u(
-          `[gpu-device-api] 纹理格式「${l}」在 WebGL2 下不能作为颜色附件。`
+          `[gpu-device-api] 纹理格式「${c}」在 WebGL2 下不能作为颜色附件。`
         );
     this.colorFormats = s;
-    const a = Bf(e.depth);
+    const a = Qd(e.depth);
     if (a !== null && !z(a).depth)
       throw new u(`[gpu-device-api] 深度附件格式「${a}」不是深度格式。`);
     this.depthFormat = a;
@@ -4438,9 +4540,9 @@ class Pf {
     const n = this.gl;
     if (n.bindFramebuffer(n.FRAMEBUFFER, this.framebuffer), e.loadOp !== "load" || this.depthTexture !== null && e.depthLoadOp !== "load") {
       if (this.state.setScissor(!1, 0, 0, this._width, this._height), e.loadOp !== "load") {
-        const [i, s, a, o] = St(e.clearColor), l = new Float32Array([i, s, a, o]);
-        for (let c = 0; c < this.colorTextures.length; c++)
-          n.clearBufferfv(n.COLOR, c, l);
+        const [i, s, a, o] = Pt(e.clearColor), c = new Float32Array([i, s, a, o]);
+        for (let l = 0; l < this.colorTextures.length; l++)
+          n.clearBufferfv(n.COLOR, l, c);
       }
       if (this.depthTexture && e.depthLoadOp !== "load") {
         const i = z(this.depthFormat);
@@ -4483,16 +4585,16 @@ class Pf {
     return this.depthView;
   }
   createAttachments(e) {
-    const n = x.RenderAttachment | x.TextureBinding | x.CopySrc | e;
+    const n = v.RenderAttachment | v.TextureBinding | v.CopySrc | e;
     this.colorTextures = this.colorFormats.map(
       (r, i) => this.options.createTexture(r, this._width, this._height, n, `${this.label}:color${i}`)
     ), this.depthTexture = this.depthFormat === null ? null : this.options.createTexture(
       this.depthFormat,
       this._width,
       this._height,
-      x.RenderAttachment | x.TextureBinding,
+      v.RenderAttachment | v.TextureBinding,
       `${this.label}:depth`
-    ), this.colorViews = this.colorTextures.map((r) => yr(r.createView())), this.depthView = this.depthTexture ? yr(this.depthTexture.createView()) : null;
+    ), this.colorViews = this.colorTextures.map((r) => Er(r.createView())), this.depthView = this.depthTexture ? Er(this.depthTexture.createView()) : null;
   }
   attach() {
     const e = this.gl, n = e.getParameter(e.FRAMEBUFFER_BINDING);
@@ -4511,7 +4613,7 @@ class Pf {
       );
   }
 }
-function Ff(t) {
+function jd(t) {
   if (t === void 0) return ["rgba8unorm"];
   if (typeof t == "string") return [t];
   const e = [...t];
@@ -4519,29 +4621,29 @@ function Ff(t) {
     throw new u("[gpu-device-api] 渲染目标的 color 数组不能为空。");
   return e;
 }
-function Bf(t) {
+function Qd(t) {
   return t == null || t === !1 ? null : t === !0 ? "depth24plus" : t;
 }
-const Tr = /* @__PURE__ */ new WeakMap();
-function Xn(t) {
-  let e = Tr.get(t);
-  return e === void 0 && (e = t.getExtension("EXT_debug_marker") ?? null, Tr.set(t, e)), e;
+const Pr = /* @__PURE__ */ new WeakMap();
+function Jn(t) {
+  let e = Pr.get(t);
+  return e === void 0 && (e = t.getExtension("EXT_debug_marker") ?? null, Pr.set(t, e)), e;
 }
-function xs(t, e) {
-  Xn(t)?.pushGroupMarkerEXT?.(e);
+function Ms(t, e) {
+  Jn(t)?.pushGroupMarkerEXT?.(e);
 }
-function ys(t) {
-  Xn(t)?.popGroupMarkerEXT?.();
+function Fs(t) {
+  Jn(t)?.popGroupMarkerEXT?.();
 }
-function Ts(t, e) {
-  Xn(t)?.insertEventMarkerEXT?.(e);
+function Rs(t, e) {
+  Jn(t)?.insertEventMarkerEXT?.(e);
 }
-function Sr(t) {
+function Lr(t) {
   return !!t && typeof t == "object" && t.isDefaultFramebuffer === !0;
 }
-class $r {
+class Cr {
   label;
-  dimension = xt.D2;
+  dimension = At.D2;
   format;
   usage;
   width;
@@ -4596,7 +4698,7 @@ class $r {
     this.destroy();
   }
 }
-class Rf {
+class Xd {
   canvas;
   gl;
   _device = null;
@@ -4612,7 +4714,7 @@ class Rf {
   samples = null;
   constructor(e) {
     this.gl = e.gl, this.canvas = e.canvas, this._format = e.format ?? "rgba8unorm";
-    const n = bi(), r = je(e.canvas);
+    const n = _i(), r = He(e.canvas);
     this._pixelRatio = n, this._width = Math.max(1, Math.floor(r.width * n)), this._height = Math.max(1, Math.floor(r.height * n)), this.applyBackingSize();
   }
   get device() {
@@ -4645,7 +4747,7 @@ class Rf {
       throw new u(
         "[gpu-device-api] WebGL2CanvasContext.configure: canvas MSAA is decided by the `antialias` attribute of the GL context, so sampleCount cannot be changed here. Create the device with createDevice({ contextAttributes: { antialias: true } }) instead, or use an offscreen RenderTarget (WebGL2 cannot multisample a texture attachment at all)."
       );
-    if (e.format !== void 0 && !Qh(e.format))
+    if (e.format !== void 0 && !dd(e.format))
       throw new u(
         `[gpu-device-api] canvas 格式「${e.format}」不能作为颜色附件。`
       );
@@ -4673,11 +4775,11 @@ WebGL2 的 context 是从 canvas 上取的，一个 device 只能服务创建它
       throw new RangeError(`[gpu-device-api] setPixelRatio() 需要正数，实际是 ${e}。`);
     if (e === this._pixelRatio) return;
     this._pixelRatio = e;
-    const n = je(this.canvas);
+    const n = He(this.canvas);
     this._width = Math.max(1, Math.floor(n.width * e)), this._height = Math.max(1, Math.floor(n.height * e)), this.applyBackingSize();
   }
   resize() {
-    const e = je(this.canvas), n = Math.max(1, Math.floor(e.width * this._pixelRatio)), r = Math.max(1, Math.floor(e.height * this._pixelRatio));
+    const e = He(this.canvas), n = Math.max(1, Math.floor(e.width * this._pixelRatio)), r = Math.max(1, Math.floor(e.height * this._pixelRatio));
     return n === this._width && r === this._height ? !1 : (this._width = n, this._height = r, this.applyBackingSize(), !0);
   }
   getCurrentFrameTarget() {
@@ -4685,12 +4787,12 @@ WebGL2 的 context 是从 canvas 上取的，一个 device 只能服务创建它
       throw new u(
         "[gpu-device-api] canvas 还没有 configure()，无法获取帧目标。请先调用 device.createCanvasContext(canvas)（它会自动完成配置）。"
       );
-    const e = this.sampleCount(), n = new $r(
+    const e = this.sampleCount(), n = new Cr(
       this._width,
       this._height,
       this._format,
       e,
-      x.RenderAttachment
+      v.RenderAttachment
     );
     return {
       texture: n,
@@ -4732,12 +4834,12 @@ WebGL2 的 context 是从 canvas 上取的，一个 device 只能服务创建它
    */
   createDepthAttachment(e) {
     if (this.depthRequested === !1 || this.depthBits === 0) return null;
-    const n = new $r(
+    const n = new Cr(
       this._width,
       this._height,
-      gi,
+      Ai,
       1,
-      x.RenderAttachment,
+      v.RenderAttachment,
       "canvas:defaultFramebufferDepth",
       "depth-only"
     );
@@ -4761,9 +4863,9 @@ WebGL2 的 context 是从 canvas 上取的，一个 device 只能服务创建它
     this.canvas.width = this._width, this.canvas.height = this._height, this._device?.invalidateState();
   }
 }
-const Gf = [];
-let pt = 1;
-class Uf {
+const Yd = [];
+let yt = 1;
+class Hd {
   label;
   gl;
   state;
@@ -4778,6 +4880,18 @@ class Uf {
   stencilReference = 0;
   _ended = !1;
   /**
+   * 本通道正在计时的时间查询（`beginQuery` 已在构造时下发，`end()` 时收尾）。
+   *
+   * GL 的时间查询是**区间**测量：`beginQuery(TIME_ELAPSED_EXT, q)` → `endQuery` 之间的 GPU
+   * 时间会写进 q。所以它包住的是「通道开始清屏/绑定 framebuffer 之后到 end() 之前」这段，
+   * 对单通道帧来说就是整个渲染阶段。
+   */
+  pendingTimerQueries = null;
+  /** 是否有正在进行的遮挡查询（GL 要求 beginQuery/endQuery 严格配对）。 */
+  occlusionQueryOpen = !1;
+  /** 本通道声明了 occlusionQuerySet 时的 query set（决定 beginOcclusionQuery 是否可用）。 */
+  occlusionQuerySet = null;
+  /**
    * 变体请求对象：通道的颜色/深度格式在构造时就定了，生命周期内不会变，
    * 所以只分配一次（原来每次解析变体都要新建一个对象）。
    */
@@ -4786,7 +4900,7 @@ class Uf {
   variantPipeline = null;
   variantValue = null;
   /** 当前顶点/索引绑定内容的版本号（见模块级 nextBindingRevision）。 */
-  bindingRevision = pt++;
+  bindingRevision = yt++;
   constructor(e, n) {
     this.label = e.label ?? "renderPass", this.gl = n.gl, this.state = n.state, this.options = n;
     const r = e.target;
@@ -4808,16 +4922,16 @@ class Uf {
         throw new u(
           `[gpu-device-api] 渲染通道「${this.label}」没有任何附件。请提供 target，或至少一个 colorAttachment / depthStencilAttachment。`
         );
-      if (this.colorFormats = i.map((a) => a.view.texture.format), this.depthFormat = e.depthStencilAttachment?.view.texture.format ?? null, i.some((a) => Sr(a.view)) || e.depthStencilAttachment !== void 0 && e.depthStencilAttachment !== null && Sr(e.depthStencilAttachment.view))
+      if (this.colorFormats = i.map((a) => a.view.texture.format), this.depthFormat = e.depthStencilAttachment?.view.texture.format ?? null, i.some((a) => Lr(a.view)) || e.depthStencilAttachment !== void 0 && e.depthStencilAttachment !== null && Lr(e.depthStencilAttachment.view))
         this.beginDefaultFramebufferPass(e);
       else {
         const a = n.framebuffers.acquire(e);
         this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, a), this.state.invalidate();
-        const o = i[0], l = o.view.texture.width, c = o.view.texture.height;
-        this.clearRawAttachments(e, a), this.gl.viewport(0, 0, l, c), this.state.setViewport(0, 0, l, c);
+        const o = i[0], c = o.view.texture.width, l = o.view.texture.height;
+        this.clearRawAttachments(e, a), this.gl.viewport(0, 0, c, l), this.state.setViewport(0, 0, c, l);
       }
     }
-    this.variantShape = { colorFormats: this.colorFormats, sampleCount: 1, depthFormat: this.depthFormat };
+    this.variantShape = { colorFormats: this.colorFormats, sampleCount: 1, depthFormat: this.depthFormat }, this.beginQuerySetup(e);
   }
   get ended() {
     return this._ended;
@@ -4833,9 +4947,9 @@ class Uf {
     const i = this.pipeline;
     if (i && i.layout !== "auto" && n) {
       const s = i.layout.bindGroupLayouts[e];
-      if (s && s !== n.layout && !(s.sortedEntries.length === n.layout.sortedEntries.length && s.sortedEntries.every((o, l) => {
-        const c = n.layout.sortedEntries[l];
-        return o.binding === c.binding && o.type === c.type && o.name === c.name;
+      if (s && s !== n.layout && !(s.sortedEntries.length === n.layout.sortedEntries.length && s.sortedEntries.every((o, c) => {
+        const l = n.layout.sortedEntries[c];
+        return o.binding === l.binding && o.type === l.type && o.name === l.name;
       })))
         throw new u(
           `[gpu-device-api] setBindGroup(${e}, ...) 传入的 bind group 与管线「${i.label}」在该 group 上声明的布局不一致（传入「${n.layout.label}」，期望「${s.label}」）。`
@@ -4853,12 +4967,12 @@ class Uf {
     const s = this.vertexBuffers[e];
     if (n === null) {
       if (!s) return;
-      this.vertexBuffers[e] = null, this.bindingRevision = pt++;
+      this.vertexBuffers[e] = null, this.bindingRevision = yt++;
       return;
     }
     if (s && s.buffer === n && s.offset === r && s.size === i) return;
     const a = s ?? { buffer: n, offset: r, size: i };
-    a.buffer = n, a.offset = r, a.size = i, this.vertexBuffers[e] = a, this.bindingRevision = pt++;
+    a.buffer = n, a.offset = r, a.size = i, this.vertexBuffers[e] = a, this.bindingRevision = yt++;
   }
   setIndexBuffer(e, n, r = 0, i = -1) {
     if (this.assertOpen("setIndexBuffer"), !e.isIndexBuffer)
@@ -4866,7 +4980,7 @@ class Uf {
         `[gpu-device-api] buffer「${e.label}」的 usage 里没有 \`BufferUsage.Index\`，而 WebGL2 的绑定目标在创建时就永久固定（索引缓冲必须一开始就按 Index 用途创建），它无法再绑到 ELEMENT_ARRAY_BUFFER。请在 createBuffer() 时加上 \`BufferUsage.Index\`。`
       );
     const s = this.indexBuffer;
-    s && s.buffer === e && s.format === n && s.offset === r && s.size === i || (s ? (s.buffer = e, s.format = n, s.offset = r, s.size = i) : this.indexBuffer = { buffer: e, format: n, offset: r, size: i }, this.bindingRevision = pt++);
+    s && s.buffer === e && s.format === n && s.offset === r && s.size === i || (s ? (s.buffer = e, s.format = n, s.offset = r, s.size = i) : this.indexBuffer = { buffer: e, format: n, offset: r, size: i }, this.bindingRevision = yt++);
   }
   setViewport(e, n, r, i, s = 0, a = 1) {
     this.assertOpen("setViewport"), (s !== 0 || a !== 1) && this.gl.depthRange(s, a), this.state.setViewport(e, n, r, i);
@@ -4875,7 +4989,7 @@ class Uf {
     this.assertOpen("setScissorRect"), this.state.setScissor(!0, e, n, r, i);
   }
   setBlendConstant(e) {
-    this.assertOpen("setBlendConstant"), this.state.setBlendConstant(St(e));
+    this.assertOpen("setBlendConstant"), this.state.setBlendConstant(Pt(e));
   }
   setStencilReference(e) {
     this.assertOpen("setStencilReference"), this.stencilReference = e, this.pipeline && this.pipeline.applyState(this.resolvedVariant(this.pipeline), e);
@@ -4900,11 +5014,11 @@ class Uf {
         "[gpu-device-api] drawIndexed() 之前必须先调用 setIndexBuffer()。"
       );
     this.assertNoUnsupportedInstancing(e.firstInstance ?? 0, e.baseVertex ?? 0);
-    const i = e.instanceCount ?? 1, s = r.offset + (e.firstIndex ?? 0) * da(r.format);
+    const i = e.instanceCount ?? 1, s = r.offset + (e.firstIndex ?? 0) * _a(r.format);
     this.beginDraw(n, r), this.gl.drawElementsInstanced(
       n.mode,
       e.indexCount,
-      sf[r.format],
+      wd[r.format],
       s,
       i
     ), this.options.onDraw?.();
@@ -4920,22 +5034,84 @@ class Uf {
     );
   }
   /**
+   * 开始一条遮挡查询（对应 `gl.beginQuery(ANY_SAMPLES_PASSED, query)`）。
+   *
+   * `ANY_SAMPLES_PASSED` 是 WebGL2 核心功能，不需要扩展；计数器记录的是「有多少个采样通过了
+   * 深度/模板测试」（≥1 即表示「有东西可见」）。结果由 `Device.readQuerySet()` 读回。
+   */
+  beginOcclusionQuery(e) {
+    this.assertOpen("beginOcclusionQuery");
+    const n = this.occlusionQuerySet;
+    if (!n)
+      throw new u(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: the pass was created without RenderPassDescriptor.occlusionQuerySet, so there is nowhere to store the sample count.`
+      );
+    if (this.occlusionQueryOpen)
+      throw new u(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: an occlusion query is already open; call endOcclusionQuery() first (GL allows only one active query per target).`
+      );
+    this.gl.beginQuery(Pn, n.queryAt(e, `${this.label}.beginOcclusionQuery`)), this.occlusionQueryOpen = !0;
+  }
+  /** 结束最近一次 {@link beginOcclusionQuery}。 */
+  endOcclusionQuery() {
+    if (this.assertOpen("endOcclusionQuery"), !this.occlusionQueryOpen)
+      throw new u(
+        `[gpu-device-api] RenderPass "${this.label}".endOcclusionQuery: no occlusion query is open.`
+      );
+    this.gl.endQuery(Pn), this.occlusionQueryOpen = !1;
+  }
+  /**
    * 调试分组：WebGL2 靠 `EXT_debug_marker` 实现，扩展不可用时是空操作
    * （只影响抓帧工具的分组显示，不影响渲染结果）。
    */
   pushDebugGroup(e) {
-    xs(this.gl, e);
+    Ms(this.gl, e);
   }
   popDebugGroup() {
-    ys(this.gl);
+    Fs(this.gl);
   }
   insertDebugMarker(e) {
-    Ts(this.gl, e);
+    Rs(this.gl, e);
   }
   end() {
-    this._ended || (this._ended = !0, this.state.invalidate());
+    if (!this._ended) {
+      if (this.occlusionQueryOpen)
+        throw new u(
+          `[gpu-device-api] RenderPass "${this.label}".end: an occlusion query is still open; call endOcclusionQuery() before ending the pass.`
+        );
+      this.endTimerQuery(), this._ended = !0, this.state.invalidate();
+    }
   }
   /* ------------------------------------------------------------------ 内部 ------------------- */
+  /**
+   * 处理 `RenderPassDescriptor.timestampWrites` 与 `occlusionQuerySet`。
+   *
+   * **WebGL2 的 timestamp 语义与 WebGPU 不同**（这一点必须看清）：
+   * GL 的 `TIME_ELAPSED_EXT` 测量的是 `beginQuery` → `endQuery` 之间的**区间耗时**，
+   * 而 WebGPU 写的是「通道开始的时刻」与「通道结束的时刻」两个独立时间戳。
+   * 所以这里把区间耗时写进 `beginningOfPassWriteIndex`（只给了 end 时用 end 那个下标），
+   * 另一个下标保持 0；读回后的解释也相应不同（见 gfx 的 `GpuTiming`）。
+   */
+  beginQuerySetup(e) {
+    e.occlusionQuerySet && (this.occlusionQuerySet = Ln(
+      e.occlusionQuerySet,
+      `${this.label}.occlusionQuerySet`
+    ));
+    const n = e.timestampWrites;
+    if (!n) return;
+    const r = `${this.label}.timestampWrites`;
+    yi(n, r);
+    const i = Ln(n.querySet, `${r}.querySet`), s = n.beginningOfPassWriteIndex ?? n.endOfPassWriteIndex;
+    if (s === void 0)
+      throw new u(`[gpu-device-api] ${r}: no write index was given.`);
+    const a = i.queryAt(s, r);
+    this.gl.beginQuery(i.target, a), this.pendingTimerQueries = { target: i.target, query: a };
+  }
+  /** 收尾时间查询；没有正在进行的查询时是空操作。 */
+  endTimerQuery() {
+    const e = this.pendingTimerQueries;
+    e && (this.pendingTimerQueries = null, this.gl.endQuery(e.target));
+  }
   /**
    * 取当前通道形态下已解析好的管线变体。
    *
@@ -4983,27 +5159,27 @@ class Uf {
         if (!i) continue;
         const s = n.uniformBlocksByGroup.get(r);
         if (s) {
-          const o = n.dynamicBlocksByGroup.get(r) ?? Gf, l = o.length > 0 ? this.dynamicOffsets.get(r) : void 0;
-          if (o.length > 0 && (l === void 0 || l.length < o.length))
+          const o = n.dynamicBlocksByGroup.get(r) ?? Yd, c = o.length > 0 ? this.dynamicOffsets.get(r) : void 0;
+          if (o.length > 0 && (c === void 0 || c.length < o.length))
             throw new u(
-              `[gpu-device-api] setBindGroup(${r}, ...) 缺少动态偏移：布局里有 ${o.length} 个带 hasDynamicOffset 的 uniform buffer，但只提供了 ${l?.length ?? 0} 个偏移值。`
+              `[gpu-device-api] setBindGroup(${r}, ...) 缺少动态偏移：布局里有 ${o.length} 个带 hasDynamicOffset 的 uniform buffer，但只提供了 ${c?.length ?? 0} 个偏移值。`
             );
-          let c = 0;
+          let l = 0;
           for (const h of s) {
-            const d = i.entry(h.binding);
-            if (!d)
+            const f = i.entry(h.binding);
+            if (!f)
               throw new u(
                 `[gpu-device-api] bind group「${i.label}」缺少 binding ${h.binding}（布局要求提供 uniform buffer）。`
               );
-            const f = d.resource, p = f.buffer, m = f.offset ?? 0;
+            const d = f.resource, p = d.buffer, m = d.offset ?? 0;
             if (h.dynamic) {
-              const g = this.state.uniformBufferOffsetAlignment(), b = l[c++] ?? 0;
+              const g = this.state.uniformBufferOffsetAlignment(), b = c[l++] ?? 0;
               if (g > 0 && b % g !== 0)
                 throw new u(
                   `[gpu-device-api] 动态偏移 ${b} 不是 UNIFORM_BUFFER_OFFSET_ALIGNMENT（${g}）的倍数。uniform arena 的每段长度必须按这个对齐值取整。`
                 );
-              const w = m + b, T = f.size ?? p.size - w;
-              this.state.bindUniformBuffer(h.blockBinding, p.native, w, T);
+              const w = m + b, S = d.size ?? p.size - w;
+              this.state.bindUniformBuffer(h.blockBinding, p.native, w, S);
             } else
               this.state.bindUniformBuffer(h.blockBinding, p.native, 0, -1);
           }
@@ -5011,20 +5187,20 @@ class Uf {
         const a = n.texturesByGroup.get(r);
         if (a)
           for (const o of a) {
-            const l = i.entry(o.binding);
-            if (!l)
+            const c = i.entry(o.binding);
+            if (!c)
               throw new u(
                 `[gpu-device-api] bind group「${i.label}」缺少 binding ${o.binding}（布局要求提供纹理「${o.name}」）。`
               );
-            const c = l.resource.view;
-            if (this.assertViewRangeSupported(c), this.state.bindTexture(o.unit, c.target, c.glTexture), o.samplerBinding !== null) {
+            const l = c.resource.view;
+            if (this.assertViewRangeSupported(l), this.state.bindTexture(o.unit, l.target, l.glTexture), o.samplerBinding !== null) {
               const h = i.entry(o.samplerBinding);
               if (!h)
                 throw new u(
                   `[gpu-device-api] bind group「${i.label}」缺少 binding ${o.samplerBinding}（纹理「${o.name}」配套的 sampler「${o.samplerName ?? "未命名"}」）。`
                 );
-              const d = h.resource.sampler;
-              this.state.bindSampler(o.unit, d.native);
+              const f = h.resource.sampler;
+              this.state.bindSampler(o.unit, f.native);
             }
           }
       }
@@ -5057,8 +5233,8 @@ class Uf {
     const r = this.gl;
     this.state.setScissor(!1, 0, 0, r.drawingBufferWidth, r.drawingBufferHeight), e.colorAttachments.forEach((a, o) => {
       if (!a || a.loadOp === "load") return;
-      const [l, c, h, d] = St(a.clearValue);
-      r.clearBufferfv(r.COLOR, o, new Float32Array([l, c, h, d]));
+      const [c, l, h, f] = Pt(a.clearValue);
+      r.clearBufferfv(r.COLOR, o, new Float32Array([c, l, h, f]));
     });
     const s = e.depthStencilAttachment;
     if (s && s.depthLoadOp !== "load") {
@@ -5081,8 +5257,8 @@ class Uf {
     this.state.setScissor(!1, 0, 0, r, i);
     const s = e.colorAttachments.find((o) => o !== null);
     if (s && s.loadOp !== "load") {
-      const [o, l, c, h] = St(s.clearValue);
-      n.clearColor(o, l, c, h), n.clear(n.COLOR_BUFFER_BIT);
+      const [o, c, l, h] = Pt(s.clearValue);
+      n.clearColor(o, c, l, h), n.clear(n.COLOR_BUFFER_BIT);
     }
     const a = e.depthStencilAttachment;
     a && a.depthLoadOp !== "load" && (n.depthMask(!0), n.clearDepth(a.depthClearValue ?? 1), n.clear(n.DEPTH_BUFFER_BIT)), n.viewport(0, 0, r, i), this.state.setViewport(0, 0, r, i);
@@ -5094,43 +5270,43 @@ class Uf {
       );
   }
 }
-const he = `[gpu-device-api] WebGL2 后端不支持 compute pass。计算着色器需要 GLES 3.1，而 WebGL2 只提供 GLES 3.0。
+const de = `[gpu-device-api] WebGL2 后端不支持 compute pass。计算着色器需要 GLES 3.1，而 WebGL2 只提供 GLES 3.0。
 可选方案：
   1) 切到 WebGPU 后端（createDevice({ backend: 'auto' }) 会优先选它）；
   2) 在 WebGL2 上用「全屏三角形 + 浮点纹理」模拟通用计算：把数据编码进纹理，用片元着色器当 kernel，结果渲染到另一张纹理。`;
-class Of {
+class Zd {
   label = "computePass";
   constructor(e) {
-    throw new u(he);
+    throw new u(de);
   }
   get ended() {
     return !0;
   }
   setPipeline(e) {
-    throw new u(he);
+    throw new u(de);
   }
   setBindGroup(e, n, r) {
-    throw new u(he);
+    throw new u(de);
   }
   dispatchWorkgroups(e, n, r) {
-    throw new u(he);
+    throw new u(de);
   }
   dispatchWorkgroupsIndirect(e, n) {
-    throw new u(he);
+    throw new u(de);
   }
   pushDebugGroup(e) {
-    throw new u(he);
+    throw new u(de);
   }
   popDebugGroup() {
-    throw new u(he);
+    throw new u(de);
   }
   insertDebugMarker(e) {
-    throw new u(he);
+    throw new u(de);
   }
   end() {
   }
 }
-class Df {
+class Kd {
   label;
   gl;
   state;
@@ -5140,7 +5316,7 @@ class Df {
   passCount = 0;
   finished = !1;
   constructor(e, n, r, i) {
-    this.label = e?.label ?? G("commandEncoder"), this.gl = n, this.state = r, this.passOptions = i;
+    this.label = e?.label ?? B("commandEncoder"), this.gl = n, this.state = r, this.passOptions = i;
   }
   /** 由渲染通道回调，用于统计。 */
   noteDrawCall() {
@@ -5151,78 +5327,78 @@ class Df {
       throw new u(
         `[gpu-device-api] encoder「${this.label}」里已经有打开的渲染通道了。WebGPU 也只允许同时打开一个通道，请先 end() 再开始下一个。`
       );
-    const n = new Uf(e, this.passOptions);
+    const n = new Hd(e, this.passOptions);
     return this.openPass = n, this.passCount += 1, n;
   }
   beginComputePass() {
-    return this.assertOpen("beginComputePass"), new Of();
+    return this.assertOpen("beginComputePass"), new Zd();
   }
   copyBufferToBuffer(e, n, r, i, s) {
     this.assertOpen("copyBufferToBuffer");
-    const a = e, o = r, l = new Uint8Array(s);
+    const a = e, o = r, c = new Uint8Array(s);
     if (a.isIndexBuffer || o.isIndexBuffer) {
-      a.download(n, l), o.upload(i, l);
+      a.download(n, c), o.upload(i, c);
       return;
     }
-    this.state.bindCopyReadBuffer(a.native), this.gl.getBufferSubData(this.gl.COPY_READ_BUFFER, n, l), this.state.bindCopyWriteBuffer(o.native), this.gl.bufferSubData(this.gl.COPY_WRITE_BUFFER, i, l);
+    this.state.bindCopyReadBuffer(a.native), this.gl.getBufferSubData(this.gl.COPY_READ_BUFFER, n, c), this.state.bindCopyWriteBuffer(o.native), this.gl.bufferSubData(this.gl.COPY_WRITE_BUFFER, i, c);
   }
   copyBufferToTexture(e, n, r) {
     this.assertOpen("copyBufferToTexture");
-    const i = this.gl, s = e.buffer, a = n.texture.native, o = n.texture.format, l = z(o), { x: c, y: h, z: d } = mt(n.origin), f = e.bytesPerRow ?? r.width * l.bytesPerPixel, p = r.height, m = new Uint8Array(f * p);
-    s.download(e.offset ?? 0, m), i.bindTexture(n.texture.target, a), i.pixelStorei(i.UNPACK_ALIGNMENT, 1), f !== r.width * l.bytesPerPixel && i.pixelStorei(i.UNPACK_ROW_LENGTH, f / l.bytesPerPixel);
+    const i = this.gl, s = e.buffer, a = n.texture.native, o = n.texture.format, c = z(o), { x: l, y: h, z: f } = vt(n.origin), d = e.bytesPerRow ?? r.width * c.bytesPerPixel, p = r.height, m = new Uint8Array(d * p);
+    s.download(e.offset ?? 0, m), i.bindTexture(n.texture.target, a), i.pixelStorei(i.UNPACK_ALIGNMENT, 1), d !== r.width * c.bytesPerPixel && i.pixelStorei(i.UNPACK_ROW_LENGTH, d / c.bytesPerPixel);
     const g = n.texture.target;
     g === i.TEXTURE_3D || g === i.TEXTURE_2D_ARRAY ? i.texSubImage3D(
       g,
       n.mipLevel ?? 0,
-      c,
+      l,
       h,
-      d,
+      f,
       r.width,
       r.height,
       r.depthOrArrayLayers,
-      l.format,
-      l.type,
+      c.format,
+      c.type,
       m
     ) : i.texSubImage2D(
       g,
       n.mipLevel ?? 0,
-      c,
+      l,
       h,
       r.width,
       r.height,
-      l.format,
-      l.type,
+      c.format,
+      c.type,
       m
     ), i.pixelStorei(i.UNPACK_ROW_LENGTH, 0), i.pixelStorei(i.UNPACK_ALIGNMENT, 4), this.state.invalidateTextureUnits();
   }
   copyTextureToBuffer(e, n, r) {
     this.assertOpen("copyTextureToBuffer");
-    const i = this.gl, s = e.texture, a = z(s.format), o = wi(
+    const i = this.gl, s = e.texture, a = z(s.format), o = Ei(
       n.bytesPerRow ?? r.width * a.bytesPerPixel,
       4
-    ), l = new Uint8Array(o * r.height), c = i.createFramebuffer();
-    if (!c)
+    ), c = new Uint8Array(o * r.height), l = i.createFramebuffer();
+    if (!l)
       throw new u("[gpu-device-api] gl.createFramebuffer() 返回 null，无法读回纹理。");
     const h = i.getParameter(i.FRAMEBUFFER_BINDING);
-    i.bindFramebuffer(i.FRAMEBUFFER, c);
-    const d = a.depth ? i.DEPTH_ATTACHMENT : i.COLOR_ATTACHMENT0;
-    i.framebufferTexture2D(i.FRAMEBUFFER, d, i.TEXTURE_2D, s.native, e.mipLevel ?? 0);
-    const f = i.checkFramebufferStatus(i.FRAMEBUFFER);
-    if (f !== i.FRAMEBUFFER_COMPLETE)
-      throw i.bindFramebuffer(i.FRAMEBUFFER, h), i.deleteFramebuffer(c), new u(
-        `[gpu-device-api] 无法把纹理「${s.label}」作为附件读回（framebuffer 不完整，0x${f.toString(16)}）。请确认该纹理的 usage 里包含 RenderAttachment 或 CopySrc。`
+    i.bindFramebuffer(i.FRAMEBUFFER, l);
+    const f = a.depth ? i.DEPTH_ATTACHMENT : i.COLOR_ATTACHMENT0;
+    i.framebufferTexture2D(i.FRAMEBUFFER, f, i.TEXTURE_2D, s.native, e.mipLevel ?? 0);
+    const d = i.checkFramebufferStatus(i.FRAMEBUFFER);
+    if (d !== i.FRAMEBUFFER_COMPLETE)
+      throw i.bindFramebuffer(i.FRAMEBUFFER, h), i.deleteFramebuffer(l), new u(
+        `[gpu-device-api] 无法把纹理「${s.label}」作为附件读回（framebuffer 不完整，0x${d.toString(16)}）。请确认该纹理的 usage 里包含 RenderAttachment 或 CopySrc。`
       );
     i.pixelStorei(i.PACK_ALIGNMENT, 1);
-    const { x: p, y: m } = mt(e.origin);
-    i.readPixels(p, m, r.width, r.height, a.format, a.type, l), i.pixelStorei(i.PACK_ALIGNMENT, 4), i.bindFramebuffer(i.FRAMEBUFFER, h), i.deleteFramebuffer(c), this.state.invalidate(), n.buffer.upload(n.offset ?? 0, l);
+    const { x: p, y: m } = vt(e.origin);
+    i.readPixels(p, m, r.width, r.height, a.format, a.type, c), i.pixelStorei(i.PACK_ALIGNMENT, 4), i.bindFramebuffer(i.FRAMEBUFFER, h), i.deleteFramebuffer(l), this.state.invalidate(), n.buffer.upload(n.offset ?? 0, c);
   }
   copyTextureToTexture(e, n, r) {
     this.assertOpen("copyTextureToTexture");
-    const i = this.gl, s = e.texture, a = n.texture, o = z(a.format), { x: l, y: c } = mt(e.origin), { x: h, y: d } = mt(n.origin), f = i.createFramebuffer(), p = i.createFramebuffer();
-    if (!f || !p)
+    const i = this.gl, s = e.texture, a = n.texture, o = z(a.format), { x: c, y: l } = vt(e.origin), { x: h, y: f } = vt(n.origin), d = i.createFramebuffer(), p = i.createFramebuffer();
+    if (!d || !p)
       throw new u("[gpu-device-api] 创建临时 framebuffer 失败，无法拷贝纹理。");
     const m = i.getParameter(i.FRAMEBUFFER_BINDING);
-    if (i.bindFramebuffer(i.READ_FRAMEBUFFER, f), i.framebufferTexture2D(
+    if (i.bindFramebuffer(i.READ_FRAMEBUFFER, d), i.framebufferTexture2D(
       i.READ_FRAMEBUFFER,
       i.COLOR_ATTACHMENT0,
       i.TEXTURE_2D,
@@ -5239,32 +5415,50 @@ class Df {
         `[gpu-device-api] copyTextureToTexture 要求源与目标格式一致：源是「${s.format}」，目标是「${a.format}」。WebGL2 的 blitFramebuffer 不做格式转换。`
       );
     i.blitFramebuffer(
-      l,
       c,
-      l + r.width,
-      c + r.height,
+      l,
+      c + r.width,
+      l + r.height,
       h,
-      d,
+      f,
       h + r.width,
-      d + r.height,
+      f + r.height,
       i.COLOR_BUFFER_BIT,
       i.NEAREST
-    ), i.bindFramebuffer(i.FRAMEBUFFER, m), i.deleteFramebuffer(f), i.deleteFramebuffer(p), this.state.invalidate();
+    ), i.bindFramebuffer(i.FRAMEBUFFER, m), i.deleteFramebuffer(d), i.deleteFramebuffer(p), this.state.invalidate();
   }
   clearBuffer(e, n = 0, r) {
     this.assertOpen("clearBuffer");
     const i = e, s = r ?? e.size - n, a = new Uint8Array(s);
     i.upload(n, a);
   }
+  /**
+   * WebGL2 没有对应能力：GL 的查询结果不能写进 buffer，只能 `getQueryParameter()` 读回。
+   * 调用它明确报错，并指出替代方案（`Device.readQuerySet()`）。
+   */
+  resolveQuerySet(e, n, r, i, s) {
+    throw this.assertOpen("resolveQuerySet"), new u(
+      "[gpu-device-api] WebGL2 has no resolveQuerySet(): GL query results cannot be copied into a buffer, they can only be read back one by one with gl.getQueryParameter(). Use Device.readQuerySet() instead — it polls QUERY_RESULT_AVAILABLE and returns the same QueryResult shape as WebGPU."
+    );
+  }
+  /**
+   * WebGL2 没有「单个时刻的时间戳」：GL 的时间查询是 `beginQuery → endQuery` 的**区间**测量。
+   * 请改用 `RenderPassDescriptor.timestampWrites`（后端会用 beginQuery/endQuery 包住整个通道）。
+   */
+  writeTimestamp(e, n) {
+    throw this.assertOpen("writeTimestamp"), new u(
+      "[gpu-device-api] WebGL2 has no CommandEncoder.writeTimestamp(): GL timer queries measure an interval (beginQuery → endQuery), not a single instant. Use RenderPassDescriptor.timestampWrites with an EXT_disjoint_timer_query_webgl2 query set instead."
+    );
+  }
   /** 调试分组：WebGL2 靠 `EXT_debug_marker`，扩展不可用时是空操作（见 utils/debugMarkers.ts）。 */
   pushDebugGroup(e) {
-    xs(this.gl, e);
+    Ms(this.gl, e);
   }
   popDebugGroup() {
-    ys(this.gl);
+    Fs(this.gl);
   }
   insertDebugMarker(e) {
-    Ts(this.gl, e);
+    Rs(this.gl, e);
   }
   finish() {
     if (this.assertOpen("finish"), this.openPass && !this.openPass.ended)
@@ -5288,18 +5482,18 @@ class Df {
       );
   }
 }
-function mt(t) {
+function vt(t) {
   return { x: t?.x ?? 0, y: t?.y ?? 0, z: t?.z ?? 0 };
 }
-function If(t) {
-  const e = t.colorAttachments.map((r) => r ? Ar(r) : "-").join(","), n = t.depthStencilAttachment ? Ar(t.depthStencilAttachment) : "-";
+function Jd(t) {
+  const e = t.colorAttachments.map((r) => r ? Mr(r) : "-").join(","), n = t.depthStencilAttachment ? Mr(t.depthStencilAttachment) : "-";
   return `${e}|${n}`;
 }
-function Ar(t) {
+function Mr(t) {
   const e = t.view, n = e.texture;
   return `${e.label}@${n.label}#${n.width}x${n.height}`;
 }
-class Vf {
+class ef {
   gl;
   framebuffers = /* @__PURE__ */ new Map();
   constructor(e) {
@@ -5310,7 +5504,7 @@ class Vf {
   }
   /** 取得（必要时创建）与这组附件匹配的 framebuffer。 */
   acquire(e) {
-    const n = If(e), r = this.framebuffers.get(n);
+    const n = Jd(e), r = this.framebuffers.get(n);
     if (r) return r;
     const i = this.gl, s = i.createFramebuffer();
     if (!s)
@@ -5320,28 +5514,28 @@ class Vf {
     let o = 0;
     for (const h of e.colorAttachments) {
       if (!h) continue;
-      const d = h.view, f = d.target;
-      f === i.TEXTURE_2D ? i.framebufferTexture2D(i.FRAMEBUFFER, i.COLOR_ATTACHMENT0 + o, f, d.glTexture, 0) : i.framebufferTextureLayer(
+      const f = h.view, d = f.target;
+      d === i.TEXTURE_2D ? i.framebufferTexture2D(i.FRAMEBUFFER, i.COLOR_ATTACHMENT0 + o, d, f.glTexture, 0) : i.framebufferTextureLayer(
         i.FRAMEBUFFER,
         i.COLOR_ATTACHMENT0 + o,
-        d.glTexture,
-        d.descriptor.baseMipLevel,
-        d.descriptor.baseArrayLayer
+        f.glTexture,
+        f.descriptor.baseMipLevel,
+        f.descriptor.baseArrayLayer
       ), o += 1;
     }
     o > 0 && i.drawBuffers(
-      Array.from({ length: o }, (h, d) => i.COLOR_ATTACHMENT0 + d)
+      Array.from({ length: o }, (h, f) => i.COLOR_ATTACHMENT0 + f)
     );
-    const l = e.depthStencilAttachment;
-    if (l) {
-      const h = l.view, f = z(h.texture.format).stencil ? i.DEPTH_STENCIL_ATTACHMENT : i.DEPTH_ATTACHMENT;
-      i.framebufferTexture2D(i.FRAMEBUFFER, f, i.TEXTURE_2D, h.glTexture, 0);
+    const c = e.depthStencilAttachment;
+    if (c) {
+      const h = c.view, d = z(h.texture.format).stencil ? i.DEPTH_STENCIL_ATTACHMENT : i.DEPTH_ATTACHMENT;
+      i.framebufferTexture2D(i.FRAMEBUFFER, d, i.TEXTURE_2D, h.glTexture, 0);
     }
     i.bindFramebuffer(i.FRAMEBUFFER, a), i.bindFramebuffer(i.FRAMEBUFFER, s);
-    const c = i.checkFramebufferStatus(i.FRAMEBUFFER);
-    if (i.bindFramebuffer(i.FRAMEBUFFER, a), c !== i.FRAMEBUFFER_COMPLETE)
+    const l = i.checkFramebufferStatus(i.FRAMEBUFFER);
+    if (i.bindFramebuffer(i.FRAMEBUFFER, a), l !== i.FRAMEBUFFER_COMPLETE)
       throw i.deleteFramebuffer(s), new u(
-        `[gpu-device-api] 这组渲染附件在 WebGL2 下不构成完整的 framebuffer（GL 状态码 0x${c.toString(16)}）。
+        `[gpu-device-api] 这组渲染附件在 WebGL2 下不构成完整的 framebuffer（GL 状态码 0x${l.toString(16)}）。
 常见原因：颜色附件格式不可渲染、多个附件的尺寸/采样数不一致、深度附件与颜色附件不匹配。`
       );
     return this.framebuffers.set(n, s), s;
@@ -5355,8 +5549,8 @@ class Vf {
     this.clear();
   }
 }
-class Nf {
-  label = G("queue");
+class tf {
+  label = B("queue");
   gl;
   state;
   submittedCount = 0;
@@ -5374,16 +5568,16 @@ class Nf {
       throw new u(
         `[gpu-device-api] writeBuffer 越界：写入范围 [${n}, ${n + o}) 超出了 buffer「${a.label}」的 ${a.size} 字节。`
       );
-    const l = new Uint8Array(r.buffer, r.byteOffset + i, o);
-    a.upload(n, Ea(l));
+    const c = new Uint8Array(r.buffer, r.byteOffset + i, o);
+    a.upload(n, Na(c));
   }
   writeTexture(e, n, r, i) {
     const s = e.texture, a = z(s.format);
-    Jh(s.format, n);
-    const o = _r(e.origin), l = r.bytesPerRow ?? i.width * a.bytesPerPixel, c = this.gl;
-    c.bindTexture(s.target, s.native), c.pixelStorei(c.UNPACK_ALIGNMENT, 1), l !== i.width * a.bytesPerPixel && c.pixelStorei(c.UNPACK_ROW_LENGTH, l / a.bytesPerPixel);
+    fd(s.format, n);
+    const o = Fr(e.origin), c = r.bytesPerRow ?? i.width * a.bytesPerPixel, l = this.gl;
+    l.bindTexture(s.target, s.native), l.pixelStorei(l.UNPACK_ALIGNMENT, 1), c !== i.width * a.bytesPerPixel && l.pixelStorei(l.UNPACK_ROW_LENGTH, c / a.bytesPerPixel);
     const h = new Uint8Array(n.buffer, n.byteOffset + r.offset, n.byteLength - r.offset);
-    s.target === c.TEXTURE_3D || s.target === c.TEXTURE_2D_ARRAY ? c.texSubImage3D(
+    s.target === l.TEXTURE_3D || s.target === l.TEXTURE_2D_ARRAY ? l.texSubImage3D(
       s.target,
       e.mipLevel ?? 0,
       o.x,
@@ -5395,7 +5589,7 @@ class Nf {
       a.format,
       a.type,
       h
-    ) : c.texSubImage2D(
+    ) : l.texSubImage2D(
       s.target,
       e.mipLevel ?? 0,
       o.x,
@@ -5405,18 +5599,18 @@ class Nf {
       a.format,
       a.type,
       h
-    ), c.pixelStorei(c.UNPACK_ROW_LENGTH, 0), c.pixelStorei(c.UNPACK_ALIGNMENT, 4), this.state.invalidateTextureUnits();
+    ), l.pixelStorei(l.UNPACK_ROW_LENGTH, 0), l.pixelStorei(l.UNPACK_ALIGNMENT, 4), this.state.invalidateTextureUnits();
   }
   copyExternalImageToTexture(e, n, r, i = !1) {
-    const s = n.texture, a = z(s.format), o = this.gl, l = _r(n.origin);
+    const s = n.texture, a = z(s.format), o = this.gl, c = Fr(n.origin);
     o.bindTexture(s.target, s.native), o.pixelStorei(o.UNPACK_ALIGNMENT, 1), o.pixelStorei(o.UNPACK_FLIP_Y_WEBGL, i ? 1 : 0);
     try {
       s.target === o.TEXTURE_3D || s.target === o.TEXTURE_2D_ARRAY ? o.texSubImage3D(
         s.target,
         n.mipLevel ?? 0,
-        l.x,
-        l.y,
-        l.z,
+        c.x,
+        c.y,
+        c.z,
         r.width,
         r.height,
         r.depthOrArrayLayers,
@@ -5426,8 +5620,8 @@ class Nf {
       ) : o.texSubImage2D(
         s.target,
         n.mipLevel ?? 0,
-        l.x,
-        l.y,
+        c.x,
+        c.y,
         r.width,
         r.height,
         a.format,
@@ -5440,12 +5634,12 @@ class Nf {
     this.state.invalidateTextureUnits();
   }
   copyBufferToBuffer(e, n, r, i, s) {
-    const a = this.gl, o = e, l = r, c = new Uint8Array(s);
-    if (o.isIndexBuffer || l.isIndexBuffer) {
-      o.download(n, c), l.upload(i, c);
+    const a = this.gl, o = e, c = r, l = new Uint8Array(s);
+    if (o.isIndexBuffer || c.isIndexBuffer) {
+      o.download(n, l), c.upload(i, l);
       return;
     }
-    this.state.bindCopyReadBuffer(o.native), a.getBufferSubData(a.COPY_READ_BUFFER, n, c), this.state.bindCopyWriteBuffer(l.native), a.bufferSubData(a.COPY_WRITE_BUFFER, i, c);
+    this.state.bindCopyReadBuffer(o.native), a.getBufferSubData(a.COPY_READ_BUFFER, n, l), this.state.bindCopyWriteBuffer(c.native), a.bufferSubData(a.COPY_WRITE_BUFFER, i, l);
   }
   copyBufferToTexture(e, n, r) {
     const i = z(n.texture.format), s = e.bytesPerRow ?? r.width * i.bytesPerPixel, a = new Uint8Array(s * r.height);
@@ -5458,11 +5652,11 @@ class Nf {
     await this.pending, this.gl.finish();
   }
 }
-function _r(t) {
+function Fr(t) {
   return { x: t?.x ?? 0, y: t?.y ?? 0, z: t?.z ?? 0 };
 }
-class kf {
-  label = G("fence");
+class nf {
+  label = B("fence");
   gl;
   sync;
   _signaled = !1;
@@ -5488,16 +5682,79 @@ class kf {
       }
       for (; ; ) {
         if (this.poll()) return;
-        await zf();
+        await rf();
       }
     }
   }
 }
-function zf() {
+function rf() {
   const t = globalThis.requestAnimationFrame;
   return typeof t == "function" ? new Promise((e) => t(() => e())) : new Promise((e) => setTimeout(e, 1));
 }
-class Wf {
+const sf = 1e4;
+class af {
+  type;
+  count;
+  /** GL 的 `TIME_ELAPSED_EXT` 就是纳秒，因此恒为 1。 */
+  timestampPeriod = 1;
+  gl;
+  querySet;
+  first;
+  timeoutMs;
+  yieldToEventLoop;
+  _read = !1;
+  constructor(e) {
+    this.gl = e.gl, this.querySet = e.querySet, this.type = e.type, this.first = e.first, this.count = e.count, this.timeoutMs = e.timeoutMs ?? sf, this.yieldToEventLoop = e.yieldToEventLoop ?? (() => new Promise((n) => setTimeout(n, 0)));
+  }
+  async read() {
+    if (this._read)
+      throw new u(
+        "[gpu-device-api] QueryResult.read(): this result has already been read. Call Device.readQuerySet() again for a fresh result."
+      );
+    this._read = !0;
+    const e = this.gl;
+    if (this.querySet.disposed)
+      throw new u(
+        `[gpu-device-api] QueryResult.read(): query set "${this.querySet.label}" has been destroyed.`
+      );
+    const n = new BigUint64Array(this.count);
+    for (let r = 0; r < this.count; r++) {
+      const i = this.querySet.queryAt(this.first + r, "QueryResult.read");
+      await this.waitUntilAvailable(i, this.first + r), this.assertNotDisjoint(this.first + r);
+      const s = e.getQueryParameter(i, e.QUERY_RESULT);
+      n[r] = BigInt(Math.round(s ?? 0));
+    }
+    return n;
+  }
+  /** 轮询 `QUERY_RESULT_AVAILABLE`，每次询问之间让出一拍。 */
+  async waitUntilAvailable(e, n) {
+    const r = this.gl, i = Date.now() + this.timeoutMs;
+    for (; ; ) {
+      if (r.getQueryParameter(e, r.QUERY_RESULT_AVAILABLE) === !0) return;
+      if (this.querySet.disposed)
+        throw new K(
+          `[gpu-device-api] QueryResult.read(): query set "${this.querySet.label}" was destroyed while waiting for query ${n}. The result of that frame is simply dropped.`,
+          { code: "QUERY_DISCARDED" }
+        );
+      if (Date.now() >= i)
+        throw new K(
+          `[gpu-device-api] QueryResult.read(): query ${n} of "${this.querySet.label}" was still not available after ${this.timeoutMs} ms. The GL query is asynchronous; read it a few frames after the pass that wrote it (gfx GPU timing waits \`delay\` frames for exactly this reason).`,
+          { code: "QUERY_TIMEOUT" }
+        );
+      await this.yieldToEventLoop();
+    }
+  }
+  assertNotDisjoint(e) {
+    const n = this.querySet.timerExtension;
+    if (!n) return;
+    if (this.gl.getParameter(n.GPU_DISJOINT_EXT) === !0)
+      throw new K(
+        `[gpu-device-api] QueryResult.read(): GPU_DISJOINT_EXT is set, so the timer results of "${this.querySet.label}" (query ${e}) are undefined. A disjoint happens when the GPU is reset or preempted between the begin/end of the query; discard this sample instead of using it.`,
+        { code: "QUERY_DISJOINT" }
+      );
+  }
+}
+class of {
   label;
   backend = "webgl2";
   features;
@@ -5520,7 +5777,7 @@ class Wf {
   lostPromise;
   _disposed = !1;
   constructor(e) {
-    this.gl = e.gl, this.canvas = e.canvas, this.native = e.gl, this.debug = e.descriptor?.debug ?? !1, this.logger = e.logger ?? Je("gpu-device-api/webgl2"), this.label = e.descriptor?.label ?? G("webgl2Device"), this.limits = mi(e.adapterLimits, e.descriptor?.requiredLimits, "webgl2");
+    this.gl = e.gl, this.canvas = e.canvas, this.native = e.gl, this.debug = e.descriptor?.debug ?? !1, this.logger = e.logger ?? it("gpu-device-api/webgl2"), this.label = e.descriptor?.label ?? B("webgl2Device"), this.limits = $i(e.adapterLimits, e.descriptor?.requiredLimits, "webgl2");
     const n = [...e.adapterFeatures], r = new Set(n), i = (e.descriptor?.requiredFeatures ?? []).filter((a) => !r.has(a));
     if (i.length > 0)
       throw new u(
@@ -5530,10 +5787,10 @@ class Wf {
     this.features = {
       has: (a) => r.has(a),
       names: n
-    }, this.state = new sh(e.gl), this.planCache = new xf({
+    }, this.state = new yh(e.gl), this.planCache = new Bd({
       maxTextureUnits: this.limits.maxSampledTexturesPerShaderStage,
       maxUniformBufferBindings: Math.min(this.limits.maxUniformBuffersPerShaderStage, 12)
-    }), this.programs = new yf({ gl: e.gl, state: this.state }), this.framebuffers = new Vf(e.gl), this.queue = new Nf(e.gl, this.state), this.lostPromise = new Promise((a) => {
+    }), this.programs = new Gd({ gl: e.gl, state: this.state }), this.framebuffers = new ef(e.gl), this.queue = new tf(e.gl, this.state), this.lostPromise = new Promise((a) => {
       this.lostResolve = a;
     });
     const s = e.canvas;
@@ -5554,13 +5811,13 @@ class Wf {
   /* ------------------------------------------------------------------ 资源 ------------------- */
   createBuffer(e) {
     return this.assertUsable("createBuffer"), this.track(
-      new ch(this.gl, this.state, e, (n) => {
+      new Sh(this.gl, this.state, e, (n) => {
       })
     );
   }
   createTexture(e) {
     return this.assertUsable("createTexture"), this.track(
-      new ur(this.gl, this.state, e, () => {
+      new gr(this.gl, this.state, e, () => {
         this.framebuffers.clear();
       })
     );
@@ -5568,7 +5825,7 @@ class Wf {
   /** 供渲染目标内部创建附件纹理（不重复登记，释放由渲染目标负责）。 */
   createAttachmentTexture(e, n, r, i, s) {
     return this.track(
-      new ur(
+      new gr(
         this.gl,
         this.state,
         { format: e, size: { width: n, height: r }, usage: i, label: s },
@@ -5577,30 +5834,66 @@ class Wf {
     );
   }
   createSampler(e = {}) {
-    return this.assertUsable("createSampler"), this.track(new mf(this.gl, this.state, e));
+    return this.assertUsable("createSampler"), this.track(new Pd(this.gl, this.state, e));
   }
   createShaderModule(e) {
-    return this.assertUsable("createShaderModule"), this.track(new gf(e));
+    return this.assertUsable("createShaderModule"), this.track(new Ld(e));
   }
+  /**
+   * 创建 query set。
+   *
+   * - occlusion：`ANY_SAMPLES_PASSED` 是 WebGL2 核心功能，直接用；
+   * - timestamp：需要 `EXT_disjoint_timer_query_webgl2`，扩展缺失时抛带 `[gpu-device-api] ` 前缀的
+   *   英文错误说明缺哪个扩展（而不是静默返回 0）。
+   */
   createQuerySet(e) {
-    throw this.assertUsable("createQuerySet"), new u(
-      `[gpu-device-api] WebGL2 后端暂不支持 query set（「${e.label ?? e.type}」）。WebGL2 的遮挡查询只能同步读回单个样本数，没有查询结果缓冲区的概念。`
-    );
+    return this.assertUsable("createQuerySet"), this.track(new Cs(this.gl, e, (n) => this.untrack(n)));
+  }
+  /**
+   * 读回 query set 的结果：轮询 `QUERY_RESULT_AVAILABLE` 后逐条 `getQueryParameter`。
+   *
+   * 轮询本身是异步的（每轮让出一拍），不会像 `gl.finish()` 那样强制同步 GPU；
+   * 但结果只有在 GPU 真正做完之后才可用，所以调用方应该**延迟若干帧**再读
+   * （gfx 的 GPU 计时就是这么做的）。
+   */
+  readQuerySet(e, n = {}) {
+    this.assertUsable("readQuerySet");
+    const r = Ln(e, `Device "${this.label}".readQuerySet(querySet)`), i = n.firstQuery ?? 0;
+    if (!Number.isInteger(i) || i < 0)
+      throw new u(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: firstQuery must be a non-negative integer, got ${String(i)}.`
+      );
+    const s = n.queryCount ?? r.count - i;
+    if (!Number.isInteger(s) || s <= 0)
+      throw new u(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: queryCount must be a positive integer, got ${String(s)}.`
+      );
+    if (i + s > r.count)
+      throw new u(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: range [${i}, ${i + s}) exceeds the query set "${r.label}" count ${r.count}.`
+      );
+    return new af({
+      gl: this.gl,
+      querySet: r,
+      type: r.type,
+      first: i,
+      count: s
+    });
   }
   /* ------------------------------------------------------------------ 绑定 ------------------- */
   createBindGroupLayout(e) {
-    return this.assertUsable("createBindGroupLayout"), this.track(new br(e));
+    return this.assertUsable("createBindGroupLayout"), this.track(new Tr(e));
   }
   createBindGroup(e) {
-    return this.assertUsable("createBindGroup"), this.track(new bf(e));
+    return this.assertUsable("createBindGroup"), this.track(new Md(e));
   }
   createPipelineLayout(e) {
-    return this.assertUsable("createPipelineLayout"), this.track(new wr(e, !1, this));
+    return this.assertUsable("createPipelineLayout"), this.track(new $r(e, !1, this));
   }
   /* ------------------------------------------------------------------ 管线 ------------------- */
   createRenderPipeline(e) {
     this.assertUsable("createRenderPipeline");
-    const n = e.label ?? "renderPipeline", r = Tn({
+    const n = e.label ?? "renderPipeline", r = _n({
       backend: "webgl2",
       source: e.vertex.module.source,
       stage: q.Vertex,
@@ -5612,7 +5905,7 @@ class Wf {
       throw new u(
         "[gpu-device-api] WebGL2 后端要求管线同时提供顶点与片元着色器（GL 的 program 必须链接两个阶段）。\n只写深度时，可以在片元着色器里 `discard` 而不输出颜色。"
       );
-    const i = Tn({
+    const i = _n({
       backend: "webgl2",
       source: e.fragment.module.source,
       stage: q.Fragment,
@@ -5622,17 +5915,17 @@ class Wf {
     }).code, s = this.programs.acquire(n, r, i);
     let a;
     if (e.layout === void 0 || e.layout === "auto") {
-      const l = Zu(s.reflection, q.Vertex | q.Fragment);
-      if (l.length === 0)
+      const c = uh(s.reflection, q.Vertex | q.Fragment);
+      if (c.length === 0)
         a = "auto", this.programs.bindPlan(s, null);
       else {
-        const c = new br({
+        const l = new Tr({
           label: `${n}:autoLayout`,
-          entries: l
+          entries: c
         });
-        this.track(c), a = this.track(
-          new wr(
-            { label: `${n}:autoPipelineLayout`, bindGroupLayouts: [c] },
+        this.track(l), a = this.track(
+          new $r(
+            { label: `${n}:autoPipelineLayout`, bindGroupLayouts: [l] },
             !0,
             this
           )
@@ -5640,7 +5933,7 @@ class Wf {
       }
     } else
       a = e.layout, this.programs.bindPlan(s, a.bindingPlan);
-    const o = new Af(e, s, a, {
+    const o = new Id(e, s, a, {
       gl: this.gl,
       state: this.state,
       limits: {
@@ -5651,12 +5944,12 @@ class Wf {
     return this.track(o);
   }
   createComputePipeline(e) {
-    return this.assertUsable("createComputePipeline"), new Cf(e);
+    return this.assertUsable("createComputePipeline"), new zd(e);
   }
   /* ------------------------------------------------------------------ 渲染 ------------------- */
   createRenderTarget(e = {}) {
     return this.assertUsable("createRenderTarget"), this.track(
-      new Pf(e, {
+      new qd(e, {
         gl: this.gl,
         state: this.state,
         createTexture: (n, r, i, s, a) => this.createAttachmentTexture(n, r, i, s, a)
@@ -5664,7 +5957,7 @@ class Wf {
     );
   }
   createCommandEncoder(e) {
-    return this.assertUsable("createCommandEncoder"), new Df(e, this.gl, this.state, {
+    return this.assertUsable("createCommandEncoder"), new Kd(e, this.gl, this.state, {
       gl: this.gl,
       state: this.state,
       framebuffers: this.framebuffers,
@@ -5681,11 +5974,11 @@ class Wf {
 GL context 是从 canvas 上取的，一个 device 对应一个 canvas；如果确实需要渲染到多个 canvas，请为每个 canvas 单独 createDevice()。`
       );
     let r = this.canvasContexts.get(e);
-    return r || (r = new Rf({ gl: this.gl, canvas: e, format: n?.format }), this.canvasContexts.set(e, r)), r.configure({ ...n, device: this }), this.state.invalidate(), r;
+    return r || (r = new Xd({ gl: this.gl, canvas: e, format: n?.format }), this.canvasContexts.set(e, r)), r.configure({ ...n, device: this }), this.state.invalidate(), r;
   }
   /** 创建一个进程内的同步点（fence）。 */
   createFence() {
-    return new kf(this.gl);
+    return new nf(this.gl);
   }
   /* ------------------------------------------------------------------ 错误 ------------------- */
   onError(e) {
@@ -5721,7 +6014,7 @@ GL context 是从 canvas 上取的，一个 device 对应一个 canvas；如果�
     if (!this.debug) return;
     const n = this.gl.getError();
     n !== this.gl.NO_ERROR && this.reportError(
-      new de(`[gpu-device-api] GL 错误 0x${n.toString(16)}（发生在 ${e} 之后）。`, {
+      new K(`[gpu-device-api] GL 错误 0x${n.toString(16)}（发生在 ${e} 之后）。`, {
         code: "GL_ERROR",
         details: { glError: n, context: e }
       })
@@ -5730,14 +6023,23 @@ GL context 是从 canvas 上取的，一个 device 对应一个 canvas；如果�
   track(e) {
     return this.resources.add(e), e;
   }
+  /**
+   * 资源在 `destroy()` 时把自己从追踪集合里摘掉（与 WebGPU 后端同一套机制）。
+   *
+   * 不做这一步，「每帧 create/destroy」的用法（query set、临时 buffer……）会让 `resources`
+   * 一直强引用已经释放的包装对象与原生句柄，直到 `device.dispose()`。幂等。
+   */
+  untrack(e) {
+    this.resources.delete(e);
+  }
   assertUsable(e) {
     if (this._disposed)
-      throw new gn(`[gpu-device-api] 设备已 dispose()，不能再调用 ${e}()。`, {
+      throw new xn(`[gpu-device-api] 设备已 dispose()，不能再调用 ${e}()。`, {
         reason: "destroyed"
       });
   }
 }
-const qf = {
+const lf = {
   antialias: !0,
   alpha: !1,
   depth: !0,
@@ -5747,7 +6049,7 @@ const qf = {
   powerPreference: "high-performance",
   desynchronized: !1
 };
-class Yn {
+class er {
   info;
   features;
   limits;
@@ -5757,7 +6059,7 @@ class Yn {
   device = null;
   constructor(e, n, r, i, s) {
     this.gl = e, this.canvas = n, this.limits = r, this.features = i, this.logger = s;
-    const a = nh(e);
+    const a = gh(e);
     this.info = {
       backend: "webgl2",
       vendor: a.vendor,
@@ -5774,8 +6076,8 @@ class Yn {
    * 拿不到 context 时抛错（而不是返回 null），错误信息里会说明常见原因。
    */
   static async request(e) {
-    const n = { ...qf, ...e.contextAttributes }, r = ih(e.canvas, n), i = eh(r), s = th(r);
-    return new Yn(r, e.canvas, i, s, e.logger);
+    const n = { ...lf, ...e.contextAttributes }, r = wh(e.canvas, n), i = ph(r), s = mh(r);
+    return new er(r, e.canvas, i, s, e.logger);
   }
   /** 已经为这个 canvas 创建过 GL context（用于避免重复初始化）。 */
   get context() {
@@ -5787,7 +6089,7 @@ class Yn {
         `[gpu-device-api] 这个 WebGL2 adapter 已经创建过 device 了。
 GL context 与 canvas 是一一对应的，一个 adapter 只能产出一个 device；请复用已有的 device，或为另一个 canvas 单独 requestAdapter()。`
       );
-    const n = new Wf({
+    const n = new of({
       gl: this.gl,
       canvas: this.canvas,
       descriptor: e,
@@ -5802,7 +6104,7 @@ GL context 与 canvas 是一一对应的，一个 adapter 只能产出一个 dev
     return this.device;
   }
 }
-const Hn = Object.freeze({
+const tr = Object.freeze({
   // 8 位单通道
   r8unorm: "r8unorm",
   r8snorm: "r8snorm",
@@ -5856,10 +6158,10 @@ const Hn = Object.freeze({
   depth32float: "depth32float",
   stencil8: "stencil8"
 });
-function v(t, e, n, r = {}) {
+function y(t, e, n, r = {}) {
   const i = e === "depth" || e === "stencil" ? "depth" : e === "uint" ? "uint" : e === "sint" ? "sint" : "float";
   return {
-    gpuFormat: Hn[t],
+    gpuFormat: tr[t],
     kind: e,
     bytesPerTexel: n,
     renderable: r.renderable ?? !1,
@@ -5874,119 +6176,119 @@ function v(t, e, n, r = {}) {
     sampleScalar: i
   };
 }
-const jf = Object.freeze({
-  r8unorm: v("r8unorm", "unorm", 1, { renderable: !0, filterable: !0 }),
-  r8snorm: v("r8snorm", "snorm", 1, { filterable: !1 }),
-  r8uint: v("r8uint", "uint", 1, { renderable: !0 }),
-  r8sint: v("r8sint", "sint", 1, { renderable: !0 }),
-  r16uint: v("r16uint", "uint", 2, { renderable: !0 }),
-  r16sint: v("r16sint", "sint", 2, { renderable: !0 }),
-  r16float: v("r16float", "float", 2, { renderable: !0, filterable: !0 }),
-  rg8unorm: v("rg8unorm", "unorm", 2, { renderable: !0, filterable: !0 }),
-  rg8snorm: v("rg8snorm", "snorm", 2, {}),
-  rg8uint: v("rg8uint", "uint", 2, { renderable: !0 }),
-  rg8sint: v("rg8sint", "sint", 2, { renderable: !0 }),
-  r32uint: v("r32uint", "uint", 4, { renderable: !0, storage: !0 }),
-  r32sint: v("r32sint", "sint", 4, { renderable: !0, storage: !0 }),
-  r32float: v("r32float", "float", 4, {
+const cf = Object.freeze({
+  r8unorm: y("r8unorm", "unorm", 1, { renderable: !0, filterable: !0 }),
+  r8snorm: y("r8snorm", "snorm", 1, { filterable: !1 }),
+  r8uint: y("r8uint", "uint", 1, { renderable: !0 }),
+  r8sint: y("r8sint", "sint", 1, { renderable: !0 }),
+  r16uint: y("r16uint", "uint", 2, { renderable: !0 }),
+  r16sint: y("r16sint", "sint", 2, { renderable: !0 }),
+  r16float: y("r16float", "float", 2, { renderable: !0, filterable: !0 }),
+  rg8unorm: y("rg8unorm", "unorm", 2, { renderable: !0, filterable: !0 }),
+  rg8snorm: y("rg8snorm", "snorm", 2, {}),
+  rg8uint: y("rg8uint", "uint", 2, { renderable: !0 }),
+  rg8sint: y("rg8sint", "sint", 2, { renderable: !0 }),
+  r32uint: y("r32uint", "uint", 4, { renderable: !0, storage: !0 }),
+  r32sint: y("r32sint", "sint", 4, { renderable: !0, storage: !0 }),
+  r32float: y("r32float", "float", 4, {
     renderable: !0,
     storage: !0,
     filterFeature: "float32-filterable"
   }),
-  rg16uint: v("rg16uint", "uint", 4, { renderable: !0 }),
-  rg16sint: v("rg16sint", "sint", 4, { renderable: !0 }),
-  rg16float: v("rg16float", "float", 4, { renderable: !0, filterable: !0 }),
-  rgba8unorm: v("rgba8unorm", "unorm", 4, { renderable: !0, storage: !0, filterable: !0 }),
-  "rgba8unorm-srgb": v("rgba8unorm-srgb", "unorm", 4, { renderable: !0, filterable: !0 }),
-  rgba8snorm: v("rgba8snorm", "snorm", 4, { storage: !0 }),
-  rgba8uint: v("rgba8uint", "uint", 4, { renderable: !0, storage: !0 }),
-  rgba8sint: v("rgba8sint", "sint", 4, { renderable: !0, storage: !0 }),
-  bgra8unorm: v("bgra8unorm", "unorm", 4, {
+  rg16uint: y("rg16uint", "uint", 4, { renderable: !0 }),
+  rg16sint: y("rg16sint", "sint", 4, { renderable: !0 }),
+  rg16float: y("rg16float", "float", 4, { renderable: !0, filterable: !0 }),
+  rgba8unorm: y("rgba8unorm", "unorm", 4, { renderable: !0, storage: !0, filterable: !0 }),
+  "rgba8unorm-srgb": y("rgba8unorm-srgb", "unorm", 4, { renderable: !0, filterable: !0 }),
+  rgba8snorm: y("rgba8snorm", "snorm", 4, { storage: !0 }),
+  rgba8uint: y("rgba8uint", "uint", 4, { renderable: !0, storage: !0 }),
+  rgba8sint: y("rgba8sint", "sint", 4, { renderable: !0, storage: !0 }),
+  bgra8unorm: y("bgra8unorm", "unorm", 4, {
     renderable: !0,
     filterable: !0,
     storageFeature: "bgra8unorm-storage"
   }),
-  "bgra8unorm-srgb": v("bgra8unorm-srgb", "unorm", 4, { renderable: !0, filterable: !0 }),
-  rgb9e5ufloat: v("rgb9e5ufloat", "float", 4, {}),
-  rgb10a2unorm: v("rgb10a2unorm", "unorm", 4, { renderable: !0, filterable: !0 }),
-  rg11b10ufloat: v("rg11b10ufloat", "float", 4, { renderFeature: "rg11b10ufloat-renderable" }),
-  rg32uint: v("rg32uint", "uint", 8, { renderable: !0, storage: !0 }),
-  rg32sint: v("rg32sint", "sint", 8, { renderable: !0, storage: !0 }),
-  rg32float: v("rg32float", "float", 8, {
+  "bgra8unorm-srgb": y("bgra8unorm-srgb", "unorm", 4, { renderable: !0, filterable: !0 }),
+  rgb9e5ufloat: y("rgb9e5ufloat", "float", 4, {}),
+  rgb10a2unorm: y("rgb10a2unorm", "unorm", 4, { renderable: !0, filterable: !0 }),
+  rg11b10ufloat: y("rg11b10ufloat", "float", 4, { renderFeature: "rg11b10ufloat-renderable" }),
+  rg32uint: y("rg32uint", "uint", 8, { renderable: !0, storage: !0 }),
+  rg32sint: y("rg32sint", "sint", 8, { renderable: !0, storage: !0 }),
+  rg32float: y("rg32float", "float", 8, {
     renderable: !0,
     storage: !0,
     filterFeature: "float32-filterable"
   }),
-  rgba16uint: v("rgba16uint", "uint", 8, { renderable: !0, storage: !0 }),
-  rgba16sint: v("rgba16sint", "sint", 8, { renderable: !0, storage: !0 }),
-  rgba16float: v("rgba16float", "float", 8, { renderable: !0, storage: !0, filterable: !0 }),
-  rgba32uint: v("rgba32uint", "uint", 16, { renderable: !0, storage: !0 }),
-  rgba32sint: v("rgba32sint", "sint", 16, { renderable: !0, storage: !0 }),
-  rgba32float: v("rgba32float", "float", 16, {
+  rgba16uint: y("rgba16uint", "uint", 8, { renderable: !0, storage: !0 }),
+  rgba16sint: y("rgba16sint", "sint", 8, { renderable: !0, storage: !0 }),
+  rgba16float: y("rgba16float", "float", 8, { renderable: !0, storage: !0, filterable: !0 }),
+  rgba32uint: y("rgba32uint", "uint", 16, { renderable: !0, storage: !0 }),
+  rgba32sint: y("rgba32sint", "sint", 16, { renderable: !0, storage: !0 }),
+  rgba32float: y("rgba32float", "float", 16, {
     renderable: !0,
     storage: !0,
     filterFeature: "float32-filterable"
   }),
-  depth16unorm: v("depth16unorm", "depth", 2, {
+  depth16unorm: y("depth16unorm", "depth", 2, {
     depthStencilAttachment: !0,
     filterable: !0
   }),
   // depth24plus 的实际位数由实现决定（至少 24 位、通常按 4 字节存储），
   // 因此没有确定的内存布局：既不能采样，也不能拷贝。
-  depth24plus: v("depth24plus", "depth", 4, {
+  depth24plus: y("depth24plus", "depth", 4, {
     depthStencilAttachment: !0,
     sampleable: !1,
     copyable: !1
   }),
-  "depth24plus-stencil8": v("depth24plus-stencil8", "depth", 4, {
+  "depth24plus-stencil8": y("depth24plus-stencil8", "depth", 4, {
     depthStencilAttachment: !0,
     sampleable: !1,
     copyable: !1
   }),
-  depth32float: v("depth32float", "depth", 4, {
+  depth32float: y("depth32float", "depth", 4, {
     depthStencilAttachment: !0,
     filterFeature: "float32-filterable"
   }),
-  stencil8: v("stencil8", "stencil", 1, {
+  stencil8: y("stencil8", "stencil", 1, {
     depthStencilAttachment: !0,
     sampleable: !1
   })
 });
-function _e(t) {
-  const e = jf[t];
+function Pe(t) {
+  const e = cf[t];
   if (!e)
     throw new u(
       `[gpu-device-api] Unknown or unsupported TextureFormat "${String(t)}".`
     );
   return e;
 }
-function Q(t) {
-  const e = Hn[t];
+function J(t) {
+  const e = tr[t];
   if (!e)
     throw new u(
       `[gpu-device-api] Unknown or unsupported TextureFormat "${String(t)}"; the WebGPU backend only accepts formats declared by core.`
     );
   return e;
 }
-function Xf(t) {
-  for (const [e, n] of Object.entries(Hn))
+function uf(t) {
+  for (const [e, n] of Object.entries(tr))
     if (n === t) return e;
   throw new u(
     `[gpu-device-api] GPU texture format "${t}" has no core TextureFormat counterpart (compressed formats and the extra WebGPU-only formats are not part of core).`
   );
 }
-function Ss(t) {
+function Bs(t) {
   return t === "depth16unorm" || t === "depth24plus" || t === "depth24plus-stencil8" || t === "depth32float";
 }
-function kt(t) {
+function jt(t) {
   return t === "depth24plus-stencil8" || t === "stencil8";
 }
-function Yf(t, e) {
-  const n = _e(t);
+function hf(t, e) {
+  const n = Pe(t);
   return n.filterable ? !0 : n.filterFeature && e ? e.has(n.filterFeature) : !1;
 }
-function Hf(t, e, n) {
-  const r = _e(t);
+function df(t, e, n) {
+  const r = Pe(t);
   if (!(r.renderable || r.depthStencilAttachment)) {
     if (r.renderFeature) {
       if (e ? e.has(r.renderFeature) : !1) return;
@@ -5999,8 +6301,8 @@ function Hf(t, e, n) {
     );
   }
 }
-function Zf(t, e, n = !1) {
-  const r = _e(t);
+function ff(t, e, n = !1) {
+  const r = Pe(t);
   if (n)
     throw new u(
       `[gpu-device-api] ${e}: a multisampled texture ("${t}", sampleCount > 1) cannot be used as a TextureBinding; WebGPU only allows multisampled textures as render attachments.`
@@ -6012,8 +6314,8 @@ function Zf(t, e, n = !1) {
       `[gpu-device-api] ${e}: "${t}" can only be used as a depth/stencil attachment and cannot be sampled (its memory layout is implementation defined). Use "depth32float" or "depth16unorm" when the depth texture has to be read in a shader.`
     );
 }
-function $s(t, e, n) {
-  const r = _e(t);
+function Gs(t, e, n) {
+  const r = Pe(t);
   if (!r.storage) {
     if (r.storageFeature) {
       if (e?.has(r.storageFeature)) return;
@@ -6026,28 +6328,28 @@ function $s(t, e, n) {
     );
   }
 }
-function Kf(t, e) {
-  if (!_e(t).copyable)
+function pf(t, e) {
+  if (!Pe(t).copyable)
     throw new u(
       `[gpu-device-api] ${e}: "${t}" is not copy-compatible in WebGPU (its memory layout is implementation defined), so it cannot be used with CopySrc/CopyDst. Use "depth32float" for depth readback.`
     );
 }
-function Qf(t, e, n) {
+function mf(t, e, n) {
   if (e !== "all") {
-    if (e === "depth-only" && !Ss(t))
+    if (e === "depth-only" && !Bs(t))
       throw new u(
         `[gpu-device-api] ${n}: aspect "depth-only" is invalid for format "${t}", which has no depth aspect.`
       );
-    if (e === "stencil-only" && !kt(t))
+    if (e === "stencil-only" && !jt(t))
       throw new u(
         `[gpu-device-api] ${n}: aspect "stencil-only" is invalid for format "${t}", which has no stencil aspect.`
       );
   }
 }
-function Jf(t, e, n, r) {
-  _e(t);
+function gf(t, e, n, r) {
+  Pe(t);
   const i = n.sampleCount ?? 1;
-  if (e & x.RenderAttachment && Hf(t, n.features, r), e & x.TextureBinding && Zf(t, r, i > 1), e & x.StorageBinding && $s(t, n.features, r), e & (x.CopySrc | x.CopyDst) && Kf(t, r), i > 1) {
+  if (e & v.RenderAttachment && df(t, n.features, r), e & v.TextureBinding && ff(t, r, i > 1), e & v.StorageBinding && Gs(t, n.features, r), e & (v.CopySrc | v.CopyDst) && pf(t, r), i > 1) {
     if (i !== 4)
       throw new u(
         `[gpu-device-api] ${r}: sampleCount must be 1 or 4, got ${String(i)}.`
@@ -6060,17 +6362,17 @@ function Jf(t, e, n, r) {
       throw new u(
         `[gpu-device-api] ${r}: a multisampled texture must be "2d", got "${n.dimension}".`
       );
-    if (e & (x.CopySrc | x.CopyDst))
+    if (e & (v.CopySrc | v.CopyDst))
       throw new u(
         `[gpu-device-api] ${r}: a multisampled texture cannot be a copy source or destination; resolve it into a single-sampled texture first.`
       );
-    if (e & (x.TextureBinding | x.StorageBinding))
+    if (e & (v.TextureBinding | v.StorageBinding))
       throw new u(
         `[gpu-device-api] ${r}: a multisampled texture can only be used as a render attachment.`
       );
   }
 }
-const ed = [
+const bf = [
   "maxTextureDimension1D",
   "maxTextureDimension2D",
   "maxTextureDimension3D",
@@ -6102,7 +6404,7 @@ const ed = [
   "maxComputeWorkgroupSizeY",
   "maxComputeWorkgroupSizeZ",
   "maxComputeWorkgroupsPerDimension"
-], td = Object.freeze({
+], wf = Object.freeze({
   maxTextureDimension1D: 8192,
   maxTextureDimension2D: 8192,
   maxTextureDimension3D: 2048,
@@ -6135,20 +6437,20 @@ const ed = [
   maxComputeWorkgroupSizeZ: 64,
   maxComputeWorkgroupsPerDimension: 65535
 });
-function Zn() {
+function nr() {
   const e = globalThis.navigator?.gpu;
   return !e || typeof e.requestAdapter != "function" ? null : e;
 }
-function Er() {
-  return Zn() !== null;
+function Rr() {
+  return nr() !== null;
 }
-async function nd(t = {}) {
-  const e = Zn();
+async function yf(t = {}) {
+  const e = nr();
   if (!e) return null;
   const n = {};
   return t.powerPreference !== void 0 && (n.powerPreference = t.powerPreference), t.forceFallbackAdapter !== void 0 && (n.forceFallbackAdapter = t.forceFallbackAdapter), t.featureLevel !== void 0 && (n.featureLevel = t.featureLevel), t.xrCompatible !== void 0 && (n.xrCompatible = t.xrCompatible), e.requestAdapter(n);
 }
-function rd(t) {
+function Os(t) {
   const e = /* @__PURE__ */ new Set();
   if (!t) return e;
   if (typeof t[Symbol.iterator] == "function") {
@@ -6163,15 +6465,15 @@ function rd(t) {
   const i = t.forEach;
   return typeof i == "function" && i.call(t, (s) => e.add(s)), e;
 }
-function As(t) {
+function Us(t) {
   const e = t ?? {}, n = {};
-  for (const r of ed) {
+  for (const r of bf) {
     const i = e[r];
-    n[r] = typeof i == "number" && Number.isFinite(i) ? i : td[r];
+    n[r] = typeof i == "number" && Number.isFinite(i) ? i : wf[r];
   }
   return n;
 }
-function id(t) {
+function vf(t) {
   const e = t.info ?? {};
   return {
     backend: "webgpu",
@@ -6182,7 +6484,7 @@ function id(t) {
     isFallbackAdapter: e.isFallbackAdapter === !0
   };
 }
-function sd(t, e, n) {
+function xf(t, e, n) {
   if (!e || e.length === 0) return [];
   const r = [];
   for (const i of e) {
@@ -6195,7 +6497,7 @@ function sd(t, e, n) {
   }
   return r;
 }
-class ad {
+class Sf {
   set;
   constructor(e) {
     this.set = e instanceof Set ? e : new Set(e);
@@ -6211,32 +6513,32 @@ class ad {
     return `WebGPUFeatures(${this.names.join(", ") || "none"})`;
   }
 }
-function Lr() {
-  const t = Zn();
+function Br() {
+  const t = nr();
   return t && t.getPreferredCanvasFormat() === "rgba8unorm" ? "rgba8unorm" : "bgra8unorm";
 }
-function od(t) {
-  const e = Q(t);
+function Tf(t) {
+  const e = J(t);
   if (e !== "rgba8unorm" && e !== "bgra8unorm")
     throw new u(
       `[gpu-device-api] CanvasContext.configure: WebGPU only allows "rgba8unorm" or "bgra8unorm" as the canvas format, got "${t}".`
     );
   return e;
 }
-function cd(t) {
+function $f(t) {
   const n = t.getContext.call(t, "webgpu");
   return !n || typeof n.getCurrentTexture != "function" ? null : n;
 }
-const nn = {
+const on = {
   VERTEX: 1,
   FRAGMENT: 2,
   COMPUTE: 4
-}, gt = {
+}, xt = {
   RED: 1,
   GREEN: 2,
   BLUE: 4,
   ALPHA: 8
-}, ee = {
+}, te = {
   MAP_READ: 1,
   MAP_WRITE: 2,
   COPY_SRC: 4,
@@ -6247,17 +6549,17 @@ const nn = {
   STORAGE: 128,
   INDIRECT: 256,
   QUERY_RESOLVE: 512
-}, qe = {
+}, Ye = {
   COPY_SRC: 1,
   COPY_DST: 2,
   TEXTURE_BINDING: 4,
   STORAGE_BINDING: 8,
   RENDER_ATTACHMENT: 16
-}, Cr = {
+}, Gr = {
   READ: 1,
   WRITE: 2
 };
-function ld(t) {
+function Af(t) {
   if (!Number.isInteger(t))
     throw new u(
       `[gpu-device-api] ShaderStage visibility must be an integer bit mask, got ${String(t)}.`
@@ -6267,21 +6569,21 @@ function ld(t) {
       `[gpu-device-api] ShaderStage visibility 0x${(t >>> 0).toString(16)} contains unknown bits; expected a combination of Vertex (0x1), Fragment (0x2) and Compute (0x4).`
     );
   let e = 0;
-  if (t & q.Vertex && (e |= nn.VERTEX), t & q.Fragment && (e |= nn.FRAGMENT), t & q.Compute && (e |= nn.COMPUTE), e === 0)
+  if (t & q.Vertex && (e |= on.VERTEX), t & q.Fragment && (e |= on.FRAGMENT), t & q.Compute && (e |= on.COMPUTE), e === 0)
     throw new u(
       "[gpu-device-api] A BindGroupLayout entry must be visible from at least one shader stage."
     );
   return e;
 }
-function ud(t) {
+function _f(t) {
   if (!Number.isInteger(t) || t & -16)
     throw new u(
       `[gpu-device-api] ColorWriteMask must be a combination of Red (0x1), Green (0x2), Blue (0x4) and Alpha (0x8); got ${String(t)}.`
     );
   let e = 0;
-  return t & ae.Red && (e |= gt.RED), t & ae.Green && (e |= gt.GREEN), t & ae.Blue && (e |= gt.BLUE), t & ae.Alpha && (e |= gt.ALPHA), e;
+  return t & oe.Red && (e |= xt.RED), t & oe.Green && (e |= xt.GREEN), t & oe.Blue && (e |= xt.BLUE), t & oe.Alpha && (e |= xt.ALPHA), e;
 }
-function hd(t) {
+function Ef(t) {
   if (!Number.isInteger(t) || t <= 0)
     throw new u(
       `[gpu-device-api] BufferUsage must be a non-empty combination of usage flags, got ${String(t)}.`
@@ -6290,14 +6592,14 @@ function hd(t) {
     throw new u(
       `[gpu-device-api] BufferUsage 0x${(t >>> 0).toString(16)} contains unknown bits.`
     );
-  if (t & O.MapRead && t & O.MapWrite)
+  if (t & C.MapRead && t & C.MapWrite)
     throw new u(
       "[gpu-device-api] BufferUsage cannot combine MapRead and MapWrite: WebGPU rejects a buffer that is both mappable for reading and for writing. Use two buffers (or CopyDst plus writeBuffer)."
     );
   let e = 0;
-  return t & O.MapRead && (e |= ee.MAP_READ), t & O.MapWrite && (e |= ee.MAP_WRITE), t & O.CopySrc && (e |= ee.COPY_SRC), t & O.CopyDst && (e |= ee.COPY_DST), t & O.Index && (e |= ee.INDEX), t & O.Vertex && (e |= ee.VERTEX), t & O.Uniform && (e |= ee.UNIFORM), t & O.Storage && (e |= ee.STORAGE), t & O.Indirect && (e |= ee.INDIRECT), t & O.QueryResolve && (e |= ee.QUERY_RESOLVE), e;
+  return t & C.MapRead && (e |= te.MAP_READ), t & C.MapWrite && (e |= te.MAP_WRITE), t & C.CopySrc && (e |= te.COPY_SRC), t & C.CopyDst && (e |= te.COPY_DST), t & C.Index && (e |= te.INDEX), t & C.Vertex && (e |= te.VERTEX), t & C.Uniform && (e |= te.UNIFORM), t & C.Storage && (e |= te.STORAGE), t & C.Indirect && (e |= te.INDIRECT), t & C.QueryResolve && (e |= te.QUERY_RESOLVE), e;
 }
-function _s(t) {
+function Ds(t) {
   if (!Number.isInteger(t) || t <= 0)
     throw new u(
       `[gpu-device-api] TextureUsage must be a non-empty combination of usage flags, got ${String(t)}.`
@@ -6307,19 +6609,19 @@ function _s(t) {
       `[gpu-device-api] TextureUsage 0x${(t >>> 0).toString(16)} contains unknown bits.`
     );
   let e = 0;
-  return t & x.CopySrc && (e |= qe.COPY_SRC), t & x.CopyDst && (e |= qe.COPY_DST), t & x.TextureBinding && (e |= qe.TEXTURE_BINDING), t & x.StorageBinding && (e |= qe.STORAGE_BINDING), t & x.RenderAttachment && (e |= qe.RENDER_ATTACHMENT), e;
+  return t & v.CopySrc && (e |= Ye.COPY_SRC), t & v.CopyDst && (e |= Ye.COPY_DST), t & v.TextureBinding && (e |= Ye.TEXTURE_BINDING), t & v.StorageBinding && (e |= Ye.STORAGE_BINDING), t & v.RenderAttachment && (e |= Ye.RENDER_ATTACHMENT), e;
 }
-function fd(t) {
+function Pf(t) {
   switch (t) {
     case "read":
-      return Cr.READ;
+      return Gr.READ;
     case "write":
-      return Cr.WRITE;
+      return Gr.WRITE;
     default:
-      return L(t, `[gpu-device-api] Unknown MapMode "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown MapMode "${String(t)}".`);
   }
 }
-function dd(t) {
+function Lf(t) {
   switch (t) {
     case "point-list":
       return "point-list";
@@ -6332,23 +6634,23 @@ function dd(t) {
     case "triangle-strip":
       return "triangle-strip";
     default:
-      return L(t, `[gpu-device-api] Unknown PrimitiveTopology "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown PrimitiveTopology "${String(t)}".`);
   }
 }
-function pd(t) {
+function Cf(t) {
   return t === "line-strip" || t === "triangle-strip";
 }
-function Es(t) {
+function Is(t) {
   switch (t) {
     case "uint16":
       return "uint16";
     case "uint32":
       return "uint32";
     default:
-      return L(t, `[gpu-device-api] Unknown IndexFormat "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown IndexFormat "${String(t)}".`);
   }
 }
-function Kn(t) {
+function rr(t) {
   switch (t) {
     case "never":
       return "never";
@@ -6367,10 +6669,10 @@ function Kn(t) {
     case "always":
       return "always";
     default:
-      return L(t, `[gpu-device-api] Unknown CompareFunction "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown CompareFunction "${String(t)}".`);
   }
 }
-function rn(t) {
+function ln(t) {
   switch (t) {
     case "keep":
       return "keep";
@@ -6389,10 +6691,10 @@ function rn(t) {
     case "decrement-wrap":
       return "decrement-wrap";
     default:
-      return L(t, `[gpu-device-api] Unknown StencilOperation "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown StencilOperation "${String(t)}".`);
   }
 }
-function Mr(t) {
+function Or(t) {
   switch (t) {
     case "zero":
       return "zero";
@@ -6421,10 +6723,10 @@ function Mr(t) {
     case "one-minus-constant":
       return "one-minus-constant";
     default:
-      return L(t, `[gpu-device-api] Unknown BlendFactor "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown BlendFactor "${String(t)}".`);
   }
 }
-function md(t) {
+function Mf(t) {
   switch (t) {
     case "add":
       return "add";
@@ -6437,10 +6739,10 @@ function md(t) {
     case "max":
       return "max";
     default:
-      return L(t, `[gpu-device-api] Unknown BlendOperation "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown BlendOperation "${String(t)}".`);
   }
 }
-function sn(t) {
+function cn(t) {
   switch (t) {
     case "clamp-to-edge":
       return "clamp-to-edge";
@@ -6449,30 +6751,30 @@ function sn(t) {
     case "mirror-repeat":
       return "mirror-repeat";
     default:
-      return L(t, `[gpu-device-api] Unknown AddressMode "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown AddressMode "${String(t)}".`);
   }
 }
-function Pr(t) {
+function Ur(t) {
   switch (t) {
     case "nearest":
       return "nearest";
     case "linear":
       return "linear";
     default:
-      return L(t, `[gpu-device-api] Unknown FilterMode "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown FilterMode "${String(t)}".`);
   }
 }
-function gd(t) {
+function Ff(t) {
   switch (t) {
     case "nearest":
       return "nearest";
     case "linear":
       return "linear";
     default:
-      return L(t, `[gpu-device-api] Unknown mipmap filter mode "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown mipmap filter mode "${String(t)}".`);
   }
 }
-function bd(t) {
+function Rf(t) {
   switch (t) {
     case "none":
       return "none";
@@ -6481,40 +6783,40 @@ function bd(t) {
     case "back":
       return "back";
     default:
-      return L(t, `[gpu-device-api] Unknown CullMode "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown CullMode "${String(t)}".`);
   }
 }
-function wd(t) {
+function Bf(t) {
   switch (t) {
     case "ccw":
       return "ccw";
     case "cw":
       return "cw";
     default:
-      return L(t, `[gpu-device-api] Unknown FrontFace "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown FrontFace "${String(t)}".`);
   }
 }
-function an(t) {
+function un(t) {
   switch (t) {
     case "load":
       return "load";
     case "clear":
       return "clear";
     default:
-      return L(t, `[gpu-device-api] Unknown LoadOp "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown LoadOp "${String(t)}".`);
   }
 }
-function on(t) {
+function hn(t) {
   switch (t) {
     case "store":
       return "store";
     case "discard":
       return "discard";
     default:
-      return L(t, `[gpu-device-api] Unknown StoreOp "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown StoreOp "${String(t)}".`);
   }
 }
-function $n(t) {
+function Cn(t) {
   switch (t) {
     case "1d":
       return "1d";
@@ -6529,10 +6831,10 @@ function $n(t) {
     case "3d":
       return "3d";
     default:
-      return L(t, `[gpu-device-api] Unknown TextureViewDimension "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown TextureViewDimension "${String(t)}".`);
   }
 }
-function Qn(t) {
+function ir(t) {
   switch (t) {
     case "all":
       return "all";
@@ -6541,20 +6843,20 @@ function Qn(t) {
     case "stencil-only":
       return "stencil-only";
     default:
-      return L(t, `[gpu-device-api] Unknown TextureAspect "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown TextureAspect "${String(t)}".`);
   }
 }
-function vd(t) {
+function Gf(t) {
   switch (t) {
     case "vertex":
       return "vertex";
     case "instance":
       return "instance";
     default:
-      return L(t, `[gpu-device-api] Unknown VertexStepMode "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown VertexStepMode "${String(t)}".`);
   }
 }
-function xd(t) {
+function Of(t) {
   switch (t) {
     case "uint8x2":
       return "uint8x2";
@@ -6617,20 +6919,20 @@ function xd(t) {
     case "sint32x4":
       return "sint32x4";
     default:
-      return L(t, `[gpu-device-api] Unknown VertexFormat "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown VertexFormat "${String(t)}".`);
   }
 }
-function yd(t) {
+function Uf(t) {
   switch (t) {
-    case bn.Occlusion:
+    case ze.Occlusion:
       return "occlusion";
-    case bn.Timestamp:
+    case ze.Timestamp:
       return "timestamp";
     default:
-      return L(t, `[gpu-device-api] Unknown QueryType "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown QueryType "${String(t)}".`);
   }
 }
-function Td(t) {
+function Df(t) {
   switch (t) {
     case "uniform":
       return "uniform";
@@ -6644,7 +6946,7 @@ function Td(t) {
       );
   }
 }
-function Sd(t) {
+function If(t) {
   switch (t) {
     case "sampler":
       return "filtering";
@@ -6656,7 +6958,7 @@ function Sd(t) {
       );
   }
 }
-function $d(t) {
+function Vf(t) {
   switch (t) {
     case "float":
       return "float";
@@ -6669,10 +6971,10 @@ function $d(t) {
     case "uint":
       return "uint";
     default:
-      return L(t, `[gpu-device-api] Unknown TextureSampleType "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown TextureSampleType "${String(t)}".`);
   }
 }
-function Ad(t) {
+function Nf(t) {
   switch (t) {
     case "write-only":
       return "write-only";
@@ -6681,20 +6983,20 @@ function Ad(t) {
     case "read-write":
       return "read-write";
     default:
-      return L(t, `[gpu-device-api] Unknown StorageTextureAccess "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown StorageTextureAccess "${String(t)}".`);
   }
 }
-function _d(t) {
+function kf(t) {
   switch (t) {
     case "filtering":
     case "non-filtering":
     case "comparison":
       return t;
     default:
-      return L(t, `[gpu-device-api] Unknown SamplerBindingType "${String(t)}".`);
+      return P(t, `[gpu-device-api] Unknown SamplerBindingType "${String(t)}".`);
   }
 }
-const Ed = {
+const zf = {
   transparent: [0, 0, 0, 0],
   black: [0, 0, 0, 1],
   white: [1, 1, 1, 1],
@@ -6716,27 +7018,27 @@ const Ed = {
   purple: [0.5019607843137255, 0, 0.5019607843137255, 1],
   magenta: [1, 0, 1, 1],
   fuchsia: [1, 0, 1, 1]
-}, Ld = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/, Cd = /^rgba?\(([^)]*)\)$/;
-function Ls(t) {
+}, Wf = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/, qf = /^rgba?\(([^)]*)\)$/;
+function Vs(t) {
   if (t === void 0) return { r: 0, g: 0, b: 0, a: 1 };
-  if (typeof t == "string") return Pd(t);
-  if (typeof t == "number") return Md(t);
+  if (typeof t == "string") return Qf(t);
+  if (typeof t == "number") return jf(t);
   if (Array.isArray(t)) {
     const n = t;
     if (n.length !== 3 && n.length !== 4)
       throw new u(
         `[gpu-device-api] A clear color array needs 3 or 4 components, got ${n.length}.`
       );
-    return Fr(n[0], n[1], n[2], n.length === 4 ? n[3] : 1, t);
+    return Dr(n[0], n[1], n[2], n.length === 4 ? n[3] : 1, t);
   }
   const e = t;
   if (typeof e.r != "number" || typeof e.g != "number" || typeof e.b != "number")
     throw new u(
       '[gpu-device-api] A clear color object needs numeric "r", "g" and "b" members.'
     );
-  return Fr(e.r, e.g, e.b, typeof e.a == "number" ? e.a : 1, t);
+  return Dr(e.r, e.g, e.b, typeof e.a == "number" ? e.a : 1, t);
 }
-function Fr(t, e, n, r, i) {
+function Dr(t, e, n, r, i) {
   for (const [s, a] of [
     ["r", t],
     ["g", e],
@@ -6749,7 +7051,7 @@ function Fr(t, e, n, r, i) {
       );
   return { r: t, g: e, b: n, a: r };
 }
-function Md(t) {
+function jf(t) {
   if (!Number.isFinite(t) || !Number.isInteger(t) || t < 0 || t > 16777215)
     throw new u(
       `[gpu-device-api] A numeric clear color must be an integer in 0x000000..0xFFFFFF (0xRRGGBB), got ${String(t)}.`
@@ -6761,34 +7063,34 @@ function Md(t) {
     a: 1
   };
 }
-function Pd(t) {
-  const e = t.trim().toLowerCase(), n = Ld.exec(e);
+function Qf(t) {
+  const e = t.trim().toLowerCase(), n = Wf.exec(e);
   if (n) {
     const s = n[1];
     if (s.length === 3 || s.length === 4) {
-      const h = parseInt(s[0] + s[0], 16) / 255, d = parseInt(s[1] + s[1], 16) / 255, f = parseInt(s[2] + s[2], 16) / 255, p = s.length === 4 ? parseInt(s[3] + s[3], 16) / 255 : 1;
-      return { r: h, g: d, b: f, a: p };
+      const h = parseInt(s[0] + s[0], 16) / 255, f = parseInt(s[1] + s[1], 16) / 255, d = parseInt(s[2] + s[2], 16) / 255, p = s.length === 4 ? parseInt(s[3] + s[3], 16) / 255 : 1;
+      return { r: h, g: f, b: d, a: p };
     }
-    const a = parseInt(s.slice(0, 2), 16) / 255, o = parseInt(s.slice(2, 4), 16) / 255, l = parseInt(s.slice(4, 6), 16) / 255, c = s.length === 8 ? parseInt(s.slice(6, 8), 16) / 255 : 1;
-    return { r: a, g: o, b: l, a: c };
+    const a = parseInt(s.slice(0, 2), 16) / 255, o = parseInt(s.slice(2, 4), 16) / 255, c = parseInt(s.slice(4, 6), 16) / 255, l = s.length === 8 ? parseInt(s.slice(6, 8), 16) / 255 : 1;
+    return { r: a, g: o, b: c, a: l };
   }
-  const r = Ed[e];
+  const r = zf[e];
   if (r) return { r: r[0], g: r[1], b: r[2], a: r[3] };
-  const i = Cd.exec(e);
+  const i = qf.exec(e);
   if (i) {
     const s = i[1].replace(/\//g, " ").split(/[\s,]+/).filter((h) => h.length > 0);
     if (s.length !== 3 && s.length !== 4)
       throw new u(
         `[gpu-device-api] Clear color "${t}" needs 3 or 4 components inside rgb()/rgba().`
       );
-    const a = cn(s[0], t), o = cn(s[1], t), l = cn(s[2], t), c = s.length === 4 ? Fd(s[3], t) : 1;
-    return { r: a, g: o, b: l, a: c };
+    const a = dn(s[0], t), o = dn(s[1], t), c = dn(s[2], t), l = s.length === 4 ? Xf(s[3], t) : 1;
+    return { r: a, g: o, b: c, a: l };
   }
   throw new u(
     `[gpu-device-api] Unsupported clear color string "${t}". Expected "#rgb", "#rgba", "#rrggbb", "#rrggbbaa", "rgb()/rgba()", a known color name, a 0xRRGGBB number, an array of 0..1 components, or an { r, g, b, a } object.`
   );
 }
-function cn(t, e) {
+function dn(t, e) {
   if (t.endsWith("%")) {
     const r = Number(t.slice(0, -1));
     if (!Number.isFinite(r))
@@ -6800,7 +7102,7 @@ function cn(t, e) {
     throw new u(`[gpu-device-api] Clear color "${e}" has an invalid component "${t}".`);
   return n / 255;
 }
-function Fd(t, e) {
+function Xf(t, e) {
   if (t.endsWith("%")) {
     const r = Number(t.slice(0, -1));
     if (!Number.isFinite(r))
@@ -6812,35 +7114,35 @@ function Fd(t, e) {
     throw new u(`[gpu-device-api] Clear color "${e}" has an invalid alpha "${t}".`);
   return n;
 }
-function Ie(t) {
+function Ne(t) {
   return {
     width: t.width,
     height: t.height,
     depthOrArrayLayers: t.depthOrArrayLayers
   };
 }
-function Cs(t) {
+function Ns(t) {
   return {
     x: t?.x ?? 0,
     y: t?.y ?? 0,
     z: t?.z ?? 0
   };
 }
-function Bd(t) {
+function Yf(t) {
   return {
     offset: t.offset,
     bytesPerRow: t.bytesPerRow,
     rowsPerImage: t.rowsPerImage
   };
 }
-function tt(t, e) {
+function at(t, e) {
   if (t !== 1 && t !== 4)
     throw new u(
       `[gpu-device-api] ${e}: sampleCount must be 1 or 4, got ${String(t)} (WebGPU core only guarantees 1 and 4).`
     );
   return t;
 }
-class Ms {
+class ks {
   label;
   size;
   usage;
@@ -6859,7 +7161,7 @@ class Ms {
    */
   mappedRange = null;
   constructor(e, n) {
-    if (this.device = e, this.label = n.label ?? `buffer#${e.nextResourceId("buffer")}`, Ye(n.size, "BufferDescriptor.size"), n.size % 4 !== 0)
+    if (this.device = e, this.label = n.label ?? `buffer#${e.nextResourceId("buffer")}`, We(n.size, "BufferDescriptor.size"), n.size % 4 !== 0)
       throw new u(
         `[gpu-device-api] BufferDescriptor.size must be a multiple of 4 (WebGPU requires 4-byte aligned buffer sizes), got ${n.size}. Use alignTo4()/paddedCopy() when uploading tightly packed data.`
       );
@@ -6870,7 +7172,7 @@ class Ms {
     this.size = n.size, this.usage = n.usage, this.native = e.native.createBuffer({
       label: this.label,
       size: n.size,
-      usage: hd(n.usage)
+      usage: Ef(n.usage)
     });
   }
   get disposed() {
@@ -6895,7 +7197,7 @@ class Ms {
         `[gpu-device-api] Buffer "${this.label}" is already mapped; call unmap() before mapping it again.`
       );
     const i = r ?? this.size - n;
-    this.assertRange(n, i, "Buffer.mapAsync"), await this.native.mapAsync(fd(e), n, i), this._mapped = !0;
+    this.assertRange(n, i, "Buffer.mapAsync"), await this.native.mapAsync(Pf(e), n, i), this._mapped = !0;
     const s = this.native.getMappedRange(n, i);
     return this.mappedRange = { offset: n, size: i, data: s }, s;
   }
@@ -6941,7 +7243,7 @@ class Ms {
       );
   }
   assertRange(e, n, r, i = this.size) {
-    if (Bt(e, `${r} offset`), Ye(n, `${r} size`), e + n > i) {
+    if (Te(e, `${r} offset`), We(n, `${r} size`), e + n > i) {
       const s = i === this.size ? `buffer "${this.label}" size ${this.size}` : `mapped range size ${i} of buffer "${this.label}"`;
       throw new u(
         `[gpu-device-api] ${r}: range [${e}, ${e + n}) exceeds ${s}.`
@@ -6949,19 +7251,19 @@ class Ms {
     }
   }
 }
-function Rd(t) {
+function Hf(t) {
   if (!t || typeof t != "object") return !1;
   const e = t;
   return typeof e.mapAsync == "function" && typeof e.getMappedRange == "function" && typeof e.destroy == "function" && !("native" in e);
 }
-function D(t, e) {
-  if (t instanceof Ms) return t.native;
-  if (Rd(t)) return t;
+function U(t, e) {
+  if (t instanceof ks) return t.native;
+  if (Hf(t)) return t;
   throw new u(
-    `[gpu-device-api] ${e}: expected a WebGPU buffer (WebGPUBuffer or a native GPUBuffer), got ${te(t)}.`
+    `[gpu-device-api] ${e}: expected a WebGPU buffer (WebGPUBuffer or a native GPUBuffer), got ${ne(t)}.`
   );
 }
-function te(t) {
+function ne(t) {
   if (t === null) return "null";
   if (t === void 0) return "undefined";
   if (typeof t == "object") {
@@ -6970,7 +7272,7 @@ function te(t) {
   }
   return `${typeof t} ${String(t)}`;
 }
-class Jn {
+class sr {
   label;
   texture;
   descriptor;
@@ -6982,10 +7284,10 @@ class Jn {
    */
   constructor(e, n = {}, r) {
     this.texture = e;
-    const i = r ?? $t(e, n);
+    const i = r ?? Lt(e, n);
     this.label = n.label ?? `${e.label}#view`;
     const s = i.aspect;
-    if (Qf(e.format, s, `Texture "${e.label}".createView`), i.baseMipLevel + i.mipLevelCount > e.mipLevelCount)
+    if (mf(e.format, s, `Texture "${e.label}".createView`), i.baseMipLevel + i.mipLevelCount > e.mipLevelCount)
       throw new u(
         `[gpu-device-api] Texture "${e.label}".createView: mip range [${i.baseMipLevel}, ${i.baseMipLevel + i.mipLevelCount}) exceeds mipLevelCount ${e.mipLevelCount}.`
       );
@@ -7005,15 +7307,15 @@ class Jn {
     }
     this.descriptor = i;
     let a;
-    if (i.format !== void 0 && (a = Q(i.format), i.format !== e.format && !e.viewFormats.includes(i.format)))
+    if (i.format !== void 0 && (a = J(i.format), i.format !== e.format && !e.viewFormats.includes(i.format)))
       throw new u(
         `[gpu-device-api] Texture "${e.label}".createView: view format "${i.format}" was not listed in the texture's viewFormats (${e.viewFormats.join(", ") || "none"}).`
       );
     this.native = e.native.createView({
       label: this.label,
       format: a,
-      dimension: $n(i.dimension),
-      aspect: Qn(i.aspect),
+      dimension: Cn(i.dimension),
+      aspect: ir(i.aspect),
       baseMipLevel: i.baseMipLevel,
       mipLevelCount: i.mipLevelCount,
       baseArrayLayer: i.baseArrayLayer,
@@ -7032,19 +7334,19 @@ class Jn {
     this._disposed = !0;
   }
 }
-function Ps(t) {
-  return t instanceof Jn;
+function zs(t) {
+  return t instanceof sr;
 }
-function Gd(t) {
+function Zf(t) {
   if (!t || typeof t != "object") return !1;
   const e = t;
   return "native" in e || "createView" in e ? !1 : Object.prototype.toString.call(t) === "[object GPUTextureView]" ? !0 : !("texture" in e) && !("format" in e) && !("mapAsync" in e);
 }
-function Xe(t, e) {
-  if (t instanceof Jn) return t.native;
-  if (Gd(t)) return t;
+function Ze(t, e) {
+  if (t instanceof sr) return t.native;
+  if (Zf(t)) return t;
   throw new u(
-    `[gpu-device-api] ${e}: expected a WebGPU texture view (WebGPUTextureView or a native GPUTextureView), got ${te(t)}.`
+    `[gpu-device-api] ${e}: expected a WebGPU texture view (WebGPUTextureView or a native GPUTextureView), got ${ne(t)}.`
   );
 }
 class me {
@@ -7078,7 +7380,7 @@ class me {
    * `label` 缺省时用 `nextId()` 生成，便于在 WebGPU 的 validation 信息里定位资源。
    */
   static create(e, n) {
-    const r = Cn(n.size), i = {
+    const r = Gn(n.size), i = {
       label: n.label ?? `texture#${e.nextResourceId("texture")}`,
       size: r,
       mipLevelCount: n.mipLevelCount ?? 1,
@@ -7088,16 +7390,16 @@ class me {
       usage: n.usage,
       viewFormats: n.viewFormats ?? []
     };
-    Ud(i, e);
+    Kf(i, e);
     const s = e.native.createTexture({
       label: i.label,
       size: { width: r.width, height: r.height, depthOrArrayLayers: r.depthOrArrayLayers },
       mipLevelCount: i.mipLevelCount,
       sampleCount: i.sampleCount,
       dimension: i.dimension,
-      format: Q(i.format),
-      usage: _s(i.usage),
-      viewFormats: i.viewFormats.map((a) => Q(a))
+      format: J(i.format),
+      usage: Ds(i.usage),
+      viewFormats: i.viewFormats.map((a) => J(a))
     });
     return new me(e, s, i, !0);
   }
@@ -7118,7 +7420,7 @@ class me {
       mipLevelCount: r.mipLevelCount ?? n.mipLevelCount,
       sampleCount: r.sampleCount ?? n.sampleCount,
       dimension: r.dimension ?? n.dimension,
-      format: r.format ?? Xf(n.format),
+      format: r.format ?? uf(n.format),
       usage: r.usage ?? n.usage,
       viewFormats: r.viewFormats ?? []
     };
@@ -7141,10 +7443,10 @@ class me {
         `[gpu-device-api] Texture.createView: texture "${this.label}" has been destroyed.`
       );
     let n, r;
-    e === void 0 ? (n = this.defaultViewResolved ?? (this.defaultViewResolved = $t(this, {})), r = this.defaultViewKey ?? (this.defaultViewKey = Br(n))) : (n = $t(this, e), r = Br(n));
+    e === void 0 ? (n = this.defaultViewResolved ?? (this.defaultViewResolved = Lt(this, {})), r = this.defaultViewKey ?? (this.defaultViewKey = Ir(n))) : (n = Lt(this, e), r = Ir(n));
     const i = this.viewCache.get(r);
     if (i) return i;
-    const s = new Jn(this, e, n);
+    const s = new sr(this, e, n);
     return this.viewCache.set(r, s), this.viewList.push(s), s;
   }
   /** 目前已创建的 view；随 texture 一同释放。 */
@@ -7164,8 +7466,8 @@ class me {
     this.destroy();
   }
 }
-function Br(t) {
-  return pi(
+function Ir(t) {
+  return Ti(
     t.format ?? "",
     t.dimension,
     t.baseMipLevel,
@@ -7175,7 +7477,7 @@ function Br(t) {
     t.aspect
   );
 }
-function Ud(t, e) {
+function Kf(t, e) {
   const { width: n, height: r, depthOrArrayLayers: i } = t.size;
   if (!Number.isInteger(n) || n <= 0 || !Number.isInteger(r) || r <= 0)
     throw new u(
@@ -7189,7 +7491,7 @@ function Ud(t, e) {
     throw new u(
       `[gpu-device-api] Texture "${t.label}": mipLevelCount must be a positive integer.`
     );
-  const s = xa(t.size);
+  const s = Ra(t.size);
   if (t.mipLevelCount > s)
     throw new u(
       `[gpu-device-api] Texture "${t.label}": mipLevelCount ${t.mipLevelCount} is more than the maximum ${s} for a ${n}x${r}x${i} texture.`
@@ -7211,7 +7513,7 @@ function Ud(t, e) {
     throw new u(
       `[gpu-device-api] Texture "${t.label}": depthOrArrayLayers ${i} exceeds maxTextureArrayLayers ${e.limits.maxTextureArrayLayers}.`
     );
-  Jf(
+  gf(
     t.format,
     t.usage,
     {
@@ -7224,28 +7526,28 @@ function Ud(t, e) {
   );
   for (const o of t.viewFormats) {
     if (o === t.format) continue;
-    const l = (c) => c.replace("-srgb", "");
-    if (l(o) !== l(t.format))
+    const c = (l) => l.replace("-srgb", "");
+    if (c(o) !== c(t.format))
       throw new u(
         `[gpu-device-api] Texture "${t.label}": viewFormat "${o}" is not compatible with format "${t.format}" (WebGPU only allows srgb <-> non-srgb reinterpretation).`
       );
   }
 }
-function Rr(t) {
+function Vr(t) {
   if (!t || typeof t != "object") return !1;
   const e = t;
   return typeof e.createView == "function" && typeof e.destroy == "function" && !("native" in e);
 }
-function Fs(t, e) {
+function Ws(t, e) {
   if (t instanceof me) return t.native;
-  if (Rr(t)) return t;
+  if (Vr(t)) return t;
   const n = t?.native;
-  if (n !== void 0 && Rr(n)) return n;
+  if (n !== void 0 && Vr(n)) return n;
   throw new u(
-    `[gpu-device-api] ${e}: expected a WebGPU texture (WebGPUTexture or a native GPUTexture), got ${te(t)}.`
+    `[gpu-device-api] ${e}: expected a WebGPU texture (WebGPUTexture or a native GPUTexture), got ${ne(t)}.`
   );
 }
-class er {
+class ar {
   label;
   descriptor;
   native;
@@ -7253,7 +7555,7 @@ class er {
   _disposed = !1;
   constructor(e, n = {}) {
     this.device = e, this.label = n.label ?? `sampler#${e.nextResourceId("sampler")}`;
-    const r = li(n);
+    const r = bi(n);
     if (!Number.isFinite(r.lodMinClamp) || !Number.isFinite(r.lodMaxClamp))
       throw new u(
         `[gpu-device-api] Sampler "${this.label}": lodMinClamp/lodMaxClamp must be finite numbers.`
@@ -7273,17 +7575,17 @@ class er {
     this.descriptor = r;
     const i = {
       label: this.label,
-      addressModeU: sn(r.addressModeU),
-      addressModeV: sn(r.addressModeV),
-      addressModeW: sn(r.addressModeW),
-      magFilter: Pr(r.magFilter),
-      minFilter: Pr(r.minFilter),
-      mipmapFilter: gd(r.mipmapFilter),
+      addressModeU: cn(r.addressModeU),
+      addressModeV: cn(r.addressModeV),
+      addressModeW: cn(r.addressModeW),
+      magFilter: Ur(r.magFilter),
+      minFilter: Ur(r.minFilter),
+      mipmapFilter: Ff(r.mipmapFilter),
       lodMinClamp: r.lodMinClamp,
       lodMaxClamp: r.lodMaxClamp,
       maxAnisotropy: r.maxAnisotropy
     };
-    r.compare !== void 0 && (i.compare = Kn(r.compare)), this.native = e.native.createSampler(i);
+    r.compare !== void 0 && (i.compare = rr(r.compare)), this.native = e.native.createSampler(i);
   }
   get disposed() {
     return this._disposed;
@@ -7297,20 +7599,20 @@ class er {
     this._disposed = !0, this.device.untrack(this);
   }
 }
-function Od(t) {
-  return t instanceof er;
+function Jf(t) {
+  return t instanceof ar;
 }
-function Dd(t) {
+function ep(t) {
   return !t || typeof t != "object" || "native" in t ? !1 : Object.prototype.toString.call(t) === "[object GPUSampler]";
 }
-function Id(t, e) {
-  if (t instanceof er) return t.native;
-  if (Dd(t)) return t;
+function tp(t, e) {
+  if (t instanceof ar) return t.native;
+  if (ep(t)) return t;
   throw new u(
     `[gpu-device-api] ${e}: expected a WebGPU sampler (WebGPUSampler or a native GPUSampler).`
   );
 }
-class Bs {
+class qs {
   label;
   source;
   defines;
@@ -7320,7 +7622,7 @@ class Bs {
   modulesByStage = /* @__PURE__ */ new Map();
   _disposed = !1;
   constructor(e, n) {
-    if (this.device = e, this.label = n.label ?? `shader#${e.nextResourceId("shader")}`, this.source = ui(n.code), this.defines = { ...n.defines ?? {} }, this.glsl = n.glsl ? { ...n.glsl } : {}, this.source.wgsl === void 0 && this.source.vs === void 0 && this.source.fs === void 0 && this.source.cs === void 0)
+    if (this.device = e, this.label = n.label ?? `shader#${e.nextResourceId("shader")}`, this.source = wi(n.code), this.defines = { ...n.defines ?? {} }, this.glsl = n.glsl ? { ...n.glsl } : {}, this.source.wgsl === void 0 && this.source.vs === void 0 && this.source.fs === void 0 && this.source.cs === void 0)
       throw new u(
         `[gpu-device-api] ShaderModule "${this.label}" has no source code (expected \`wgsl\`, or \`vs\`/\`fs\`/\`cs\`).`
       );
@@ -7344,7 +7646,7 @@ class Bs {
   }
   /** 按 stage 得到最终 WGSL 源码（补齐 `defines` 与防御性包装），不触发 GPU 编译。 */
   finalSource(e) {
-    return Tn({
+    return _n({
       backend: "webgpu",
       source: this.source,
       stage: e,
@@ -7382,14 +7684,17 @@ class Bs {
     this._disposed = !0, this.modulesByStage.clear(), this.device.untrack(this);
   }
 }
-function An(t, e) {
-  if (t instanceof Bs) return t;
+function Mn(t, e) {
+  if (t instanceof qs) return t;
   throw new u(
-    `[gpu-device-api] ${e}: expected a WebGPUShaderModule created by this device, got ${te(t)}.`
+    `[gpu-device-api] ${e}: expected a WebGPUShaderModule created by this device, got ${ne(t)}.`
   );
 }
-const Gr = "timestamp-query";
-class Rs {
+const $e = "timestamp-query", fn = [
+  "timestamp-query-inside-passes",
+  "chromium-experimental-timestamp-query-inside-passes"
+];
+class js {
   label;
   type;
   count;
@@ -7397,17 +7702,17 @@ class Rs {
   device;
   _disposed = !1;
   constructor(e, n) {
-    if (this.device = e, this.label = n.label ?? `querySet#${e.nextResourceId("querySet")}`, !Number.isInteger(n.count) || n.count <= 0)
+    if (this.device = e, this.label = n.label ?? e.nextResourceId("querySet"), !Number.isInteger(n.count) || n.count <= 0)
       throw new u(
         `[gpu-device-api] QuerySet "${this.label}": count must be a positive integer, got ${String(n.count)}.`
       );
-    if (n.type === bn.Timestamp && !e.features.has(Gr))
+    if (n.type === ze.Timestamp && !e.hasEnabledFeature($e))
       throw new u(
-        `[gpu-device-api] QuerySet "${this.label}": timestamp queries need the "${Gr}" device feature; request it in DeviceDescriptor.requiredFeatures.`
+        `[gpu-device-api] QuerySet "${this.label}": timestamp queries need the "${$e}" device feature, but it is not enabled on this device. Pass it in DeviceDescriptor.requiredFeatures (available on the adapter: ${e.features.has($e) ? "yes" : "no"}).`
       );
     this.type = n.type, this.count = n.count, this.native = e.native.createQuerySet({
       label: this.label,
-      type: yd(n.type),
+      type: Uf(n.type),
       count: n.count
     });
   }
@@ -7423,8 +7728,8 @@ class Rs {
     this.destroy();
   }
 }
-function Gs(t, e) {
-  if (t instanceof Rs) return t.native;
+function et(t, e) {
+  if (t instanceof js) return t.native;
   if (t && typeof t == "object" && !("native" in t)) {
     const n = t;
     if (typeof n.destroy == "function" && typeof n.count == "number")
@@ -7434,7 +7739,51 @@ function Gs(t, e) {
     `[gpu-device-api] ${e}: expected a WebGPU query set (WebGPUQuerySet or a native GPUQuerySet).`
   );
 }
-class Us {
+function Qs(t, e, n) {
+  if (yi(t, n), !e.hasEnabledFeature($e))
+    throw new u(
+      `[gpu-device-api] ${n}: writing timestamps inside a pass needs the "${$e}" device feature, but it is not enabled on this device.`
+    );
+  if (fn.find((s) => e.hasEnabledFeature(s)) === void 0)
+    throw new u(
+      `[gpu-device-api] ${n}: this WebGPU implementation does not enable "${fn[0]}" (tried: ${fn.join(", ")}), so timestamps cannot be written inside a pass. Use CommandEncoder.writeTimestamp() around the pass instead, which only needs "timestamp-query" (that is what gfx GPU timing does).`
+    );
+  const i = {
+    querySet: et(t.querySet, `${n}.querySet`)
+  };
+  return t.beginningOfPassWriteIndex !== void 0 && (i.beginningOfPassWriteIndex = t.beginningOfPassWriteIndex), t.endOfPassWriteIndex !== void 0 && (i.endOfPassWriteIndex = t.endOfPassWriteIndex), i;
+}
+class np {
+  type;
+  count;
+  timestampPeriod;
+  staging;
+  readback;
+  _read = !1;
+  constructor(e) {
+    this.type = e.type, this.count = e.count, this.timestampPeriod = e.timestampPeriod, this.staging = e.staging, this.readback = e.readback;
+  }
+  /**
+   * 等 GPU 把结果写进读回 buffer，然后返回原始值。
+   *
+   * `mapAsync` 的 promise 在 GPU 侧写完时 resolve，**不会阻塞 CPU**（这正是 `Device.readQuerySet()`
+   * 可以放进帧循环的原因）。
+   */
+  async read() {
+    if (this._read)
+      throw new u(
+        "[gpu-device-api] QueryResult.read(): the result has already been read. WebGPU maps the readback buffer exactly once, so call Device.readQuerySet() again to get a fresh result."
+      );
+    this._read = !0;
+    try {
+      const e = await this.readback.mapAsync("read"), n = new BigUint64Array(e.slice(0));
+      return this.readback.unmap(), n;
+    } finally {
+      this.readback.destroy(), this.staging.destroy();
+    }
+  }
+}
+class Xs {
   label;
   entries;
   sortedEntries;
@@ -7446,7 +7795,7 @@ class Us {
     this.device = e, this.label = n.label ?? `bindGroupLayout#${e.nextResourceId("bindGroupLayout")}`;
     let r;
     try {
-      r = hi(n.entries);
+      r = vi(n.entries);
     } catch (s) {
       throw new u(
         `[gpu-device-api] BindGroupLayout "${this.label}": ${s instanceof Error ? s.message : String(s)}`
@@ -7454,7 +7803,7 @@ class Us {
     }
     this.sortedEntries = r, this.entries = n.entries, this.byBinding = new Map(r.map((s) => [s.binding, s]));
     const i = r.map(
-      (s) => Vd(s, e, this.label)
+      (s) => rp(s, e, this.label)
     );
     if (i.length > e.limits.maxBindingsPerBindGroup)
       throw new u(
@@ -7473,70 +7822,70 @@ class Us {
     this._disposed = !0, this.device.untrack(this);
   }
 }
-function Vd(t, e, n) {
+function rp(t, e, n) {
   const r = `BindGroupLayout "${n}" binding ${t.binding}`, i = {
     binding: t.binding,
-    visibility: ld(t.visibility)
+    visibility: Af(t.visibility)
   };
-  if (oi(t.type)) {
+  if (mi(t.type)) {
     const s = t.buffer ?? {};
     if (s.type !== void 0 && s.type !== t.type)
       throw new u(
         `[gpu-device-api] ${r}: buffer.type "${s.type}" contradicts the entry type "${t.type}".`
       );
     return i.buffer = {
-      type: Td(t.type),
+      type: Df(t.type),
       hasDynamicOffset: s.hasDynamicOffset ?? !1,
       minBindingSize: s.minBindingSize ?? 0
     }, i;
   }
-  if (ci(t.type)) {
-    const s = t.sampler ?? {}, a = Sd(t.type);
+  if (gi(t.type)) {
+    const s = t.sampler ?? {}, a = If(t.type);
     return i.sampler = {
-      type: s.type === void 0 ? a : _d(s.type)
+      type: s.type === void 0 ? a : kf(s.type)
     }, i;
   }
-  if (t.type === R.Texture) {
+  if (t.type === O.Texture) {
     const s = t.texture ?? {}, a = s.sampleType ?? "float", o = s.viewDimension ?? "2d";
     if (a === "depth" && (o === "1d" || o === "3d"))
       throw new u(
         `[gpu-device-api] ${r}: sampleType "depth" cannot be combined with viewDimension "${o}" (use "2d", "2d-array", "cube" or "cube-array").`
       );
     return i.texture = {
-      sampleType: $d(a),
-      viewDimension: $n(o),
+      sampleType: Vf(a),
+      viewDimension: Cn(o),
       multisampled: s.multisampled ?? !1
     }, i;
   }
-  if (t.type === R.StorageTexture) {
+  if (t.type === O.StorageTexture) {
     const s = t.storageTexture;
     if (!s || s.format === void 0)
       throw new u(
         `[gpu-device-api] ${r}: a storage-texture entry needs \`storageTexture.format\`.`
       );
-    return $s(s.format, e.features, r), i.storageTexture = {
-      access: Ad(s.access ?? "write-only"),
-      format: Q(s.format),
-      viewDimension: $n(s.viewDimension ?? "2d")
+    return Gs(s.format, e.features, r), i.storageTexture = {
+      access: Nf(s.access ?? "write-only"),
+      format: J(s.format),
+      viewDimension: Cn(s.viewDimension ?? "2d")
     }, i;
   }
   throw new u(
     `[gpu-device-api] ${r}: unsupported BindingType "${String(t.type)}".`
   );
 }
-function Os(t, e) {
-  if (t instanceof Us) return t.native;
-  if (Nd(t)) return t;
+function Ys(t, e) {
+  if (t instanceof Xs) return t.native;
+  if (ip(t)) return t;
   throw new u(
     `[gpu-device-api] ${e}: expected a WebGPU bind group layout (WebGPUBindGroupLayout or a native GPUBindGroupLayout).`
   );
 }
-function Nd(t) {
+function ip(t) {
   if (!t || typeof t != "object") return !1;
   const e = t;
   return typeof e.label == "string" && !("native" in e);
 }
-class Ds {
+class Hs {
   label;
   layout;
   entries;
@@ -7551,8 +7900,8 @@ class Ds {
         throw new u(
           `[gpu-device-api] BindGroup "${this.label}": binding ${s.binding} is not declared by layout "${this.layout.label}".`
         );
-    const r = Os(this.layout, `BindGroup "${this.label}"`), i = n.entries.map(
-      (s) => kd(s, this.layout, e, this.label)
+    const r = Ys(this.layout, `BindGroup "${this.label}"`), i = n.entries.map(
+      (s) => sp(s, this.layout, e, this.label)
     );
     this.native = e.native.createBindGroup({
       label: this.label,
@@ -7571,81 +7920,81 @@ class Ds {
     this._disposed = !0, this.device.untrack(this);
   }
 }
-function kd(t, e, n, r) {
+function sp(t, e, n, r) {
   const i = `BindGroup "${r}" binding ${t.binding}`, s = e.entry(t.binding);
   if (!s)
     throw new u(`[gpu-device-api] ${i}: no matching layout entry.`);
   const a = t.resource;
-  if (oi(s.type)) {
+  if (mi(s.type)) {
     if (!("buffer" in a))
       throw new u(
-        `[gpu-device-api] ${i}: layout declares a "${s.type}" buffer binding, but the resource is ${te(a)}.`
+        `[gpu-device-api] ${i}: layout declares a "${s.type}" buffer binding, but the resource is ${ne(a)}.`
       );
-    const o = D(a.buffer, i), l = a.offset ?? 0, c = a.size ?? a.buffer.size - l;
-    if (!Number.isInteger(l) || l < 0)
-      throw new u(`[gpu-device-api] ${i}: offset must be a non-negative integer.`);
+    const o = U(a.buffer, i), c = a.offset ?? 0, l = a.size ?? a.buffer.size - c;
     if (!Number.isInteger(c) || c < 0)
+      throw new u(`[gpu-device-api] ${i}: offset must be a non-negative integer.`);
+    if (!Number.isInteger(l) || l < 0)
       throw new u(`[gpu-device-api] ${i}: size must be a non-negative integer.`);
-    if (l + c > a.buffer.size)
+    if (c + l > a.buffer.size)
       throw new u(
-        `[gpu-device-api] ${i}: binding range [${l}, ${l + c}) exceeds the buffer size ${a.buffer.size}.`
+        `[gpu-device-api] ${i}: binding range [${c}, ${c + l}) exceeds the buffer size ${a.buffer.size}.`
       );
     const h = s.buffer?.minBindingSize ?? 0;
-    if (h > 0 && c < h)
+    if (h > 0 && l < h)
       throw new u(
-        `[gpu-device-api] ${i}: layout requires minBindingSize ${h}, got ${c}.`
+        `[gpu-device-api] ${i}: layout requires minBindingSize ${h}, got ${l}.`
       );
-    const d = { buffer: o, offset: l, size: c };
-    return { binding: t.binding, resource: d };
+    const f = { buffer: o, offset: c, size: l };
+    return { binding: t.binding, resource: f };
   }
-  if (ci(s.type)) {
+  if (gi(s.type)) {
     if (!("sampler" in a))
       throw new u(
-        `[gpu-device-api] ${i}: layout declares a "${s.type}" sampler binding, but the resource is ${te(a)}.`
+        `[gpu-device-api] ${i}: layout declares a "${s.type}" sampler binding, but the resource is ${ne(a)}.`
       );
-    const o = a.sampler, l = (s.sampler?.type ?? (s.type === "comparison-sampler" ? "comparison" : "filtering")) === "comparison";
-    if (Od(o)) {
-      if (l && !o.isComparison)
+    const o = a.sampler, c = (s.sampler?.type ?? (s.type === "comparison-sampler" ? "comparison" : "filtering")) === "comparison";
+    if (Jf(o)) {
+      if (c && !o.isComparison)
         throw new u(
           `[gpu-device-api] ${i}: layout declares a comparison sampler, but the bound sampler has no \`compare\` function.`
         );
-      if (!l && o.isComparison)
+      if (!c && o.isComparison)
         throw new u(
           `[gpu-device-api] ${i}: layout declares a filtering/non-filtering sampler, but the bound sampler is a comparison sampler (it has \`compare\`).`
         );
     }
-    return { binding: t.binding, resource: Id(o, i) };
+    return { binding: t.binding, resource: tp(o, i) };
   }
   if (s.type === "texture") {
     if (!("view" in a))
       throw new u(
-        `[gpu-device-api] ${i}: layout declares a "texture" binding, but the resource is ${te(a)}.`
+        `[gpu-device-api] ${i}: layout declares a "texture" binding, but the resource is ${ne(a)}.`
       );
-    return zd(a.view, s, n, i), { binding: t.binding, resource: Xe(a.view, i) };
+    return ap(a.view, s, n, i), { binding: t.binding, resource: Ze(a.view, i) };
   }
   if (s.type === "storage-texture") {
     if (!("view" in a))
       throw new u(
-        `[gpu-device-api] ${i}: layout declares a "storage-texture" binding, but the resource is ${te(a)}.`
+        `[gpu-device-api] ${i}: layout declares a "storage-texture" binding, but the resource is ${ne(a)}.`
       );
-    if (Ps(a.view)) {
+    if (zs(a.view)) {
       const o = s.storageTexture?.format;
-      if (o !== void 0 && Q(a.view.format) !== Q(o))
+      if (o !== void 0 && J(a.view.format) !== J(o))
         throw new u(
           `[gpu-device-api] ${i}: layout requires storage texture format "${o}", but the bound view has format "${a.view.format}".`
         );
     }
-    return { binding: t.binding, resource: Xe(a.view, i) };
+    return { binding: t.binding, resource: Ze(a.view, i) };
   }
   if ("source" in a)
     return { binding: t.binding, resource: a.source };
   throw new u(
-    `[gpu-device-api] ${i}: unsupported binding resource ${te(a)}.`
+    `[gpu-device-api] ${i}: unsupported binding resource ${ne(a)}.`
   );
 }
-function zd(t, e, n, r) {
-  if (!Ps(t)) return;
-  const i = e.texture ?? {}, s = t.format, a = _e(s), o = i.sampleType ?? "float";
+function ap(t, e, n, r) {
+  if (!zs(t)) return;
+  const i = e.texture ?? {}, s = t.format, a = Pe(s), o = i.sampleType ?? "float";
   if (o === "depth") {
     if (a.sampleScalar !== "depth")
       throw new u(
@@ -7661,25 +8010,25 @@ function zd(t, e, n, r) {
       throw new u(
         `[gpu-device-api] ${r}: layout expects a float sample type, but the bound view has format "${s}" (${a.sampleScalar}).`
       );
-    if (o === "float" && !Yf(s, n.features))
+    if (o === "float" && !hf(s, n.features))
       throw new u(
         `[gpu-device-api] ${r}: layout declares sampleType "float" (filterable), but "${s}" is not filterable on this device; declare "unfilterable-float" or enable the required feature.`
       );
   }
-  const l = t.texture.sampleCount > 1;
-  if ((i.multisampled ?? !1) !== l)
+  const c = t.texture.sampleCount > 1;
+  if ((i.multisampled ?? !1) !== c)
     throw new u(
       `[gpu-device-api] ${r}: layout declares multisampled=${String(i.multisampled ?? !1)}, but the bound texture has sampleCount ${t.texture.sampleCount}.`
     );
-  const c = i.viewDimension ?? "2d";
-  if (c !== t.descriptor.dimension)
+  const l = i.viewDimension ?? "2d";
+  if (l !== t.descriptor.dimension)
     throw new u(
-      `[gpu-device-api] ${r}: layout declares viewDimension "${c}", but the bound view is "${t.descriptor.dimension}".`
+      `[gpu-device-api] ${r}: layout declares viewDimension "${l}", but the bound view is "${t.descriptor.dimension}".`
     );
 }
-const Is = Object.freeze([]), Ur = /* @__PURE__ */ new WeakMap();
-function Wd(t, e) {
-  const n = Ur.get(t);
+const Zs = Object.freeze([]), Nr = /* @__PURE__ */ new WeakMap();
+function op(t, e) {
+  const n = Nr.get(t);
   if (n) return n;
   const r = [], i = [];
   for (const a of t.sortedEntries) {
@@ -7690,10 +8039,10 @@ function Wd(t, e) {
     ), i.push(o ? "minUniformBufferOffsetAlignment" : "minStorageBufferOffsetAlignment");
   }
   const s = { count: r.length, alignments: r, limitNames: i };
-  return Ur.set(t, s), s;
+  return Nr.set(t, s), s;
 }
-function Vs(t, e, n, r) {
-  const i = Wd(t.layout, n);
+function Ks(t, e, n, r) {
+  const i = op(t.layout, n);
   if (i.count === 0) {
     if (e !== void 0 && e.length > 0)
       throw new u(
@@ -7717,15 +8066,15 @@ function Vs(t, e, n, r) {
       );
   }
 }
-function Ns(t, e) {
-  if (t instanceof Ds) return t.native;
+function Js(t, e) {
+  if (t instanceof Hs) return t.native;
   if (t && typeof t == "object" && !("native" in t) && typeof t.label == "string")
     return t;
   throw new u(
     `[gpu-device-api] ${e}: expected a WebGPU bind group (WebGPUBindGroup or a native GPUBindGroup).`
   );
 }
-class Ze {
+class tt {
   label;
   bindGroupLayouts;
   /** `'auto'` 时为字符串 `'auto'`，否则为 `GPUPipelineLayout`。 */
@@ -7747,14 +8096,14 @@ class Ze {
     const i = e.native.createPipelineLayout({
       label: r,
       bindGroupLayouts: n.bindGroupLayouts.map(
-        (s) => Os(s, `PipelineLayout "${r}"`)
+        (s) => Ys(s, `PipelineLayout "${r}"`)
       )
     });
-    return new Ze(r, n.bindGroupLayouts, i, !1, e);
+    return new tt(r, n.bindGroupLayouts, i, !1, e);
   }
   /** `layout: 'auto'` 的替身：`native` 为字符串 `'auto'`，`isAuto` 为 true。 */
   static auto(e = "auto") {
-    return new Ze(e, [], "auto", !0, null);
+    return new tt(e, [], "auto", !0, null);
   }
   get disposed() {
     return this._disposed;
@@ -7764,9 +8113,9 @@ class Ze {
     this._disposed = !0, this.device?.untrack(this);
   }
 }
-function ks(t, e) {
+function ea(t, e) {
   if (t === void 0 || t === "auto") return "auto";
-  if (t instanceof Ze) return t.native;
+  if (t instanceof tt) return t.native;
   const n = t.native;
   if (n === "auto") return "auto";
   if (n && typeof n == "object") return n;
@@ -7774,8 +8123,8 @@ function ks(t, e) {
     `[gpu-device-api] ${e}: expected a WebGPU pipeline layout (or 'auto'), got an unknown layout object.`
   );
 }
-const qd = "uint32";
-class ye {
+const lp = "uint32";
+class xe {
   primitive;
   depthStencil;
   multisample;
@@ -7787,13 +8136,13 @@ class ye {
   }
   /** 把 core 的 `PrimitiveState` 翻译为 WebGPU 的 `GPUPrimitiveState`。 */
   static toGPUPrimitiveState(e, n) {
-    const r = e?.topology ?? jt.topology, i = {
-      topology: dd(r),
-      frontFace: wd(e?.frontFace ?? jt.frontFace),
-      cullMode: bd(e?.cullMode ?? jt.cullMode)
+    const r = e?.topology ?? Ht.topology, i = {
+      topology: Lf(r),
+      frontFace: Bf(e?.frontFace ?? Ht.frontFace),
+      cullMode: Rf(e?.cullMode ?? Ht.cullMode)
     };
-    if (pd(r))
-      i.stripIndexFormat = Es(e?.stripIndexFormat ?? qd);
+    if (Cf(r))
+      i.stripIndexFormat = Is(e?.stripIndexFormat ?? lp);
     else if (e?.stripIndexFormat !== void 0)
       throw new u(
         `[gpu-device-api] PrimitiveState.stripIndexFormat is only valid for strip topologies, but the topology is "${r}".`
@@ -7813,17 +8162,17 @@ class ye {
    * `format` 由调用方给出（core 允许省略，此时用 render target 的 depth 格式）。
    */
   static toGPUDepthStencilState(e, n) {
-    const r = Ss(e), i = kt(e);
+    const r = Bs(e), i = jt(e);
     if (!r && !i)
       throw new u(
         `[gpu-device-api] DepthStencilState: "${e}" has neither a depth nor a stencil aspect.`
       );
-    const s = { format: Q(e) };
-    return r && (s.depthWriteEnabled = n?.depthWriteEnabled ?? rr.depthWriteEnabled, s.depthCompare = Kn(n?.depthCompare ?? rr.depthCompare)), i && (s.stencilFront = Dr(n?.stencilFront), s.stencilBack = Dr(n?.stencilBack), s.stencilReadMask = n?.stencilReadMask ?? 4294967295, s.stencilWriteMask = n?.stencilWriteMask ?? 4294967295), n?.depthBias !== void 0 && (s.depthBias = n.depthBias), n?.depthBiasSlopeScale !== void 0 && (s.depthBiasSlopeScale = n.depthBiasSlopeScale), n?.depthBiasClamp !== void 0 && (s.depthBiasClamp = n.depthBiasClamp), s;
+    const s = { format: J(e) };
+    return r && (s.depthWriteEnabled = n?.depthWriteEnabled ?? cr.depthWriteEnabled, s.depthCompare = rr(n?.depthCompare ?? cr.depthCompare)), i && (s.stencilFront = zr(n?.stencilFront), s.stencilBack = zr(n?.stencilBack), s.stencilReadMask = n?.stencilReadMask ?? 4294967295, s.stencilWriteMask = n?.stencilWriteMask ?? 4294967295), n?.depthBias !== void 0 && (s.depthBias = n.depthBias), n?.depthBiasSlopeScale !== void 0 && (s.depthBiasSlopeScale = n.depthBiasSlopeScale), n?.depthBiasClamp !== void 0 && (s.depthBiasClamp = n.depthBiasClamp), s;
   }
   /** 把 core 的 `MultisampleState` 翻译为 WebGPU 的 `GPUMultisampleState`。 */
   static toGPUMultisampleState(e, n) {
-    const r = tt(e?.count ?? n, "MultisampleState.count"), i = { count: r, mask: e?.mask ?? 4294967295 }, s = e?.alphaToCoverageEnabled ?? !1;
+    const r = at(e?.count ?? n, "MultisampleState.count"), i = { count: r, mask: e?.mask ?? 4294967295 }, s = e?.alphaToCoverageEnabled ?? !1;
     if (s && r === 1)
       throw new u(
         "[gpu-device-api] MultisampleState.alphaToCoverageEnabled requires sampleCount > 1."
@@ -7834,8 +8183,8 @@ class ye {
   static toGPUBlendState(e) {
     if (e)
       return {
-        color: Or(e.color),
-        alpha: Or(e.alpha)
+        color: kr(e.color),
+        alpha: kr(e.alpha)
       };
   }
   /**
@@ -7852,10 +8201,10 @@ class ye {
     return e.map((i, s) => {
       const a = n ? n[s] : void 0;
       if (a === null) return null;
-      const o = { format: Q(a?.format ?? i) }, l = a?.blend ?? r.blend;
-      l && (o.blend = ye.toGPUBlendState(l));
-      const c = a?.writeMask ?? r.writeMask;
-      return c !== void 0 && (o.writeMask = ud(c)), o;
+      const o = { format: J(a?.format ?? i) }, c = a?.blend ?? r.blend;
+      c && (o.blend = xe.toGPUBlendState(c));
+      const l = a?.writeMask ?? r.writeMask;
+      return l !== void 0 && (o.writeMask = _f(l)), o;
     });
   }
   /** 校验并翻译 vertex buffer layout 列表。 */
@@ -7866,7 +8215,7 @@ class ye {
       );
     return e.map((r) => {
       try {
-        fi(r, n);
+        xi(r, n);
       } catch (i) {
         throw new u(
           `[gpu-device-api] RenderPipeline: ${i instanceof Error ? i.message : String(i)}`
@@ -7874,38 +8223,38 @@ class ye {
       }
       return {
         arrayStride: r.arrayStride,
-        stepMode: vd(r.stepMode ?? "vertex"),
+        stepMode: Gf(r.stepMode ?? "vertex"),
         attributes: r.attributes.map((i) => ({
           shaderLocation: i.shaderLocation,
           offset: i.offset,
-          format: xd(i.format)
+          format: Of(i.format)
         }))
       };
     });
   }
 }
-function Or(t) {
-  const e = { ...Ta, ...t };
+function kr(t) {
+  const e = { ...Ga, ...t };
   return {
-    operation: md(e.operation ?? "add"),
-    srcFactor: Mr(e.srcFactor),
-    dstFactor: Mr(e.dstFactor)
+    operation: Mf(e.operation ?? "add"),
+    srcFactor: Or(e.srcFactor),
+    dstFactor: Or(e.dstFactor)
   };
 }
-function Dr(t) {
+function zr(t) {
   return {
-    compare: Kn(t?.compare ?? at.compare),
-    failOp: rn(t?.failOp ?? at.failOp),
-    depthFailOp: rn(t?.depthFailOp ?? at.depthFailOp),
-    passOp: rn(t?.passOp ?? at.passOp)
+    compare: rr(t?.compare ?? ht.compare),
+    failOp: ln(t?.failOp ?? ht.failOp),
+    depthFailOp: ln(t?.depthFailOp ?? ht.depthFailOp),
+    passOp: ln(t?.passOp ?? ht.passOp)
   };
 }
-class jd {
+class cp {
   cache;
   created = /* @__PURE__ */ new Set();
   _disposed = !1;
   constructor(e = 64, n) {
-    this.cache = $a(e, (r, i) => {
+    this.cache = Ua(e, (r, i) => {
       this.created.delete(i), n?.(r, i);
     });
   }
@@ -7958,16 +8307,16 @@ class jd {
     return `PipelineCache(size=${this.cache.size}${this._disposed ? ", disposed" : ""})`;
   }
 }
-function Ir(t) {
-  return pi(
+function Wr(t) {
+  return Ti(
     t.colorFormats.join(","),
     t.sampleCount,
     t.depthFormat ?? "none",
-    di(t.vertexLayouts)
+    Si(t.vertexLayouts)
   );
 }
-const Xd = "vsMain", Yd = "fsMain", Hd = Object.freeze({}), Zd = [], Kd = [];
-class zs {
+const up = "vsMain", hp = "fsMain", dp = Object.freeze({}), fp = [], pp = [];
+class ta {
   label;
   descriptor;
   layout;
@@ -7989,7 +8338,7 @@ class zs {
   lastVariantResolved = null;
   lastVariantKey = null;
   constructor(e, n) {
-    this.device = e, this.descriptor = n, this.label = n.label ?? `renderPipeline#${e.nextResourceId("renderPipeline")}`, this.layout = n.layout ?? "auto", this.vertexLayouts = n.vertex.buffers ?? null, this.logger = Je(`webgpu:${this.label}`), this.sampleCountContext = `RenderPipeline "${this.label}": sampleCount`, this.cache = new jd(64, (r, i) => {
+    this.device = e, this.descriptor = n, this.label = n.label ?? `renderPipeline#${e.nextResourceId("renderPipeline")}`, this.layout = n.layout ?? "auto", this.vertexLayouts = n.vertex.buffers ?? null, this.logger = it(`webgpu:${this.label}`), this.sampleCountContext = `RenderPipeline "${this.label}": sampleCount`, this.cache = new cp(64, (r, i) => {
       this.logger.debug(`evicted render pipeline variant ${i}`);
     });
   }
@@ -8018,13 +8367,13 @@ class zs {
    * 复用上一次的解析结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
    * 也不再重算 vertex layout key —— 这些原本都在每 draw 的路径上。
    */
-  resolve(e = Hd) {
+  resolve(e = dp) {
     if (this._disposed)
       throw new u(
         `[gpu-device-api] RenderPipeline "${this.label}" has been disposed.`
       );
     let n, r;
-    return e === this.lastVariantInput && e.colorFormats === this.lastVariantColorFormats && e.sampleCount === this.lastVariantSampleCount && e.depthFormat === this.lastVariantDepthFormat && e.vertexLayouts === this.lastVariantVertexLayouts && this.lastVariantResolved !== null && this.lastVariantKey !== null ? (n = this.lastVariantResolved, r = this.lastVariantKey) : (n = this.resolveVariant(e), r = Ir(n), this.lastVariantInput = e, this.lastVariantColorFormats = e.colorFormats, this.lastVariantSampleCount = e.sampleCount, this.lastVariantDepthFormat = e.depthFormat, this.lastVariantVertexLayouts = e.vertexLayouts, this.lastVariantResolved = n, this.lastVariantKey = r), this.cache.resolve(r, () => this.createNative(n));
+    return e === this.lastVariantInput && e.colorFormats === this.lastVariantColorFormats && e.sampleCount === this.lastVariantSampleCount && e.depthFormat === this.lastVariantDepthFormat && e.vertexLayouts === this.lastVariantVertexLayouts && this.lastVariantResolved !== null && this.lastVariantKey !== null ? (n = this.lastVariantResolved, r = this.lastVariantKey) : (n = this.resolveVariant(e), r = Wr(n), this.lastVariantInput = e, this.lastVariantColorFormats = e.colorFormats, this.lastVariantSampleCount = e.sampleCount, this.lastVariantDepthFormat = e.depthFormat, this.lastVariantVertexLayouts = e.vertexLayouts, this.lastVariantResolved = n, this.lastVariantKey = r), this.cache.resolve(r, () => this.createNative(n));
   }
   /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
   get compiledVariants() {
@@ -8035,10 +8384,10 @@ class zs {
     this._disposed || (this._disposed = !0, this.cache.dispose(), this.device.untrack(this));
   }
   resolveVariant(e) {
-    const n = this.descriptor, r = e.colorFormats ?? this.defaultColorFormats(), i = tt(
+    const n = this.descriptor, r = e.colorFormats ?? this.defaultColorFormats(), i = at(
       e.sampleCount ?? n.multisample?.count ?? n.render?.multisample?.count ?? 1,
       this.sampleCountContext
-    ), s = e.depthFormat !== void 0 ? e.depthFormat : n.depthStencil?.format ?? null, a = e.vertexLayouts ?? this.vertexLayouts ?? Zd;
+    ), s = e.depthFormat !== void 0 ? e.depthFormat : n.depthStencil?.format ?? null, a = e.vertexLayouts ?? this.vertexLayouts ?? fp;
     if (n.fragment && r.length === 0)
       throw new u(
         `[gpu-device-api] RenderPipeline "${this.label}" has a fragment stage but no color formats. Declare \`colorFormats\` on the descriptor, or pass them per target via resolve({ colorFormats }) — the WebGPU backend cannot guess attachment formats.`
@@ -8051,8 +8400,8 @@ class zs {
       "building with no vertex buffer layouts; declare `vertex.buffers` if the vertex shader reads attributes"
     ));
     for (const o of r)
-      Q(o);
-    return s !== null && Q(s), { colorFormats: r, sampleCount: i, depthFormat: s, vertexLayouts: a };
+      J(o);
+    return s !== null && J(s), { colorFormats: r, sampleCount: i, depthFormat: s, vertexLayouts: a };
   }
   /**
    * descriptor 里声明的（或从 fragment targets 推导出的）color format 列表。
@@ -8076,45 +8425,45 @@ class zs {
           if (a?.format === void 0) break;
           s.push(a.format);
         }
-      r = i && s.length === i.length ? s : Kd;
+      r = i && s.length === i.length ? s : pp;
     }
     return this.defaultColorFormatsCache = r, r;
   }
   createNative(e) {
     const n = this.toGPURenderPipelineDescriptor(e);
-    return this.logger.debug(`creating render pipeline variant ${Ir(e)}`), this.device.native.createRenderPipeline(n);
+    return this.logger.debug(`creating render pipeline variant ${Wr(e)}`), this.device.native.createRenderPipeline(n);
   }
   /** 组装 `GPURenderPipelineDescriptor`；导出的目的是方便单测与调试。 */
   toGPURenderPipelineDescriptor(e) {
     const n = this.descriptor, r = this.device.limits, i = n.vertex, a = {
-      module: An(i.module, `RenderPipeline "${this.label}".vertex.module`).compile(q.Vertex),
-      entryPoint: i.entryPoint ?? Xd,
-      buffers: ye.toGPUVertexBufferLayouts(e.vertexLayouts, r)
+      module: Mn(i.module, `RenderPipeline "${this.label}".vertex.module`).compile(q.Vertex),
+      entryPoint: i.entryPoint ?? up,
+      buffers: xe.toGPUVertexBufferLayouts(e.vertexLayouts, r)
     }, o = n.fragment;
-    let l;
-    o && (l = {
-      module: An(
+    let c;
+    o && (c = {
+      module: Mn(
         o.module,
         `RenderPipeline "${this.label}".fragment.module`
       ).compile(q.Fragment),
-      entryPoint: o.entryPoint ?? Yd,
-      targets: ye.toGPUColorTargets(e.colorFormats, o.targets, {
+      entryPoint: o.entryPoint ?? hp,
+      targets: xe.toGPUColorTargets(e.colorFormats, o.targets, {
         blend: n.render?.blend,
         writeMask: n.render?.writeMask
       })
     });
-    const c = n.primitive ?? n.render?.primitive, h = n.depthStencil ?? n.render?.depthStencil, d = n.multisample ?? n.render?.multisample, f = e.depthFormat, p = {
+    const l = n.primitive ?? n.render?.primitive, h = n.depthStencil ?? n.render?.depthStencil, f = n.multisample ?? n.render?.multisample, d = e.depthFormat, p = {
       label: this.label,
-      layout: ks(this.layout, `RenderPipeline "${this.label}"`),
+      layout: ea(this.layout, `RenderPipeline "${this.label}"`),
       vertex: a,
-      primitive: ye.toGPUPrimitiveState(c, this.device.features),
-      multisample: ye.toGPUMultisampleState(d, e.sampleCount)
+      primitive: xe.toGPUPrimitiveState(l, this.device.features),
+      multisample: xe.toGPUMultisampleState(f, e.sampleCount)
     };
-    return l && (p.fragment = l), f !== null ? p.depthStencil = ye.toGPUDepthStencilState(f, h) : h && this.logger.debug("depthStencil state declared but the variant has no depth format; ignoring it"), p;
+    return c && (p.fragment = c), d !== null ? p.depthStencil = xe.toGPUDepthStencilState(d, h) : h && this.logger.debug("depthStencil state declared but the variant has no depth format; ignoring it"), p;
   }
 }
-function Qd(t, e, n) {
-  if (t instanceof zs) return t.resolve(n);
+function mp(t, e, n) {
+  if (t instanceof ta) return t.resolve(n);
   const r = t?.native;
   if (r && typeof r == "object" && typeof r.getBindGroupLayout == "function")
     return r;
@@ -8122,8 +8471,8 @@ function Qd(t, e, n) {
     `[gpu-device-api] ${e}: expected a WebGPU render pipeline (WebGPURenderPipeline or a native GPURenderPipeline).`
   );
 }
-const Jd = "csMain";
-class Ws {
+const gp = "csMain";
+class na {
   label;
   descriptor;
   layout;
@@ -8149,16 +8498,16 @@ class Ws {
     if (this._disposed)
       throw new u(`[gpu-device-api] ComputePipeline "${this.label}" has been disposed.`);
     if (this._native) return this._native;
-    const e = An(
+    const e = Mn(
       this.descriptor.compute.module,
       `ComputePipeline "${this.label}".compute.module`
     );
     return this._native = this.device.native.createComputePipeline({
       label: this.label,
-      layout: ks(this.layout, `ComputePipeline "${this.label}"`),
+      layout: ea(this.layout, `ComputePipeline "${this.label}"`),
       compute: {
         module: e.compile(q.Compute),
-        entryPoint: this.descriptor.compute.entryPoint ?? Jd
+        entryPoint: this.descriptor.compute.entryPoint ?? gp
       }
     }), this._native;
   }
@@ -8167,16 +8516,16 @@ class Ws {
     this._disposed || (this._disposed = !0, this._native = null, this.device.untrack(this));
   }
 }
-function ep(t, e) {
-  if (t instanceof Ws) return t.resolve();
+function bp(t, e) {
+  if (t instanceof na) return t.resolve();
   const n = t?.native;
   if (n && typeof n == "object") return n;
   throw new u(
     `[gpu-device-api] ${e}: expected a WebGPU compute pipeline (WebGPUComputePipeline or a native GPUComputePipeline).`
   );
 }
-const tp = [0, 0, 0, 1];
-class qs {
+const wp = [0, 0, 0, 1];
+class ra {
   label;
   device;
   colorFormatsList;
@@ -8196,8 +8545,8 @@ class qs {
   _disposed = !1;
   constructor(e, n) {
     this.device = e, this.label = n.label ?? `renderTarget#${e.nextResourceId("renderTarget")}`;
-    const r = np(n.color);
-    if (this.colorFormatsList = r, this.depthFormatValue = n.depth === void 0 || n.depth === !1 || n.depth === null ? null : n.depth === !0 ? "depth24plus" : n.depth, this.sampleCountValue = tt(n.sampleCount ?? 1, `RenderTarget "${this.label}"`), this.mipLevelCountValue = n.mipLevelCount ?? 1, this.baseUsage = n.usage ?? 0, this.sampled = n.sampled ?? !1, this._width = bt(n.width, "width", this.label), this._height = bt(n.height, "height", this.label), this.colorFormatsList.length === 0 && this.depthFormatValue === null)
+    const r = yp(n.color);
+    if (this.colorFormatsList = r, this.depthFormatValue = n.depth === void 0 || n.depth === !1 || n.depth === null ? null : n.depth === !0 ? "depth24plus" : n.depth, this.sampleCountValue = at(n.sampleCount ?? 1, `RenderTarget "${this.label}"`), this.mipLevelCountValue = n.mipLevelCount ?? 1, this.baseUsage = n.usage ?? 0, this.sampled = n.sampled ?? !1, this._width = St(n.width, "width", this.label), this._height = St(n.height, "height", this.label), this.colorFormatsList.length === 0 && this.depthFormatValue === null)
       throw new u(
         `[gpu-device-api] RenderTarget "${this.label}" needs at least one color format or a depth format.`
       );
@@ -8205,7 +8554,7 @@ class qs {
       throw new u(
         `[gpu-device-api] RenderTarget "${this.label}": a multisampled target must have exactly one mip level.`
       );
-    if (this.depthFormatValue !== null && !fa(this.depthFormatValue))
+    if (this.depthFormatValue !== null && !Aa(this.depthFormatValue))
       throw new u(
         `[gpu-device-api] RenderTarget "${this.label}": depth format "${this.depthFormatValue}" is not a depth/stencil format.`
       );
@@ -8257,7 +8606,7 @@ class qs {
   resize(e, n) {
     if (this._disposed)
       throw new u(`[gpu-device-api] RenderTarget "${this.label}" has been disposed.`);
-    const r = bt(e, "width", this.label), i = bt(n, "height", this.label);
+    const r = St(e, "width", this.label), i = St(n, "height", this.label);
     return r === this._width && i === this._height ? !1 : (this._width = r, this._height = i, this.rebuild(), !0);
   }
   /** 按给定的清除行为创建 render pass descriptor 的两份 attachment 列表。 */
@@ -8280,12 +8629,12 @@ class qs {
     this.releaseTextures();
     const e = { width: this._width, height: this._height };
     this.colorTextures = this.colorFormatsList.map((n, r) => {
-      const i = this.sampled ? x.TextureBinding : x.None;
+      const i = this.sampled ? v.TextureBinding : v.None;
       return this.device.createTexture({
         label: `${this.label}#color${r}`,
         size: e,
         format: n,
-        usage: x.RenderAttachment | i | this.baseUsage,
+        usage: v.RenderAttachment | i | this.baseUsage,
         mipLevelCount: this.mipLevelCountValue
       });
     }), this.colorViews = this.colorTextures.map((n) => n.createView({ label: `${n.label}#view` })), this.sampleCountValue > 1 && (this.multisampleTextureList = this.colorFormatsList.map(
@@ -8293,7 +8642,7 @@ class qs {
         label: `${this.label}#msaa${r}`,
         size: e,
         format: n,
-        usage: x.RenderAttachment,
+        usage: v.RenderAttachment,
         sampleCount: this.sampleCountValue
       })
     ), this.multisampleViews = this.multisampleTextureList.map(
@@ -8302,7 +8651,7 @@ class qs {
       label: `${this.label}#depth`,
       size: e,
       format: this.depthFormatValue,
-      usage: x.RenderAttachment | this.baseUsage,
+      usage: v.RenderAttachment | this.baseUsage,
       sampleCount: this.sampleCountValue
     }), this.depthView = this.depthTexture.createView({ label: `${this.depthTexture.label}#view` }));
   }
@@ -8312,15 +8661,15 @@ class qs {
     this.depthTexture?.destroy(), this.colorTextures = [], this.colorViews = [], this.multisampleTextureList = [], this.multisampleViews = [], this.depthTexture = null, this.depthView = null;
   }
   buildAttachments(e, n, r) {
-    const i = r === void 0 ? tp : r;
+    const i = r === void 0 ? wp : r;
     return this.colorFormatsList.map((s, a) => {
-      const o = this.multisampleViews[a], l = this.colorViews[a], c = {
-        view: o ?? l,
+      const o = this.multisampleViews[a], c = this.colorViews[a], l = {
+        view: o ?? c,
         loadOp: e ?? "clear",
         storeOp: n ?? "store",
         clearValue: i
       };
-      return o && (c.resolveTarget = l), c;
+      return o && (l.resolveTarget = c), l;
     });
   }
   buildDepthAttachment(e, n) {
@@ -8332,13 +8681,13 @@ class qs {
       depthClearValue: n ?? 1,
       depthReadOnly: !1
     };
-    return kt(this.depthFormatValue) && (r.stencilLoadOp = e ?? "clear", r.stencilStoreOp = "store", r.stencilClearValue = 0, r.stencilReadOnly = !1), r;
+    return jt(this.depthFormatValue) && (r.stencilLoadOp = e ?? "clear", r.stencilStoreOp = "store", r.stencilClearValue = 0, r.stencilReadOnly = !1), r;
   }
 }
-function np(t) {
+function yp(t) {
   return t === void 0 ? ["rgba8unorm"] : typeof t == "string" ? [t] : t.length === 0 ? [] : t;
 }
-function bt(t, e, n) {
+function St(t, e, n) {
   if (t === void 0) return 1;
   if (!Number.isInteger(t) || t <= 0)
     throw new u(
@@ -8346,66 +8695,71 @@ function bt(t, e, n) {
     );
   return t;
 }
-function rp(t) {
-  const e = t.label ?? "renderPass";
-  let n, r;
+function vp(t, e) {
+  const n = t.label ?? "renderPass";
+  let r, i;
   if (t.target) {
-    if (!(t.target instanceof qs))
+    if (!(t.target instanceof ra))
       throw new u(
-        `[gpu-device-api] ${e}: descriptor.target must be a WebGPURenderTarget created by a WebGPU device.`
+        `[gpu-device-api] ${n}: descriptor.target must be a WebGPURenderTarget created by a WebGPU device.`
       );
-    const c = t.target.createPassDescriptor({
+    const h = t.target.createPassDescriptor({
       clearValue: t.clearValue,
       depthClearValue: t.depthClearValue
     });
-    n = c.colorAttachments, r = c.depthStencilAttachment;
+    r = h.colorAttachments, i = h.depthStencilAttachment;
   } else
-    n = t.colorAttachments, r = t.depthStencilAttachment ?? null;
-  const i = [], s = [], a = [];
-  for (const c of n) {
-    if (!c) {
-      s.push(null);
+    r = t.colorAttachments, i = t.depthStencilAttachment ?? null;
+  const s = [], a = [], o = [];
+  for (const h of r) {
+    if (!h) {
+      a.push(null);
       continue;
     }
-    const h = Xe(c.view, `${e}.colorAttachments`), d = c.view.texture;
-    i.push(c.view.descriptor.format ?? d.format), a.push(d.sampleCount);
-    const f = c.loadOp ?? "clear", p = c.storeOp ?? "store";
-    if (d.sampleCount > 1 && !c.resolveTarget && p !== "discard")
+    const f = Ze(h.view, `${n}.colorAttachments`), d = h.view.texture;
+    s.push(h.view.descriptor.format ?? d.format), o.push(d.sampleCount);
+    const p = h.loadOp ?? "clear", m = h.storeOp ?? "store";
+    if (d.sampleCount > 1 && !h.resolveTarget && m !== "discard")
       throw new u(
-        `[gpu-device-api] ${e}: a multisampled color attachment (sampleCount ${d.sampleCount}) needs a resolveTarget, or storeOp must be "discard".`
+        `[gpu-device-api] ${n}: a multisampled color attachment (sampleCount ${d.sampleCount}) needs a resolveTarget, or storeOp must be "discard".`
       );
-    const m = {
-      view: h,
-      loadOp: an(f),
-      storeOp: on(p)
+    const g = {
+      view: f,
+      loadOp: un(p),
+      storeOp: hn(m)
     };
-    c.resolveTarget && (m.resolveTarget = Xe(c.resolveTarget, `${e}.resolveTarget`)), f === "clear" && (m.clearValue = Ls(c.clearValue)), s.push(m);
+    h.resolveTarget && (g.resolveTarget = Ze(h.resolveTarget, `${n}.resolveTarget`)), p === "clear" && (g.clearValue = Vs(h.clearValue)), a.push(g);
   }
-  const o = { label: e, colorAttachments: s };
+  const c = { label: n, colorAttachments: a };
   let l = null;
-  if (r) {
-    const c = Xe(r.view, `${e}.depthStencilAttachment`), h = r.view.descriptor.format ?? r.view.texture.format;
-    l = h, a.push(r.view.texture.sampleCount);
-    const d = { view: c }, f = r.depthLoadOp ?? "clear", p = r.depthStoreOp ?? "store";
-    if (d.depthLoadOp = an(f), d.depthStoreOp = on(p), f === "clear" && (d.depthClearValue = sp(r.depthClearValue ?? 1, e)), r.depthReadOnly !== void 0 && (d.depthReadOnly = r.depthReadOnly), kt(h)) {
-      const m = r.stencilLoadOp ?? f;
-      d.stencilLoadOp = an(m), d.stencilStoreOp = on(r.stencilStoreOp ?? "store"), m === "clear" && (d.stencilClearValue = r.stencilClearValue ?? 0), r.stencilReadOnly !== void 0 && (d.stencilReadOnly = r.stencilReadOnly);
-    } else if (r.stencilLoadOp !== void 0 || r.stencilStoreOp !== void 0)
+  if (i) {
+    const h = Ze(i.view, `${n}.depthStencilAttachment`), f = i.view.descriptor.format ?? i.view.texture.format;
+    l = f, o.push(i.view.texture.sampleCount);
+    const d = { view: h }, p = i.depthLoadOp ?? "clear", m = i.depthStoreOp ?? "store";
+    if (d.depthLoadOp = un(p), d.depthStoreOp = hn(m), p === "clear" && (d.depthClearValue = Sp(i.depthClearValue ?? 1, n)), i.depthReadOnly !== void 0 && (d.depthReadOnly = i.depthReadOnly), jt(f)) {
+      const g = i.stencilLoadOp ?? p;
+      d.stencilLoadOp = un(g), d.stencilStoreOp = hn(i.stencilStoreOp ?? "store"), g === "clear" && (d.stencilClearValue = i.stencilClearValue ?? 0), i.stencilReadOnly !== void 0 && (d.stencilReadOnly = i.stencilReadOnly);
+    } else if (i.stencilLoadOp !== void 0 || i.stencilStoreOp !== void 0)
       throw new u(
-        `[gpu-device-api] ${e}: depth format "${h}" has no stencil aspect, so stencilLoadOp / stencilStoreOp must not be set.`
+        `[gpu-device-api] ${n}: depth format "${f}" has no stencil aspect, so stencilLoadOp / stencilStoreOp must not be set.`
       );
-    o.depthStencilAttachment = d;
+    c.depthStencilAttachment = d;
   }
-  return t.occlusionQuerySet && (o.occlusionQuerySet = Gs(t.occlusionQuerySet, `${e}.occlusionQuerySet`)), {
-    native: o,
+  return t.occlusionQuerySet && (c.occlusionQuerySet = et(t.occlusionQuerySet, `${n}.occlusionQuerySet`)), t.timestampWrites && (c.timestampWrites = Qs(
+    t.timestampWrites,
+    e,
+    `${n}.timestampWrites`
+  )), {
+    native: c,
+    hasOcclusionQuerySet: t.occlusionQuerySet !== void 0,
     layout: {
-      colorFormats: i,
+      colorFormats: s,
       depthFormat: l,
-      sampleCount: ip(a, e)
+      sampleCount: xp(o, n)
     }
   };
 }
-function ip(t, e) {
+function xp(t, e) {
   if (t.length === 0) return 1;
   const n = t[0];
   for (const r of t)
@@ -8415,20 +8769,23 @@ function ip(t, e) {
       );
   return n;
 }
-function sp(t, e) {
+function Sp(t, e) {
   if (!Number.isFinite(t) || t < 0 || t > 1)
     throw new u(
       `[gpu-device-api] ${e}: depthClearValue must be within [0, 1], got ${String(t)}.`
     );
   return t;
 }
-class ap {
+class Tp {
   label;
   layout;
   native;
   device;
   onEnd;
+  /** 该 pass 是否声明了 occlusionQuerySet；没声明时 beginOcclusionQuery 会明确报错。 */
+  hasOcclusionQuerySet;
   _ended = !1;
+  occlusionQueryOpen = !1;
   /**
    * 一个 pass 的 attachment 布局与 label 在生命周期内都不变，因此「pipeline variant 请求」
    * 与各处报错用的 context 字符串都在构造时建一次。
@@ -8443,10 +8800,10 @@ class ap {
   contextSetIndexBuffer;
   contextDrawIndirect;
   contextDrawIndexedIndirect;
-  constructor(e, n, r, i, s) {
-    this.device = e, this.native = n, this.layout = r, this.label = i, this.onEnd = s;
-    const a = `RenderPass "${i}"`;
-    this.contextSetPipeline = `${a}.setPipeline`, this.contextSetBindGroup = `${a}.setBindGroup`, this.contextSetVertexBuffer = `${a}.setVertexBuffer`, this.contextSetIndexBuffer = `${a}.setIndexBuffer`, this.contextDrawIndirect = `${a}.drawIndirect`, this.contextDrawIndexedIndirect = `${a}.drawIndexedIndirect`, this.variantRequest = {
+  constructor(e, n, r, i, s, a) {
+    this.device = e, this.native = n, this.layout = r, this.label = i, this.hasOcclusionQuerySet = s, this.onEnd = a;
+    const o = `RenderPass "${i}"`;
+    this.contextSetPipeline = `${o}.setPipeline`, this.contextSetBindGroup = `${o}.setBindGroup`, this.contextSetVertexBuffer = `${o}.setVertexBuffer`, this.contextSetIndexBuffer = `${o}.setIndexBuffer`, this.contextDrawIndirect = `${o}.drawIndirect`, this.contextDrawIndexedIndirect = `${o}.drawIndexedIndirect`, this.variantRequest = {
       colorFormats: r.colorFormats,
       sampleCount: r.sampleCount,
       depthFormat: r.depthFormat
@@ -8456,14 +8813,14 @@ class ap {
     return this._ended;
   }
   setPipeline(e) {
-    this.assertOpen("setPipeline"), this.native.setPipeline(Qd(e, this.contextSetPipeline, this.variantRequest));
+    this.assertOpen("setPipeline"), this.native.setPipeline(mp(e, this.contextSetPipeline, this.variantRequest));
   }
   setBindGroup(e, n, r) {
     if (this.assertOpen("setBindGroup"), n) {
-      Vs(n, r, this.device, this.contextSetBindGroup), this.native.setBindGroup(
+      Ks(n, r, this.device, this.contextSetBindGroup), this.native.setBindGroup(
         e,
-        Ns(n, this.contextSetBindGroup),
-        r ?? Is
+        Js(n, this.contextSetBindGroup),
+        r ?? Zs
       );
       return;
     }
@@ -8478,12 +8835,12 @@ class ap {
       this.native.setVertexBuffer(e, null, r, i);
       return;
     }
-    this.native.setVertexBuffer(e, D(n, this.contextSetVertexBuffer), r, i);
+    this.native.setVertexBuffer(e, U(n, this.contextSetVertexBuffer), r, i);
   }
   setIndexBuffer(e, n, r, i) {
     this.assertOpen("setIndexBuffer"), this.native.setIndexBuffer(
-      D(e, this.contextSetIndexBuffer),
-      Es(n),
+      U(e, this.contextSetIndexBuffer),
+      Is(n),
       r,
       i
     );
@@ -8495,7 +8852,7 @@ class ap {
     this.assertOpen("setScissorRect"), this.native.setScissorRect(e, n, r, i);
   }
   setBlendConstant(e) {
-    this.assertOpen("setBlendConstant"), this.native.setBlendConstant(Ls(e));
+    this.assertOpen("setBlendConstant"), this.native.setBlendConstant(Vs(e));
   }
   setStencilReference(e) {
     this.assertOpen("setStencilReference"), this.native.setStencilReference(e);
@@ -8519,13 +8876,39 @@ class ap {
   }
   drawIndirect(e, n = 0) {
     this.assertOpen("drawIndirect");
-    const r = Vr(e, n, this.contextDrawIndirect);
+    const r = qr(e, n, this.contextDrawIndirect);
     this.native.drawIndirect(r.buffer, r.offset);
   }
   drawIndexedIndirect(e, n = 0) {
     this.assertOpen("drawIndexedIndirect");
-    const r = Vr(e, n, this.contextDrawIndexedIndirect);
+    const r = qr(e, n, this.contextDrawIndexedIndirect);
     this.native.drawIndexedIndirect(r.buffer, r.offset);
+  }
+  /**
+   * 开始一条遮挡查询：这一段里绘制的图元有多少采样通过深度/模板测试，就累加到
+   * `descriptor.occlusionQuerySet` 的第 `index` 个计数器里。
+   *
+   * WebGPU 要求 pass 在创建时就声明 `occlusionQuerySet`，没声明就报错（原生也会报，
+   * 但这里报得更早、说的更清楚）。
+   */
+  beginOcclusionQuery(e) {
+    if (this.assertOpen("beginOcclusionQuery"), !this.hasOcclusionQuerySet)
+      throw new u(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: the pass was created without RenderPassDescriptor.occlusionQuerySet, so there is nowhere to store the sample count.`
+      );
+    if (this.occlusionQueryOpen)
+      throw new u(
+        `[gpu-device-api] RenderPass "${this.label}".beginOcclusionQuery: an occlusion query is already open; call endOcclusionQuery() first.`
+      );
+    this.native.beginOcclusionQuery(e), this.occlusionQueryOpen = !0;
+  }
+  /** 结束最近一次 {@link beginOcclusionQuery}。 */
+  endOcclusionQuery() {
+    if (this.assertOpen("endOcclusionQuery"), !this.occlusionQueryOpen)
+      throw new u(
+        `[gpu-device-api] RenderPass "${this.label}".endOcclusionQuery: no occlusion query is open.`
+      );
+    this.occlusionQueryOpen = !1, this.native.endOcclusionQuery();
   }
   /** 调试分组：直接转发给原生的 `GPURenderPassEncoder`（抓帧工具据此分组显示）。 */
   pushDebugGroup(e) {
@@ -8539,7 +8922,13 @@ class ap {
   }
   /** 结束该 pass。幂等；此后再调用任何录制方法都会抛错。 */
   end() {
-    this._ended || (this._ended = !0, this.native.end(), this.onEnd?.());
+    if (!this._ended) {
+      if (this.occlusionQueryOpen)
+        throw new u(
+          `[gpu-device-api] RenderPass "${this.label}".end: an occlusion query is still open; call endOcclusionQuery() before ending the pass.`
+        );
+      this._ended = !0, this.native.end(), this.onEnd?.();
+    }
   }
   assertOpen(e) {
     if (this._ended)
@@ -8548,25 +8937,21 @@ class ap {
       );
   }
 }
-function Vr(t, e, n) {
+function qr(t, e, n) {
   return "indirectBuffer" in t ? {
-    buffer: D(t.indirectBuffer, n),
+    buffer: U(t.indirectBuffer, n),
     offset: t.indirectOffset ?? 0
-  } : { buffer: D(t, n), offset: e };
+  } : { buffer: U(t, n), offset: e };
 }
-function op(t) {
-  const e = t?.label ?? "computePass", n = { label: e };
-  if (t?.timestampWrites) {
-    const r = t.timestampWrites;
-    n.timestampWrites = {
-      querySet: Gs(r.querySet, `${e}.timestampWrites.querySet`),
-      beginningOfPassWriteIndex: r.beginningOfPassWriteIndex,
-      endOfPassWriteIndex: r.endOfPassWriteIndex
-    };
-  }
-  return n;
+function $p(t, e) {
+  const n = t?.label ?? "computePass", r = { label: n };
+  return t?.timestampWrites && (r.timestampWrites = Qs(
+    t.timestampWrites,
+    e,
+    `${n}.timestampWrites`
+  )), r;
 }
-class cp {
+class Ap {
   label;
   native;
   device;
@@ -8585,14 +8970,14 @@ class cp {
     return this._ended;
   }
   setPipeline(e) {
-    this.assertOpen("setPipeline"), this.native.setPipeline(ep(e, this.contextSetPipeline));
+    this.assertOpen("setPipeline"), this.native.setPipeline(bp(e, this.contextSetPipeline));
   }
   setBindGroup(e, n, r) {
     if (this.assertOpen("setBindGroup"), n) {
-      Vs(n, r, this.device, this.contextSetBindGroup), this.native.setBindGroup(
+      Ks(n, r, this.device, this.contextSetBindGroup), this.native.setBindGroup(
         e,
-        Ns(n, this.contextSetBindGroup),
-        r ?? Is
+        Js(n, this.contextSetBindGroup),
+        r ?? Zs
       );
       return;
     }
@@ -8610,12 +8995,12 @@ class cp {
     const r = this.contextDispatchIndirect;
     if ("indirectBuffer" in e) {
       this.native.dispatchWorkgroupsIndirect(
-        D(e.indirectBuffer, r),
+        U(e.indirectBuffer, r),
         e.indirectOffset ?? 0
       );
       return;
     }
-    this.native.dispatchWorkgroupsIndirect(D(e, r), n);
+    this.native.dispatchWorkgroupsIndirect(U(e, r), n);
   }
   /** 调试分组：直接转发给原生的 `GPUComputePassEncoder`。 */
   pushDebugGroup(e) {
@@ -8638,7 +9023,7 @@ class cp {
       );
   }
 }
-class lp {
+class _p {
   label;
   native;
   device;
@@ -8658,21 +9043,22 @@ class lp {
   /** 开始一个 render pass。同一时间只能有一个 pass 处于打开状态。 */
   beginRenderPass(e) {
     this.assertRecording("beginRenderPass"), this.closeOpenPass();
-    const { native: n, layout: r } = rp(e), i = e.label ?? this.label, s = new ap(
+    const { native: n, layout: r, hasOcclusionQuerySet: i } = vp(e, this.device), s = e.label ?? this.label, a = new Tp(
       this.device,
       this.native.beginRenderPass(n),
       r,
+      s,
       i,
       () => {
-        this.openPass === s && (this.openPass = null);
+        this.openPass === a && (this.openPass = null);
       }
     );
-    return this.openPass = s, s;
+    return this.openPass = a, a;
   }
   /** 开始一个 compute pass。 */
   beginComputePass(e) {
     this.assertRecording("beginComputePass"), this.closeOpenPass();
-    const n = op(e), r = e?.label ?? this.label, i = new cp(
+    const n = $p(e, this.device), r = e?.label ?? this.label, i = new Ap(
       this.device,
       this.native.beginComputePass(n),
       r,
@@ -8684,9 +9070,9 @@ class lp {
   }
   copyBufferToBuffer(e, n, r, i, s) {
     this.assertRecording("copyBufferToBuffer"), this.native.copyBufferToBuffer(
-      D(e, `${this.label}.copyBufferToBuffer(source)`),
+      U(e, `${this.label}.copyBufferToBuffer(source)`),
       n,
-      D(r, `${this.label}.copyBufferToBuffer(destination)`),
+      U(r, `${this.label}.copyBufferToBuffer(destination)`),
       i,
       s
     );
@@ -8694,37 +9080,37 @@ class lp {
   copyBufferToTexture(e, n, r) {
     this.assertRecording("copyBufferToTexture"), this.native.copyBufferToTexture(
       {
-        buffer: D(e.buffer, `${this.label}.copyBufferToTexture(source)`),
+        buffer: U(e.buffer, `${this.label}.copyBufferToTexture(source)`),
         offset: e.offset ?? 0,
         bytesPerRow: e.bytesPerRow,
         rowsPerImage: e.rowsPerImage
       },
-      wt(n, `${this.label}.copyBufferToTexture(destination)`),
-      Ie(r)
+      Tt(n, `${this.label}.copyBufferToTexture(destination)`),
+      Ne(r)
     );
   }
   copyTextureToBuffer(e, n, r) {
     this.assertRecording("copyTextureToBuffer"), this.native.copyTextureToBuffer(
-      wt(e, `${this.label}.copyTextureToBuffer(source)`),
+      Tt(e, `${this.label}.copyTextureToBuffer(source)`),
       {
-        buffer: D(n.buffer, `${this.label}.copyTextureToBuffer(destination)`),
+        buffer: U(n.buffer, `${this.label}.copyTextureToBuffer(destination)`),
         offset: n.offset ?? 0,
         bytesPerRow: n.bytesPerRow,
         rowsPerImage: n.rowsPerImage
       },
-      Ie(r)
+      Ne(r)
     );
   }
   copyTextureToTexture(e, n, r) {
     this.assertRecording("copyTextureToTexture"), this.native.copyTextureToTexture(
-      wt(e, `${this.label}.copyTextureToTexture(source)`),
-      wt(n, `${this.label}.copyTextureToTexture(destination)`),
-      Ie(r)
+      Tt(e, `${this.label}.copyTextureToTexture(source)`),
+      Tt(n, `${this.label}.copyTextureToTexture(destination)`),
+      Ne(r)
     );
   }
   /** 将 buffer 的一段范围清零。`size` 省略时清到末尾，但必须是 4 的倍数。 */
   clearBuffer(e, n = 0, r) {
-    this.assertRecording("clearBuffer"), Bt(n, `${this.label}.clearBuffer offset`);
+    this.assertRecording("clearBuffer"), Te(n, `${this.label}.clearBuffer offset`);
     const i = r ?? e.size - n;
     if (n % 4 !== 0)
       throw new u(
@@ -8743,10 +9129,54 @@ class lp {
         `[gpu-device-api] ${this.label}.clearBuffer: range [${n}, ${n + i}) exceeds the buffer size ${e.size}.`
       );
     this.native.clearBuffer(
-      D(e, `${this.label}.clearBuffer`),
+      U(e, `${this.label}.clearBuffer`),
       n,
       i
     );
+  }
+  /**
+   * 把 query set 的一段结果解析进 `destination`（需要 `BufferUsage.QueryResolve`）。
+   *
+   * 注意读回路径：`MAP_READ` 不能与 `QUERY_RESOLVE` 组合，所以想读回必须再
+   * `copyBufferToBuffer` 到一个 `MAP_READ | COPY_DST` 的 buffer（`Device.readQuerySet()` 已经封装好）。
+   */
+  resolveQuerySet(e, n, r, i, s) {
+    this.assertRecording("resolveQuerySet");
+    const a = `${this.label}.resolveQuerySet`;
+    Te(n, `${a} firstQuery`), We(r, `${a} queryCount`), Te(s, `${a} destinationOffset`), this.native.resolveQuerySet(
+      et(e, `${a}(querySet)`),
+      n,
+      r,
+      U(i, `${a}(destination)`),
+      s
+    );
+  }
+  /**
+   * 在命令流里写一个 GPU 时间戳（只需要 `timestamp-query`，不需要 `timestamp-query-inside-passes`）。
+   *
+   * 必须在任何 pass **之外**调用：WebGPU 规定 encoder 上写时间戳时不能有打开的 pass。
+   * 未启用 feature、或实现没有暴露这个方法时明确报错（后者实测存在于部分实现里）。
+   */
+  writeTimestamp(e, n) {
+    this.assertRecording("writeTimestamp");
+    const r = `${this.label}.writeTimestamp`, i = this.native.writeTimestamp;
+    if (typeof i != "function")
+      throw new u(
+        `[gpu-device-api] ${r}: this WebGPU implementation does not expose GPUCommandEncoder.writeTimestamp(). Use RenderPassDescriptor.timestampWrites instead (it needs "timestamp-query-inside-passes"), or read GPU time from the backend's own profiler.`
+      );
+    if (!this.device.hasEnabledFeature($e))
+      throw new u(
+        `[gpu-device-api] ${r}: timestamp queries need the "${$e}" device feature; request it in DeviceDescriptor.requiredFeatures.`
+      );
+    if (this.openPass && !this.openPass.ended)
+      throw new u(
+        `[gpu-device-api] ${r}: a pass is still open. Call end() on it before writing a timestamp.`
+      );
+    if (!Number.isInteger(n) || n < 0 || n >= e.count)
+      throw new u(
+        `[gpu-device-api] ${r}: queryIndex ${String(n)} is outside the query set range [0, ${e.count}).`
+      );
+    i.call(this.native, et(e, `${r}(querySet)`), n);
   }
   /** 调试分组：直接转发给原生的 `GPUCommandEncoder`。 */
   pushDebugGroup(e) {
@@ -8765,7 +9195,7 @@ class lp {
    * （否则留在录制中的 pass 会被静默丢弃）。
    */
   finish() {
-    return this.assertRecording("finish"), this.closeOpenPass(), this._finished = !0, new js(this.label, this.native.finish());
+    return this.assertRecording("finish"), this.closeOpenPass(), this._finished = !0, new ia(this.label, this.native.finish());
   }
   /** 释放本 encoder 的包装对象（不影响已经 finish 出来的 command buffer）。 */
   dispose() {
@@ -8783,7 +9213,7 @@ class lp {
       );
   }
 }
-class js {
+class ia {
   label;
   native;
   _disposed = !1;
@@ -8798,21 +9228,21 @@ class js {
     this._disposed = !0;
   }
 }
-function wt(t, e) {
+function Tt(t, e) {
   const n = {
-    texture: Fs(t.texture, e)
+    texture: Ws(t.texture, e)
   };
-  return t.mipLevel !== void 0 && (n.mipLevel = t.mipLevel), t.origin !== void 0 && (n.origin = Cs(t.origin)), t.aspect !== void 0 && (n.aspect = Qn(t.aspect)), n;
+  return t.mipLevel !== void 0 && (n.mipLevel = t.mipLevel), t.origin !== void 0 && (n.origin = Ns(t.origin)), t.aspect !== void 0 && (n.aspect = ir(t.aspect)), n;
 }
-function up(t, e) {
-  if (t instanceof js) return t.native;
+function Ep(t, e) {
+  if (t instanceof ia) return t.native;
   if (t && typeof t == "object" && !("native" in t))
     return t;
   throw new u(
-    `[gpu-device-api] ${e}: expected a WebGPU command buffer (WebGPUCommandBuffer or a native GPUCommandBuffer), got ${te(t)}.`
+    `[gpu-device-api] ${e}: expected a WebGPU command buffer (WebGPUCommandBuffer or a native GPUCommandBuffer), got ${ne(t)}.`
   );
 }
-class hp {
+class Pp {
   canvas;
   options;
   gpuContext = null;
@@ -8837,8 +9267,8 @@ class hp {
   depthViewValue = null;
   _disposed = !1;
   constructor(e, n = {}) {
-    this.canvas = e, this.options = n, this.pixelRatioValue = n.pixelRatio ?? bi(), this.formatValue = Lr(), this.usageValue = x.RenderAttachment | (n.copySrc ? x.CopySrc : x.None);
-    const r = je(e);
+    this.canvas = e, this.options = n, this.pixelRatioValue = n.pixelRatio ?? _i(), this.formatValue = Br(), this.usageValue = v.RenderAttachment | (n.copySrc ? v.CopySrc : v.None);
+    const r = He(e);
     this.widthValue = Math.max(1, Math.round(r.width * this.pixelRatioValue)), this.heightValue = Math.max(1, Math.round(r.height * this.pixelRatioValue));
   }
   get width() {
@@ -8886,22 +9316,22 @@ class hp {
   configure(e) {
     if (this._disposed)
       throw new u("[gpu-device-api] CanvasContext.configure: the context has been disposed.");
-    if (!(e.device instanceof Xs))
+    if (!(e.device instanceof sa))
       throw new u(
         "[gpu-device-api] CanvasContext.configure: expected a WebGPU device (WebGPUDevice)."
       );
-    const n = cd(this.canvas);
+    const n = $f(this.canvas);
     if (!n)
       throw new u(
         '[gpu-device-api] CanvasContext.configure: this canvas cannot create a WebGPU context (getContext("webgpu") returned null).'
       );
-    this.releaseFrame(), this.releaseMultisampleTarget(), this.releaseDepthTarget(), this.gpuContext = n, this.currentDevice = e.device, this.formatValue = e.format ?? Lr(), this.usageValue = x.RenderAttachment | (e.usage ?? x.None) | (this.options.copySrc ? x.CopySrc : x.None), this.alphaModeValue = e.alphaMode ?? "premultiplied", this.colorSpaceValue = e.colorSpace;
+    this.releaseFrame(), this.releaseMultisampleTarget(), this.releaseDepthTarget(), this.gpuContext = n, this.currentDevice = e.device, this.formatValue = e.format ?? Br(), this.usageValue = v.RenderAttachment | (e.usage ?? v.None) | (this.options.copySrc ? v.CopySrc : v.None), this.alphaModeValue = e.alphaMode ?? "premultiplied", this.colorSpaceValue = e.colorSpace;
     const r = e.sampleCount ?? (this.configuredValue ? this.sampleCountValue : e.device.defaultSampleCount);
-    this.sampleCountValue = tt(r, "CanvasConfig.sampleCount"), this.depthRequestedValue = e.depth ?? !0;
+    this.sampleCountValue = at(r, "CanvasConfig.sampleCount"), this.depthRequestedValue = e.depth ?? !0;
     const i = {
       device: e.device.native,
-      format: od(this.formatValue),
-      usage: _s(this.usageValue),
+      format: Tf(this.formatValue),
+      usage: Ds(this.usageValue),
       alphaMode: this.alphaModeValue
     };
     this.colorSpaceValue !== void 0 && (i.colorSpace = this.colorSpaceValue), n.configure(i), this.configuredValue = !0, this.setSize(this.widthValue / this.pixelRatioValue, this.heightValue / this.pixelRatioValue, !1);
@@ -8937,7 +9367,7 @@ class hp {
   }
   /** 重新读取元素尺寸；back buffer 发生变化时返回 true。 */
   resize(e = !1) {
-    const n = je(this.canvas), r = Math.max(1, Math.round(n.width * this.pixelRatioValue)), i = Math.max(1, Math.round(n.height * this.pixelRatioValue));
+    const n = He(this.canvas), r = Math.max(1, Math.round(n.width * this.pixelRatioValue)), i = Math.max(1, Math.round(n.height * this.pixelRatioValue));
     return r === this.widthValue && i === this.heightValue ? !1 : (this.setSize(n.width, n.height, e), !0);
   }
   /**
@@ -9023,7 +9453,7 @@ class hp {
       label: `${r.label}#canvasMSAA`,
       size: { width: e, height: n },
       format: this.formatValue,
-      usage: x.RenderAttachment,
+      usage: v.RenderAttachment,
       sampleCount: this.sampleCountValue
     });
     return this.multisampleTexture = s, this.multisampleViewValue = s.createView({ label: `${s.label}#view` }), this.multisampleViewValue;
@@ -9052,8 +9482,8 @@ class hp {
     const s = me.create(r, {
       label: `${r.label}#canvasDepth`,
       size: { width: e, height: n },
-      format: gi,
-      usage: x.RenderAttachment,
+      format: Ai,
+      usage: v.RenderAttachment,
       sampleCount: this.sampleCountValue
     });
     return this.depthTexture = s, this.depthViewValue = s.createView({ label: `${s.label}#view` }), this.depthViewValue;
@@ -9062,7 +9492,7 @@ class hp {
     this.depthTexture?.destroy(), this.depthTexture = null, this.depthViewValue = null;
   }
 }
-class fp {
+class Lp {
   native;
   device;
   constructor(e) {
@@ -9092,7 +9522,7 @@ class fp {
         `[gpu-device-api] Queue.writeBuffer: dataOffset (${i}) and size (${o}) are measured in bytes, so both must be multiples of the element size (${a}) of the given ${r.constructor.name}.`
       );
     this.native.writeBuffer(
-      D(e, "Queue.writeBuffer"),
+      U(e, "Queue.writeBuffer"),
       n,
       r,
       i / a,
@@ -9102,10 +9532,10 @@ class fp {
   /** 将主机端像素上传到 texture。多行/多层拷贝必须给 `layout.bytesPerRow`（WebGPU 会校验）。 */
   writeTexture(e, n, r, i) {
     this.native.writeTexture(
-      ln(e, "Queue.writeTexture"),
+      pn(e, "Queue.writeTexture"),
       n,
-      Bd(r),
-      Ie(i)
+      Yf(r),
+      Ne(i)
     );
   }
   /**
@@ -9117,8 +9547,8 @@ class fp {
   copyExternalImageToTexture(e, n, r, i = !1) {
     this.native.copyExternalImageToTexture(
       { source: e, flipY: i },
-      ln(n, "Queue.copyExternalImageToTexture"),
-      Ie(r)
+      pn(n, "Queue.copyExternalImageToTexture"),
+      Ne(r)
     );
   }
   /**
@@ -9130,9 +9560,9 @@ class fp {
   copyBufferToBuffer(e, n, r, i, s) {
     const a = this.device.native.createCommandEncoder({ label: "Queue.copyBufferToBuffer" });
     a.copyBufferToBuffer(
-      D(e, "Queue.copyBufferToBuffer(source)"),
+      U(e, "Queue.copyBufferToBuffer(source)"),
       n,
-      D(r, "Queue.copyBufferToBuffer(destination)"),
+      U(r, "Queue.copyBufferToBuffer(destination)"),
       i,
       s
     ), this.native.submit([a.finish()]);
@@ -9142,18 +9572,18 @@ class fp {
     const i = this.device.native.createCommandEncoder({ label: "Queue.copyBufferToTexture" });
     i.copyBufferToTexture(
       {
-        buffer: D(e.buffer, "Queue.copyBufferToTexture(source)"),
+        buffer: U(e.buffer, "Queue.copyBufferToTexture(source)"),
         offset: e.offset ?? 0,
         bytesPerRow: e.bytesPerRow,
         rowsPerImage: e.rowsPerImage
       },
-      ln(n, "Queue.copyBufferToTexture(destination)"),
-      Ie(r)
+      pn(n, "Queue.copyBufferToTexture(destination)"),
+      Ne(r)
     ), this.native.submit([i.finish()]);
   }
   /** 提交 command buffer；提交后这些 buffer 不可再次使用。 */
   submit(e) {
-    this.native.submit(e.map((n) => up(n, "Queue.submit")));
+    this.native.submit(e.map((n) => Ep(n, "Queue.submit")));
   }
   /** 先前提交的全部工作都在 GPU 上完成后 resolve。 */
   async onSubmittedWorkDone() {
@@ -9164,13 +9594,13 @@ class fp {
     return this.device;
   }
 }
-function ln(t, e) {
+function pn(t, e) {
   const n = {
-    texture: Fs(t.texture, e)
+    texture: Ws(t.texture, e)
   };
-  return t.mipLevel !== void 0 && (n.mipLevel = t.mipLevel), t.origin !== void 0 && (n.origin = Cs(t.origin)), t.aspect !== void 0 && (n.aspect = Qn(t.aspect)), n;
+  return t.mipLevel !== void 0 && (n.mipLevel = t.mipLevel), t.origin !== void 0 && (n.origin = Ns(t.origin)), t.aspect !== void 0 && (n.aspect = ir(t.aspect)), n;
 }
-class Xs {
+class sa {
   label;
   backend = "webgpu";
   native;
@@ -9181,6 +9611,14 @@ class Xs {
   lost;
   /** 请求设备时实际启用的 feature 名（`DeviceDescriptor.requiredFeatures`）。 */
   enabledFeatures;
+  /**
+   * 设备上**真正启用**的 feature 集合。
+   *
+   * 与 {@link WebGPUDevice.features}（adapter 支持什么）不是一回事：adapter 支持 `timestamp-query`
+   * 但 `requiredFeatures` 里没写，设备上就没有这个能力。`native.features` 是权威来源；
+   * 实现没有暴露它（或跑在 mock 上）时退回请求列表。
+   */
+  enabledFeatureSet;
   /** 创建本设备的 adapter 信息，便于日志与调试。 */
   adapterInfo;
   /** `requiredLimits` 经校验后的完整 limits；`limits` 则来自实际创建出来的 device。 */
@@ -9197,16 +9635,16 @@ class Xs {
   lostInfo = null;
   _disposed = !1;
   constructor(e, n) {
-    this.native = e, this.descriptor = n.descriptor, this.label = n.descriptor.label ?? (e.label.length > 0 ? e.label : "webgpu-device"), this.adapterInfo = n.adapterInfo, this.requestedLimits = n.resolvedLimits, this.debug = n.descriptor.debug ?? !1, this.enabledFeatures = [...n.descriptor.requiredFeatures ?? []], this.features = new ad(n.adapterFeatures), this.limits = As(e.limits), this.defaultSampleCount = tt(
+    this.native = e, this.descriptor = n.descriptor, this.label = n.descriptor.label ?? (e.label.length > 0 ? e.label : "webgpu-device"), this.adapterInfo = n.adapterInfo, this.requestedLimits = n.resolvedLimits, this.debug = n.descriptor.debug ?? !1, this.enabledFeatures = [...n.descriptor.requiredFeatures ?? []], this.enabledFeatureSet = Mp(e, this.enabledFeatures), this.features = new Sf(n.adapterFeatures), this.limits = Us(e.limits), this.defaultSampleCount = at(
       n.descriptor.defaultSampleCount ?? 1,
       "DeviceDescriptor.defaultSampleCount"
-    ), this.logger = Je(`webgpu:${this.label}`);
+    ), this.logger = it(`webgpu:${this.label}`);
     let r = () => {
     };
     this.lost = new Promise((i) => {
       r = i;
-    }), this.resolveLost = r, this.queue = new fp(this), e.onuncapturederror = (i) => {
-      this.reportError(dp(i.error));
+    }), this.resolveLost = r, this.queue = new Lp(this), e.onuncapturederror = (i) => {
+      this.reportError(Cp(i.error));
     }, e.lost.then((i) => this.handleDeviceLost(i)), this.logger.debug(
       `created device (${this.adapterInfo.device || this.adapterInfo.vendor || "unknown adapter"}, features: ${this.enabledFeatures.join(", ") || "none"})`
     );
@@ -9222,49 +9660,117 @@ class Xs {
   get trackedResourceCount() {
     return this.resources.size;
   }
+  /**
+   * 该 feature 是否**已经在本设备上启用**（不只是 adapter 支持）。
+   *
+   * 需要 feature 的能力（timestamp 查询等）必须查这个而不是 `features.has()`，
+   * 否则会出现「adapter 支持 → 我们以为能用 → 原生校验失败」的静默失效。
+   */
+  hasEnabledFeature(e) {
+    return this.enabledFeatureSet.has(e);
+  }
+  /**
+   * GPU 时间戳的「纳秒 / 刻度」换算系数。
+   *
+   * 优先读 `queue.getTimestampPeriod()`（规范接口），再退回 `queue.timestampPeriod` 属性。
+   * 本仓库实测的 Chrome（2025 年的 Windows 版本）两者都没有暴露，此时按规范默认值 1 处理 ——
+   * 也就是刻度本身就是纳秒。**绝不能**因为拿不到这个值就把刻度直接当纳秒用而不做说明：
+   * 那样在其它实现（例如 period 是 83.33 的某些移动 GPU）上会得到系统性偏小的数字。
+   */
+  get timestampPeriod() {
+    const e = this.native.queue;
+    if (typeof e.getTimestampPeriod == "function") {
+      const n = e.getTimestampPeriod();
+      if (typeof n == "number" && Number.isFinite(n) && n > 0) return n;
+    }
+    return typeof e.timestampPeriod == "number" && Number.isFinite(e.timestampPeriod) && e.timestampPeriod > 0 ? e.timestampPeriod : 1;
+  }
   /** 生成 `prefix#N` 形式的资源 id，供各资源的默认 label 使用。 */
   nextResourceId(e) {
-    return G(e);
+    return B(e);
   }
   /* ---------------------------------------------------------------- 资源 */
   createBuffer(e) {
-    return this.assertUsable("createBuffer"), this.track(new Ms(this, e));
+    return this.assertUsable("createBuffer"), this.track(new ks(this, e));
   }
   createTexture(e) {
     return this.assertUsable("createTexture"), this.track(me.create(this, e));
   }
   createSampler(e = {}) {
-    return this.assertUsable("createSampler"), this.track(new er(this, e));
+    return this.assertUsable("createSampler"), this.track(new ar(this, e));
   }
   createShaderModule(e) {
-    return this.assertUsable("createShaderModule"), this.track(new Bs(this, e));
+    return this.assertUsable("createShaderModule"), this.track(new qs(this, e));
   }
   createQuerySet(e) {
-    return this.assertUsable("createQuerySet"), this.track(new Rs(this, e));
+    return this.assertUsable("createQuerySet"), this.track(new js(this, e));
+  }
+  /**
+   * 读回 query set 的结果：`resolveQuerySet` → `copyBufferToBuffer` → `mapAsync`。
+   *
+   * 两个中转 buffer 都通过 `this.createBuffer()` 创建，因此被设备的资源追踪覆盖：
+   * 正常路径由 `QueryResult.read()` 销毁，忘了读则在 `device.dispose()` 时统一释放。
+   */
+  readQuerySet(e, n = {}) {
+    this.assertUsable("readQuerySet"), et(e, `Device "${this.label}".readQuerySet(querySet)`);
+    const r = n.firstQuery ?? 0;
+    Te(r, "QuerySetReadOptions.firstQuery");
+    const i = n.queryCount ?? e.count - r;
+    if (!Number.isInteger(i) || i <= 0)
+      throw new u(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: queryCount must be a positive integer, got ${String(i)}.`
+      );
+    if (r + i > e.count)
+      throw new u(
+        `[gpu-device-api] Device "${this.label}".readQuerySet: range [${r}, ${r + i}) exceeds the query set "${e.label}" count ${e.count}.`
+      );
+    const s = n.label ?? `${e.label}:read`, a = i * 8, o = this.createBuffer({
+      label: `${s}#resolve`,
+      size: a,
+      usage: C.QueryResolve | C.CopySrc
+    }), c = this.createBuffer({
+      label: `${s}#readback`,
+      size: a,
+      usage: C.MapRead | C.CopyDst
+    }), l = this.createCommandEncoder({ label: s });
+    try {
+      l.resolveQuerySet(e, r, i, o, 0), l.copyBufferToBuffer(o, 0, c, 0, a), this.queue.submit([l.finish()]);
+    } catch (h) {
+      throw c.destroy(), o.destroy(), h;
+    } finally {
+      l.dispose();
+    }
+    return new np({
+      type: e.type,
+      count: i,
+      timestampPeriod: this.timestampPeriod,
+      staging: o,
+      readback: c
+    });
   }
   /* ---------------------------------------------------------------- 绑定 */
   createBindGroupLayout(e) {
-    return this.assertUsable("createBindGroupLayout"), this.track(new Us(this, e));
+    return this.assertUsable("createBindGroupLayout"), this.track(new Xs(this, e));
   }
   createBindGroup(e) {
-    return this.assertUsable("createBindGroup"), this.track(new Ds(this, e));
+    return this.assertUsable("createBindGroup"), this.track(new Hs(this, e));
   }
   createPipelineLayout(e) {
-    return this.assertUsable("createPipelineLayout"), this.track(Ze.create(this, e));
+    return this.assertUsable("createPipelineLayout"), this.track(tt.create(this, e));
   }
   /* ---------------------------------------------------------------- 管线 */
   createRenderPipeline(e) {
-    return this.assertUsable("createRenderPipeline"), this.track(new zs(this, e));
+    return this.assertUsable("createRenderPipeline"), this.track(new ta(this, e));
   }
   createComputePipeline(e) {
-    return this.assertUsable("createComputePipeline"), this.track(new Ws(this, e));
+    return this.assertUsable("createComputePipeline"), this.track(new na(this, e));
   }
   /* ---------------------------------------------------------------- 渲染 */
   createRenderTarget(e) {
-    return this.assertUsable("createRenderTarget"), this.track(new qs(this, e));
+    return this.assertUsable("createRenderTarget"), this.track(new ra(this, e));
   }
   createCommandEncoder(e = {}) {
-    return this.assertUsable("createCommandEncoder"), this.track(new lp(this, e));
+    return this.assertUsable("createCommandEncoder"), this.track(new _p(this, e));
   }
   /**
    * 为一个 canvas 建立（或取回）本设备的 swap chain 表面。
@@ -9279,7 +9785,7 @@ class Xs {
         "[gpu-device-api] Device.createCanvasContext: expected an HTMLCanvasElement or OffscreenCanvas."
       );
     let r = this.canvasContexts.get(e);
-    return (!r || r.disposed) && (r = this.track(new hp(e)), this.canvasContexts.set(e, r)), (n !== void 0 || !r.configured) && r.configure({ ...n, device: this }), r;
+    return (!r || r.disposed) && (r = this.track(new Pp(e)), this.canvasContexts.set(e, r)), (n !== void 0 || !r.configured) && r.configure({ ...n, device: this }), r;
   }
   /* ---------------------------------------------------------------- 错误 */
   /**
@@ -9313,7 +9819,7 @@ class Xs {
     const e = [...this.resources];
     this.resources.clear(), this.canvasContexts.clear();
     try {
-      vi(e);
+      Pi(e);
     } catch (n) {
       this.logger.error(`failed to dispose some resources: ${String(n)}`);
     }
@@ -9339,7 +9845,7 @@ class Xs {
     if (this._disposed)
       throw new u(`[gpu-device-api] Device.${e}: device "${this.label}" has been disposed.`);
     if (this.lostInfo)
-      throw new gn(
+      throw new xn(
         `[gpu-device-api] Device.${e}: device "${this.label}" was lost (${this.lostInfo.reason}): ` + this.lostInfo.message,
         { reason: this.lostInfo.reason }
       );
@@ -9347,16 +9853,16 @@ class Xs {
   handleDeviceLost(e) {
     const n = e.reason === "destroyed" ? "destroyed" : "unknown", r = { reason: n, message: e.message };
     this.lostInfo = r, this.resolveLost(r), this._disposed || this.reportError(
-      new gn(`[gpu-device-api] WebGPU device lost (${n}): ${e.message}`, { reason: n })
+      new xn(`[gpu-device-api] WebGPU device lost (${n}): ${e.message}`, { reason: n })
     );
   }
 }
-function dp(t) {
-  if (wa(t)) return t;
+function Cp(t) {
+  if (Ma(t)) return t;
   const e = typeof t?.message == "string" ? t.message : String(t), n = e.startsWith("[gpu-device-api]") ? e : `[gpu-device-api] ${e}`;
-  return un(t, "GPUValidationError") ? new u(n) : un(t, "GPUOutOfMemoryError") ? new va(n) : un(t, "GPUInternalError") ? new de(n, { code: "INTERNAL_ERROR" }) : t instanceof Error ? new de(n, { code: "GPU_ERROR", cause: t }) : new de(n);
+  return mn(t, "GPUValidationError") ? new u(n) : mn(t, "GPUOutOfMemoryError") ? new Fa(n) : mn(t, "GPUInternalError") ? new K(n, { code: "INTERNAL_ERROR" }) : t instanceof Error ? new K(n, { code: "GPU_ERROR", cause: t }) : new K(n);
 }
-function un(t, e) {
+function mn(t, e) {
   const n = globalThis[e];
   if (typeof n == "function") {
     const i = n;
@@ -9367,7 +9873,11 @@ function un(t, e) {
   }
   return t?.constructor?.name === e;
 }
-class Pt {
+function Mp(t, e) {
+  const n = Os(t.features);
+  return n.size > 0 ? n : new Set(e);
+}
+class Ot {
   /** 原生 `GPUAdapter`，escape hatch。 */
   native;
   info;
@@ -9377,7 +9887,7 @@ class Pt {
   /** 排序后的 feature 名，便于调试与错误信息。 */
   featureNames;
   constructor(e, n) {
-    this.native = e, this.options = n, this.info = id(e), this.features = rd(e.features), this.limits = As(e.limits), this.featureNames = [...this.features].sort();
+    this.native = e, this.options = n, this.info = vf(e), this.features = Os(e.features), this.limits = Us(e.limits), this.featureNames = [...this.features].sort();
   }
   /** 请求本 adapter 时使用的选项（供诊断/日志）。 */
   get requestOptions() {
@@ -9385,18 +9895,18 @@ class Pt {
   }
   /** 当前环境是否暴露 WebGPU。 */
   static isSupported() {
-    return Er();
+    return Rr();
   }
   /** 请求 adapter；没有可用 adapter 时返回 `null`（供 auto 回退使用）。 */
   static async request(e = {}) {
-    const n = await nd(e);
-    return n ? new Pt(n, e) : null;
+    const n = await yf(e);
+    return n ? new Ot(n, e) : null;
   }
   /** 请求 adapter；没有可用 adapter 时抛 {@link ValidationError}。 */
   static async create(e = {}) {
-    const n = await Pt.request(e);
+    const n = await Ot.request(e);
     if (n) return n;
-    throw Er() ? new u(
+    throw Rr() ? new u(
       `[gpu-device-api] No WebGPU adapter is available for the requested options (${JSON.stringify(e)}).`
     ) : new u(
       "[gpu-device-api] WebGPU is not available in this environment (navigator.gpu is missing)."
@@ -9404,7 +9914,7 @@ class Pt {
   }
   /** 创建逻辑设备。 */
   async requestDevice(e = {}) {
-    const n = mi(this.limits, e.requiredLimits, "webgpu"), r = sd(
+    const n = $i(this.limits, e.requiredLimits, "webgpu"), r = xf(
       this.features,
       e.requiredFeatures,
       `WebGPUAdapter.requestDevice (${this.info.device || this.info.vendor || "unknown adapter"})`
@@ -9417,7 +9927,7 @@ class Pt {
       requiredLimits: i,
       defaultQueue: { label: e.label ? `${e.label}#queue` : void 0 }
     });
-    return new Xs(s, {
+    return new sa(s, {
       descriptor: e,
       resolvedLimits: n,
       adapterInfo: this.info,
@@ -9426,50 +9936,50 @@ class Pt {
     });
   }
 }
-function pp(t) {
-  return t.canvas ? t.canvas : Ys();
+function Fp(t) {
+  return t.canvas ? t.canvas : aa();
 }
-function mp() {
-  return Ys();
+function Rp() {
+  return aa();
 }
-function Ys() {
+function aa() {
   if (typeof document < "u") {
     const t = document.createElement("canvas");
     return t.width = 1, t.height = 1, t;
   }
   return typeof OffscreenCanvas < "u" ? new OffscreenCanvas(1, 1) : null;
 }
-const _n = Symbol("timeout");
-async function Nr(t, e) {
+const Fn = Symbol("timeout");
+async function jr(t, e) {
   let n;
   try {
     return await Promise.race([
       t,
       new Promise((r) => {
-        n = setTimeout(() => r(_n), e);
+        n = setTimeout(() => r(Fn), e);
       })
     ]);
   } finally {
     n !== void 0 && clearTimeout(n);
   }
 }
-const vt = 3e3;
-class gp {
+const $t = 3e3;
+class Bp {
   kind = "webgpu";
   async isAvailable(e) {
     if (typeof navigator > "u" || !("gpu" in navigator) || !navigator.gpu)
       return { ok: !1, reason: "当前环境没有 navigator.gpu（浏览器不支持 WebGPU，或不在安全上下文里）" };
     try {
-      const n = await Nr(
+      const n = await jr(
         navigator.gpu.requestAdapter({
           powerPreference: e.powerPreference ?? "high-performance",
           forceFallbackAdapter: e.forceFallbackAdapter ?? !1
         }),
-        vt
+        $t
       );
-      return n === _n ? {
+      return n === Fn ? {
         ok: !1,
-        reason: `requestAdapter() 超过 ${vt}ms 没有返回（GPU 进程未就绪或驱动初始化卡住）`
+        reason: `requestAdapter() 超过 ${$t}ms 没有返回（GPU 进程未就绪或驱动初始化卡住）`
       } : n ? { ok: !0 } : {
         ok: !1,
         reason: "requestAdapter() 返回 null（显卡被禁用、驱动在黑名单里，或无头环境没有 GPU）"
@@ -9479,25 +9989,25 @@ class gp {
     }
   }
   async createAdapter(e) {
-    const n = await Nr(
-      Pt.create({
+    const n = await jr(
+      Ot.create({
         powerPreference: e.powerPreference,
         forceFallbackAdapter: e.forceFallbackAdapter
       }),
-      vt
+      $t
     );
-    if (n === _n)
+    if (n === Fn)
       throw new u(
-        `[gpu-device-api] WebGPU 的 requestAdapter() 超过 ${vt}ms 没有返回。这通常意味着 GPU 进程未就绪或驱动初始化卡住（无头/虚拟化环境里很常见）。
+        `[gpu-device-api] WebGPU 的 requestAdapter() 超过 ${$t}ms 没有返回。这通常意味着 GPU 进程未就绪或驱动初始化卡住（无头/虚拟化环境里很常见）。
 可以稍后重试，或改用 WebGL2 后端。`
       );
     return n;
   }
 }
-class bp {
+class Gp {
   kind = "webgl2";
   async isAvailable(e) {
-    const n = mp();
+    const n = Rp();
     if (!n)
       return { ok: !1, reason: "没有可用的 canvas（不在浏览器环境里，也没有 OffscreenCanvas）" };
     try {
@@ -9507,22 +10017,22 @@ class bp {
     }
   }
   async createAdapter(e) {
-    const n = pp(e);
+    const n = Fp(e);
     if (!n)
       throw new Error("[gpu-device-api] 创建 WebGL2 adapter 需要 canvas。");
-    return Yn.request({
+    return er.request({
       canvas: n,
       contextAttributes: e.contextAttributes
     });
   }
 }
-let hn = null;
-function tr() {
-  return hn || (hn = new Ku().register(new gp()).register(new bp())), hn;
+let gn = null;
+function or() {
+  return gn || (gn = new hh().register(new Bp()).register(new Gp())), gn;
 }
-const wp = ["webgpu", "webgl2"];
-async function vp(t = {}) {
-  const e = t.registry ?? tr(), n = t.backend && t.backend !== "auto" ? [t.backend] : t.order ?? wp, r = await e.probeAll(n, t), i = r.find((s) => s.ok);
+const Op = ["webgpu", "webgl2"];
+async function Up(t = {}) {
+  const e = t.registry ?? or(), n = t.backend && t.backend !== "auto" ? [t.backend] : t.order ?? Op, r = await e.probeAll(n, t), i = r.find((s) => s.ok);
   if (i) {
     const s = r.slice(0, r.indexOf(i)).filter((a) => !a.ok);
     return {
@@ -9537,15 +10047,15 @@ async function vp(t = {}) {
     reason: "没有可用的渲染后端。各候选后端的探测结果：" + r.map((s) => `${s.backend} — ${s.reason ?? "不可用"}`).join("；") + "。"
   };
 }
-async function _g(t, e = {}) {
-  const r = (e.registry ?? tr()).get(t);
+async function Qg(t, e = {}) {
+  const r = (e.registry ?? or()).get(t);
   return r ? (await r.isAvailable(e)).ok : !1;
 }
-async function Eg(t = {}) {
-  return (await Hs(t)).device;
+async function Xg(t = {}) {
+  return (await oa(t)).device;
 }
-async function Hs(t = {}) {
-  const e = t.logger ?? Je("gpu-device-api"), n = t.registry ?? tr(), r = await vp({
+async function oa(t = {}) {
+  const e = t.logger ?? it("gpu-device-api"), n = t.registry ?? or(), r = await Up({
     backend: t.backend ?? "auto",
     order: t.order,
     canvas: t.canvas,
@@ -9568,26 +10078,27 @@ async function Hs(t = {}) {
     ...r.probes.filter((o) => o.ok && o.backend !== r.backend).map((o) => o.backend)
   ], a = [];
   for (const o of s) {
-    const l = n.get(o);
-    if (l)
+    const c = n.get(o);
+    if (c)
       try {
-        const c = await l.createAdapter({
+        const l = await c.createAdapter({
           canvas: t.canvas,
           contextAttributes: t.contextAttributes,
           powerPreference: t.powerPreference,
           forceFallbackAdapter: t.forceFallbackAdapter
-        }), h = await c.requestDevice({
+        }), h = await l.requestDevice({
           label: t.label,
-          requiredFeatures: t.requiredFeatures,
+          // 可选 feature 按 adapter 的实际能力过滤：不支持就不申请（而不是抛错）。
+          requiredFeatures: Dp(t.requiredFeatures, t.optionalFeatures, l.features),
           requiredLimits: t.requiredLimits,
           debug: t.debug
-        }), d = t.canvas ? h.createCanvasContext(t.canvas) : null;
+        }), f = t.canvas ? h.createCanvasContext(t.canvas) : null;
         return o !== r.backend ? e.warn(
           `后端 ${r.backend} 初始化失败，已改用 ${o}。失败原因：${a[a.length - 1] ?? "未知"}`
-        ) : o === "webgl2" && t.backend !== "webgl2" && e.info(`已回退到 WebGL2 后端：${r.reason}`), { device: h, adapter: c, backend: o, probes: r.probes, context: d };
-      } catch (c) {
-        const h = c.message;
-        if (a.push(`${o} — ${h}`), !i) throw c;
+        ) : o === "webgl2" && t.backend !== "webgl2" && e.info(`已回退到 WebGL2 后端：${r.reason}`), { device: h, adapter: l, backend: o, probes: r.probes, context: f };
+      } catch (l) {
+        const h = l.message;
+        if (a.push(`${o} — ${h}`), !i) throw l;
         e.warn(`后端 ${o} 初始化失败：${h}`);
       }
   }
@@ -9599,7 +10110,16 @@ async function Hs(t = {}) {
 另一个常见原因：这张 canvas 已经被别的代码用 getContext() 绑定成了其它类型，一个 canvas 只能绑定一种 context —— 请为它新建一张 canvas，或换一个未被占用的 canvas。`
   );
 }
-const kr = 16, xp = 12, Ft = {
+function Dp(t, e, n) {
+  if ((!t || t.length === 0) && (!e || e.length === 0)) return;
+  const r = [];
+  for (const i of t ?? [])
+    r.includes(i) || r.push(i);
+  for (const i of e ?? [])
+    r.includes(i) || n.has(i) && r.push(i);
+  return r;
+}
+const Qr = 16, Ip = 12, Ut = {
   f32: { align: 4, size: 4, glsl: "float", wgsl: "f32", componentType: "f32", components: 1 },
   i32: { align: 4, size: 4, glsl: "int", wgsl: "i32", componentType: "i32", components: 1 },
   u32: { align: 4, size: 4, glsl: "uint", wgsl: "u32", componentType: "u32", components: 1 },
@@ -9614,13 +10134,13 @@ const kr = 16, xp = 12, Ft = {
   vec4u: { align: 16, size: 16, glsl: "uvec4", wgsl: "vec4u", componentType: "u32", components: 4 },
   mat3x3f: {
     align: 16,
-    size: kr * 3,
+    size: Qr * 3,
     glsl: "mat3",
     wgsl: "mat3x3f",
     componentType: "f32",
     components: 9,
-    columnStride: kr,
-    columnSize: xp,
+    columnStride: Qr,
+    columnSize: Ip,
     columns: 3
   },
   mat4x4f: {
@@ -9634,17 +10154,17 @@ const kr = 16, xp = 12, Ft = {
     columnSize: 16,
     columns: 4
   }
-}, zr = Object.keys(Ft);
-function fn(t, e) {
+}, Xr = Object.keys(Ut);
+function bn(t, e) {
   return Math.ceil(t / e) * e;
 }
-function yp(t) {
+function Vp(t) {
   const e = /^([A-Za-z0-9]+)\[(\d+)\]$/.exec(t);
   if (e) {
-    const r = e[1], i = Ft[r];
+    const r = e[1], i = Ut[r];
     if (!i)
       throw new u(
-        `[gpu-device-api] 不支持的 uniform 元素类型「${r}」（出现在「${t}」里）。支持：${zr.join("、")}。`
+        `[gpu-device-api] 不支持的 uniform 元素类型「${r}」（出现在「${t}」里）。支持：${Xr.join("、")}。`
       );
     const s = Number(e[2]);
     if (s <= 0)
@@ -9661,13 +10181,13 @@ function yp(t) {
       `[gpu-device-api] uniform 不支持 \`${t}\`：GLSL std140 与 WGSL uniform 对非 4 列的矩阵布局规则不一致（std140 会把列步长补齐到 16 字节）。
 请改用 \`mat4x4f\`（把缺的列填单位向量或零），或拆成若干 \`vec4f\`。`
     );
-  if (!Ft[t])
+  if (!Ut[t])
     throw new u(
-      `[gpu-device-api] 不支持的 uniform 类型「${t}」。支持：${zr.join("、")}，以及 \`类型[N]\` 形式的数组。`
+      `[gpu-device-api] 不支持的 uniform 类型「${t}」。支持：${Xr.join("、")}，以及 \`类型[N]\` 形式的数组。`
     );
   return { element: t, count: 1 };
 }
-const Tp = /* @__PURE__ */ new Set([
+const Np = /* @__PURE__ */ new Set([
   "alias",
   "break",
   "case",
@@ -9711,8 +10231,8 @@ const Tp = /* @__PURE__ */ new Set([
   "vec2",
   "vec3",
   "vec4"
-]), Sp = /^[A-Za-z_][A-Za-z0-9_]*$/;
-class zt {
+]), kp = /^[A-Za-z_][A-Za-z0-9_]*$/;
+class Qt {
   desc;
   fields;
   /**
@@ -9741,14 +10261,14 @@ class zt {
     const i = [];
     let s = 0, a = 16;
     for (const o of r) {
-      if (!Sp.test(o))
+      if (!kp.test(o))
         throw new u(`[gpu-device-api] uniform 字段名「${o}」不是合法标识符。`);
-      if (Tp.has(o))
+      if (Np.has(o))
         throw new u(`[gpu-device-api] uniform 字段名「${o}」是 WGSL 保留字，请换一个。`);
-      const l = e[o], { element: c, count: h } = yp(l), d = Ft[c], f = fn(s, d.align), p = d.size, m = h > 1 ? fn(d.size, 16) : d.size, g = d.columnStride === void 0 || d.columnStride === d.columnSize, b = h > 1 ? m === d.size && g : g, w = h > 1 ? m * (h - 1) + d.size : d.size;
-      i.push({ name: o, type: l, info: d, byteOffset: f, byteSize: p, byteStride: m, count: h, packed: b }), s = f + w, a = Math.max(a, d.align, h > 1 ? 16 : 0);
+      const c = e[o], { element: l, count: h } = Vp(c), f = Ut[l], d = bn(s, f.align), p = f.size, m = h > 1 ? bn(f.size, 16) : f.size, g = f.columnStride === void 0 || f.columnStride === f.columnSize, b = h > 1 ? m === f.size && g : g, w = h > 1 ? m * (h - 1) + f.size : f.size;
+      i.push({ name: o, type: c, info: f, byteOffset: d, byteSize: p, byteStride: m, count: h, packed: b }), s = d + w, a = Math.max(a, f.align, h > 1 ? 16 : 0);
     }
-    this.fields = i, this.fieldByName = new Map(i.map((o) => [o.name, o])), this.byteLength = fn(s, a), this.key = `${this.structName}|${this.group}|${this.binding}|${r.map((o) => `${o}:${e[o]}`).join(",")}`;
+    this.fields = i, this.fieldByName = new Map(i.map((o) => [o.name, o])), this.byteLength = bn(s, a), this.key = `${this.structName}|${this.group}|${this.binding}|${r.map((o) => `${o}:${e[o]}`).join(",")}`;
   }
   field(e) {
     const n = this.fieldByName.get(e);
@@ -9806,15 +10326,15 @@ ${e}
 `);
   }
 }
-const Wr = /* @__PURE__ */ new Map();
-function Zs(t, e) {
-  const n = new zt(t, e), r = Wr.get(n.key);
-  return r || (Wr.set(n.key, n), n);
+const Yr = /* @__PURE__ */ new Map();
+function la(t, e) {
+  const n = new Qt(t, e), r = Yr.get(n.key);
+  return r || (Yr.set(n.key, n), n);
 }
-function En(t, e, n, r) {
+function Rn(t, e, n, r) {
   return t === "i32" ? new Int32Array(e, n, r) : t === "u32" ? new Uint32Array(e, n, r) : new Float32Array(e, n, r);
 }
-function qr(t, e, n, r, i) {
+function Hr(t, e, n, r, i) {
   const s = [];
   return {
     type: t.type,
@@ -9826,29 +10346,29 @@ function qr(t, e, n, r, i) {
           `[gpu-device-api] uniform 字段「${t.name}」的下标 ${a} 越界（有效范围 0..${i - 1}）。`
         );
       let o = s[a];
-      return o || (o = En(t.info.componentType, e, t.byteOffset + a * n, r), s[a] = o), o;
+      return o || (o = Rn(t.info.componentType, e, t.byteOffset + a * n, r), s[a] = o), o;
     },
     set(a) {
       let o = 0;
-      for (let l = 0; l < i; l++) {
-        const c = this.at(l);
+      for (let c = 0; c < i; c++) {
+        const l = this.at(c);
         for (let h = 0; h < r && o < a.length; h++, o++)
-          c[h] = a[o];
+          l[h] = a[o];
       }
     },
     get(a) {
-      const o = i * r, l = a ?? En(t.info.componentType, new ArrayBuffer(o * 4), 0, o);
-      let c = 0;
+      const o = i * r, c = a ?? Rn(t.info.componentType, new ArrayBuffer(o * 4), 0, o);
+      let l = 0;
       for (let h = 0; h < i; h++) {
-        const d = this.at(h);
-        for (let f = 0; f < r; f++, c++)
-          l[c] = d[f];
+        const f = this.at(h);
+        for (let d = 0; d < r; d++, l++)
+          c[l] = f[d];
       }
-      return l;
+      return c;
     }
   };
 }
-class jr {
+class Zr {
   layout;
   buffer;
   fieldValues;
@@ -9873,7 +10393,7 @@ class jr {
   /** 每次修改自增；渲染器据此跳过没必要的上传。 */
   version = 1;
   constructor(e, n) {
-    this.layout = e instanceof zt ? e : Zs(e, n), this.buffer = new ArrayBuffer(Math.max(this.layout.byteLength, 16)), this.bytesView = new Uint8Array(this.buffer, 0, this.layout.byteLength);
+    this.layout = e instanceof Qt ? e : la(e, n), this.buffer = new ArrayBuffer(Math.max(this.layout.byteLength, 16)), this.bytesView = new Uint8Array(this.buffer, 0, this.layout.byteLength);
     const r = {};
     for (const i of this.layout.fields)
       r[i.name] = this.createFieldValue(i), this.writers.set(i.name, this.createFieldWriter(i, r[i.name]));
@@ -9891,7 +10411,7 @@ class jr {
   }
   createFieldValue(e) {
     if (e.packed)
-      return En(
+      return Rn(
         e.info.componentType,
         this.buffer,
         e.byteOffset,
@@ -9899,7 +10419,7 @@ class jr {
       );
     if (e.info.columnStride !== void 0) {
       const n = (e.info.columnSize ?? e.byteSize) / 4;
-      return qr(
+      return Hr(
         e,
         this.buffer,
         e.info.columnStride,
@@ -9907,7 +10427,7 @@ class jr {
         e.info.columns ?? 1
       );
     }
-    return qr(e, this.buffer, e.byteStride, e.info.components, e.count);
+    return Hr(e, this.buffer, e.byteStride, e.info.components, e.count);
   }
   /** 所有字段写入器。 */
   get fields() {
@@ -9966,12 +10486,12 @@ class jr {
     return this.buffer.slice(0, this.layout.byteLength);
   }
 }
-const Xr = /* @__PURE__ */ new WeakMap(), Ks = /* @__PURE__ */ new WeakMap();
-function $p(t) {
-  return Ks.get(t) ?? t;
+const Kr = /* @__PURE__ */ new WeakMap(), ca = /* @__PURE__ */ new WeakMap();
+function zp(t) {
+  return ca.get(t) ?? t;
 }
-function Ap(t) {
-  const e = Xr.get(t);
+function Wp(t) {
+  const e = Kr.get(t);
   if (e) return e;
   const n = /* @__PURE__ */ new Map(), r = new Proxy(t, {
     get(i, s, a) {
@@ -9979,8 +10499,8 @@ function Ap(t) {
         return i.field(s);
       const o = Reflect.get(i, s, i);
       if (typeof o == "function") {
-        let l = n.get(s);
-        return l === void 0 && (l = o.bind(i), n.set(s, l)), l;
+        let c = n.get(s);
+        return c === void 0 && (c = o.bind(i), n.set(s, c)), c;
       }
       return o;
     },
@@ -9991,13 +10511,13 @@ function Ap(t) {
       return typeof s == "string" && i.has(s) ? (i.set(s, a), !0) : Reflect.set(i, s, a, o);
     }
   });
-  return Xr.set(t, r), Ks.set(r, t), r;
+  return Kr.set(t, r), ca.set(r, t), r;
 }
-function _p(t, e) {
-  const n = t instanceof zt ? new jr(t) : new jr(t, e);
-  return Ap(n);
+function qp(t, e) {
+  const n = t instanceof Qt ? new Zr(t) : new Zr(t, e);
+  return Wp(n);
 }
-const dn = "/*%uniforms%*/", Yr = "/*%attributes%*/", pn = "/*%textures%*/", Ep = {
+const wn = "/*%uniforms%*/", Jr = "/*%attributes%*/", yn = "/*%textures%*/", jp = {
   alpha: {
     color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
     alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
@@ -10019,14 +10539,14 @@ const dn = "/*%uniforms%*/", Yr = "/*%attributes%*/", pn = "/*%textures%*/", Ep 
     alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
   }
 };
-function Lp(t, e, n) {
+function Qp(t, e, n) {
   const r = e === "cube" ? "samplerCube" : e === "3d" ? "sampler3D" : e === "2d-array" ? "sampler2DArray" : "sampler2D";
   return n ? r === "sampler2D" ? "sampler2DShadow" : r === "samplerCube" ? "samplerCubeShadow" : r === "sampler2DArray" ? "sampler2DArrayShadow" : r : t === "sint" ? `i${r}` : t === "uint" ? `u${r}` : r;
 }
-function Cp(t, e) {
+function Xp(t, e) {
   return t === "depth" ? e === "cube" ? "texture_depth_cube" : e === "2d-array" ? "texture_depth_2d_array" : "texture_depth_2d" : `${e === "cube" ? "texture_cube" : e === "3d" ? "texture_3d" : e === "2d-array" ? "texture_2d_array" : "texture_2d"}<${t === "sint" ? "i32" : t === "uint" ? "u32" : "f32"}>`;
 }
-function mn(t, e) {
+function vn(t, e) {
   let n = t;
   const r = [];
   for (const s of e)
@@ -10038,7 +10558,7 @@ function mn(t, e) {
 ` : ""}${n.trim()}
 `;
 }
-class Wt {
+class Xt {
   name;
   desc;
   /** 属性名 → 格式 / 步进模式，顺序即 shaderLocation。 */
@@ -10056,65 +10576,65 @@ class Wt {
       throw new u(
         `[gpu-device-api] 材质「${this.name}」声明了 ${n.length} 个顶点属性，超过 WebGL2/WebGPU 的 16 个上限。`
       );
-    this.attributes = n.map(([f, p], m) => {
+    this.attributes = n.map(([d, p], m) => {
       const g = typeof p == "string" ? { format: p, stepMode: "vertex" } : p;
-      return { name: f, format: g.format, location: m, stepMode: g.stepMode ?? "vertex" };
-    }), e.uniforms instanceof zt ? this.uniforms = e.uniforms : e.uniforms ? this.uniforms = Zs(e.uniforms) : this.uniforms = null;
+      return { name: d, format: g.format, location: m, stepMode: g.stepMode ?? "vertex" };
+    }), e.uniforms instanceof Qt ? this.uniforms = e.uniforms : e.uniforms ? this.uniforms = la(e.uniforms) : this.uniforms = null;
     const r = (e.textures ?? []).map(
-      (f) => typeof f == "string" ? { name: f } : f
+      (d) => typeof d == "string" ? { name: d } : d
     );
-    this.textures = r.map((f, p) => {
-      const m = f.binding ?? p * 2;
+    this.textures = r.map((d, p) => {
+      const m = d.binding ?? p * 2;
       return {
-        name: f.name,
-        sampleType: f.sampleType ?? "float",
-        viewDimension: f.viewDimension ?? "2d",
-        comparison: f.comparison ?? f.sampleType === "depth",
+        name: d.name,
+        sampleType: d.sampleType ?? "float",
+        viewDimension: d.viewDimension ?? "2d",
+        comparison: d.comparison ?? d.sampleType === "depth",
         binding: m,
-        samplerName: `${f.name}_sampler`,
+        samplerName: `${d.name}_sampler`,
         samplerBinding: m + 1
       };
     });
     const i = this.uniforms ? 1 : 0, s = this.uniforms ? this.uniforms.glslDeclaration() : "", a = this.textures.map(
-      (f) => `uniform ${Lp(f.sampleType, f.viewDimension, f.comparison)} ${f.name};`
+      (d) => `uniform ${Qp(d.sampleType, d.viewDimension, d.comparison)} ${d.name};`
     ).join(`
-`), o = this.attributes.map((f) => `layout(location = ${f.location}) in ${ga(f.format)} ${f.name};`).join(`
+`), o = this.attributes.map((d) => `layout(location = ${d.location}) in ${La(d.format)} ${d.name};`).join(`
 `);
     if (this.glsl = {
-      vs: mn(e.glsl.vs, [
-        { placeholder: dn, text: s },
-        { placeholder: Yr, text: o },
-        { placeholder: pn, text: a }
+      vs: vn(e.glsl.vs, [
+        { placeholder: wn, text: s },
+        { placeholder: Jr, text: o },
+        { placeholder: yn, text: a }
       ]),
-      fs: mn(e.glsl.fs, [
-        { placeholder: dn, text: s },
-        { placeholder: pn, text: a }
+      fs: vn(e.glsl.fs, [
+        { placeholder: wn, text: s },
+        { placeholder: yn, text: a }
       ])
     }, e.fragmentOutput !== !1) {
-      const f = e.fragmentOutput ?? "fragColor";
+      const d = e.fragmentOutput ?? "fragColor";
       new RegExp(
-        `\\bout\\s+(?:lowp\\s+|mediump\\s+|highp\\s+)?\\w+\\s+${f}\\b`
-      ).test(this.glsl.fs) || (this.glsl.fs = `layout(location = 0) out vec4 ${f};
+        `\\bout\\s+(?:lowp\\s+|mediump\\s+|highp\\s+)?\\w+\\s+${d}\\b`
+      ).test(this.glsl.fs) || (this.glsl.fs = `layout(location = 0) out vec4 ${d};
 ${this.glsl.fs}`);
     }
-    const l = e.wgsl, c = this.uniforms ? this.uniforms.wgslDeclaration() : "", h = this.textures.map((f) => {
-      const p = f.comparison && f.sampleType === "depth" ? "sampler_comparison" : "sampler";
-      return `@group(${i}) @binding(${f.binding}) var ${f.name}: ${Cp(f.sampleType, f.viewDimension)};
-@group(${i}) @binding(${f.samplerBinding}) var ${f.samplerName}: ${p};`;
+    const c = e.wgsl, l = this.uniforms ? this.uniforms.wgslDeclaration() : "", h = this.textures.map((d) => {
+      const p = d.comparison && d.sampleType === "depth" ? "sampler_comparison" : "sampler";
+      return `@group(${i}) @binding(${d.binding}) var ${d.name}: ${Xp(d.sampleType, d.viewDimension)};
+@group(${i}) @binding(${d.samplerBinding}) var ${d.samplerName}: ${p};`;
     }).join(`
-`), d = this.attributes.length > 0 ? `struct VertexInput {
-${this.attributes.map((f) => `  @location(${f.location}) ${f.name}: ${ba(f.format)},`).join(`
+`), f = this.attributes.length > 0 ? `struct VertexInput {
+${this.attributes.map((d) => `  @location(${d.location}) ${d.name}: ${Ca(d.format)},`).join(`
 `)}
 }` : "";
-    this.wgsl = mn(l, [
-      { placeholder: dn, text: c },
-      { placeholder: Yr, text: d },
-      { placeholder: pn, text: h }
+    this.wgsl = vn(c, [
+      { placeholder: wn, text: l },
+      { placeholder: Jr, text: f },
+      { placeholder: yn, text: h }
     ]);
   }
   /** 创建一个材质。 */
   static create(e) {
-    return new Wt(e);
+    return new Xt(e);
   }
   /**
    * 顶点缓冲布局：每个属性一个缓冲槽，步长就是该格式的字节数（几何体按属性分开存），
@@ -10122,7 +10642,7 @@ ${this.attributes.map((f) => `  @location(${f.location}) ${f.name}: ${ba(f.forma
    */
   vertexBufferLayouts() {
     return this.attributes.map((e) => ({
-      arrayStride: Se(e.format).byteSize,
+      arrayStride: Ae(e.format).byteSize,
       stepMode: e.stepMode,
       attributes: [{ shaderLocation: e.location, offset: 0, format: e.format }]
     }));
@@ -10203,7 +10723,7 @@ ${this.attributes.map((f) => `  @location(${f.location}) ${f.name}: ${ba(f.forma
       throw new u(
         `[gpu-device-api] 材质「${this.name}」没有 uniform 布局，无法创建 uniform 数值容器。`
       );
-    const e = _p(this.uniforms);
+    const e = qp(this.uniforms);
     if (this.desc.defaults)
       for (const [n, r] of Object.entries(this.desc.defaults)) {
         if (!e.has(n))
@@ -10222,7 +10742,7 @@ ${this.attributes.map((f) => `  @location(${f.location}) ${f.name}: ${ba(f.forma
     const e = this.desc.blend;
     if (e === void 0 || e === "none") return null;
     if (typeof e == "string") {
-      const n = Ep[e];
+      const n = jp[e];
       if (!n)
         throw new u(
           `[gpu-device-api] 材质「${this.name}」使用了未知的混合预设「${e}」。可用：none、alpha、premultiplied、additive、multiply、screen。`
@@ -10237,7 +10757,7 @@ ${this.attributes.map((f) => `  @location(${f.location}) ${f.name}: ${ba(f.forma
     n === 0 && this.uniforms && r.push({
       binding: this.uniforms.binding,
       visibility: 3,
-      type: R.Uniform,
+      type: O.Uniform,
       name: this.uniforms.structName,
       buffer: {
         type: "uniform",
@@ -10251,24 +10771,24 @@ ${this.attributes.map((f) => `  @location(${f.location}) ${f.name}: ${ba(f.forma
         r.push({
           binding: a.binding,
           visibility: 3,
-          type: R.Texture,
+          type: O.Texture,
           name: a.name,
           texture: { sampleType: a.sampleType, viewDimension: a.viewDimension }
         }), r.push({
           binding: a.samplerBinding,
           visibility: 3,
-          type: a.comparison && a.sampleType === "depth" ? R.ComparisonSampler : R.Sampler,
+          type: a.comparison && a.sampleType === "depth" ? O.ComparisonSampler : O.Sampler,
           name: a.samplerName,
           sampler: { type: a.comparison ? "comparison" : "filtering" }
         });
     return r.length === 0 ? null : e.createBindGroupLayout({ label: `${this.name}:group${n}`, entries: r });
   }
 }
-function Mp(t) {
-  return Wt.create(t);
+function Yp(t) {
+  return Xt.create(t);
 }
-const Pp = 72;
-class Fp {
+const Hp = 72;
+class Zp {
   layout;
   label;
   device;
@@ -10297,7 +10817,7 @@ class Fp {
   retired = [];
   _disposed = !1;
   constructor(e, n, r = {}) {
-    this.device = e, this.layout = n, this.label = r.label ?? `uniformArena:${n.structName}`, this.align = Math.max(1, e.limits.minUniformBufferOffsetAlignment), this.slotSize = Hr(Math.max(n.byteLength, 16), this.align), this.maxCapacity = r.maxCapacity ?? 16 * 1024 * 1024, this.capacityValue = Math.max(r.initialCapacity ?? 64 * 1024, this.slotSize), this.bufferValue = this.createBuffer(this.capacityValue);
+    this.device = e, this.layout = n, this.label = r.label ?? `uniformArena:${n.structName}`, this.align = Math.max(1, e.limits.minUniformBufferOffsetAlignment), this.slotSize = ei(Math.max(n.byteLength, 16), this.align), this.maxCapacity = r.maxCapacity ?? 16 * 1024 * 1024, this.capacityValue = Math.max(r.initialCapacity ?? 64 * 1024, this.slotSize), this.bufferValue = this.createBuffer(this.capacityValue);
   }
   get buffer() {
     return this.bufferValue;
@@ -10413,12 +10933,12 @@ class Fp {
   createBuffer(e) {
     return this.device.createBuffer({
       label: `${this.label}:${e}`,
-      size: Hr(e, 4),
-      usage: Pp
+      size: ei(e, 4),
+      usage: Hp
     });
   }
 }
-class Bp {
+class Kp {
   device;
   arenas = /* @__PURE__ */ new Map();
   options;
@@ -10428,7 +10948,7 @@ class Bp {
   /** 取得（或创建）某个布局的 arena。 */
   acquire(e) {
     let n = this.arenas.get(e.key);
-    return n || (n = new Fp(this.device, e, this.options), this.arenas.set(e.key, n)), n;
+    return n || (n = new Zp(this.device, e, this.options), this.arenas.set(e.key, n)), n;
   }
   beginFrame() {
     for (const e of this.arenas.values()) e.beginFrame();
@@ -10441,10 +10961,10 @@ class Bp {
     this.arenas.clear();
   }
 }
-function Hr(t, e) {
+function ei(t, e) {
   return Math.ceil(t / e) * e;
 }
-const Rp = 40, Gp = 24, Up = Object.freeze({
+const Jp = 40, em = 24, tm = Object.freeze({
   position: "float32x3",
   normal: "float32x3",
   uv: "float32x2",
@@ -10454,7 +10974,7 @@ const Rp = 40, Gp = 24, Up = Object.freeze({
   joints: "uint16x4",
   weights: "float32x4"
 });
-class qt {
+class Yt {
   label;
   topology;
   attributes;
@@ -10492,41 +11012,41 @@ class qt {
       ["color", n.color],
       ["tangent", n.tangent]
     ];
-    for (const [f, p] of s)
-      p && i.set(f, { data: p });
-    for (const [f, p] of Object.entries(n.attributes ?? {}))
-      i.set(f, ArrayBuffer.isView(p) ? { data: p } : p);
+    for (const [d, p] of s)
+      p && i.set(d, { data: p });
+    for (const [d, p] of Object.entries(n.attributes ?? {}))
+      i.set(d, ArrayBuffer.isView(p) ? { data: p } : p);
     if (i.size === 0)
       throw new u(`[gpu-device-api] 几何体「${r}」至少要有一个顶点属性。`);
     let a = n.vertexCount ?? 0, o = null;
-    for (const [f, p] of i) {
-      const m = p.format ?? Zr(f, p.data), g = Math.floor(p.data.byteLength / Se(m).byteSize);
+    for (const [d, p] of i) {
+      const m = p.format ?? ti(d, p.data), g = Math.floor(p.data.byteLength / Ae(m).byteSize);
       p.perInstance ? o = o === null ? g : Math.min(o, g) : g > a && (a = g);
     }
     if (a <= 0)
       throw new u(
         `[gpu-device-api] 几何体「${r}」无法推断顶点数：至少要有一个按顶点步进的属性（实例属性只描述实例，不决定顶点数），并检查属性数据是否为空。`
       );
-    const l = /* @__PURE__ */ new Map();
-    for (const [f, p] of i) {
-      const m = p.format ?? Zr(f, p.data), g = Se(m);
+    const c = /* @__PURE__ */ new Map();
+    for (const [d, p] of i) {
+      const m = p.format ?? ti(d, p.data), g = Ae(m);
       if (p.data.byteLength % g.byteSize !== 0)
         throw new u(
-          `[gpu-device-api] 几何体「${r}」的属性「${f}」数据长度 ${p.data.byteLength} 字节不是其格式 ${m}（${g.byteSize} 字节）的整数倍。`
+          `[gpu-device-api] 几何体「${r}」的属性「${d}」数据长度 ${p.data.byteLength} 字节不是其格式 ${m}（${g.byteSize} 字节）的整数倍。`
         );
       const b = a * g.byteSize;
       if (!p.perInstance && p.data.byteLength < b)
         throw new u(
-          `[gpu-device-api] 几何体「${r}」的属性「${f}」只有 ${p.data.byteLength} 字节，但按顶点数 ${a} 需要 ${b} 字节。所有属性必须提供同样多的顶点（只有 \`perInstance: true\` 的实例属性可以少于顶点数）。`
+          `[gpu-device-api] 几何体「${r}」的属性「${d}」只有 ${p.data.byteLength} 字节，但按顶点数 ${a} 需要 ${b} 字节。所有属性必须提供同样多的顶点（只有 \`perInstance: true\` 的实例属性可以少于顶点数）。`
         );
       const w = e.createBuffer({
-        label: `${r}:${f}`,
+        label: `${r}:${d}`,
         // WebGPU 要求 buffer 大小是 4 的倍数，这里统一对齐。
-        size: Kr(p.data.byteLength, 4),
-        usage: Rp
+        size: ni(p.data.byteLength, 4),
+        usage: Jp
       });
-      e.queue.writeBuffer(w, 0, p.data), l.set(f, {
-        name: f,
+      e.queue.writeBuffer(w, 0, p.data), c.set(d, {
+        name: d,
         format: m,
         byteStride: g.byteSize,
         components: g.components,
@@ -10534,24 +11054,24 @@ class qt {
         buffer: w
       });
     }
-    let c = null, h = null, d = 0;
+    let l = null, h = null, f = 0;
     if (n.indices && n.indices.length > 0) {
-      const f = Op(n.indices, a, r);
-      h = f instanceof Uint32Array ? "uint32" : "uint16", d = f.length, c = e.createBuffer({
+      const d = nm(n.indices, a, r);
+      h = d instanceof Uint32Array ? "uint32" : "uint16", f = d.length, l = e.createBuffer({
         label: `${r}:indices`,
-        size: Kr(f.byteLength, 4),
-        usage: Gp
-      }), e.queue.writeBuffer(c, 0, f);
+        size: ni(d.byteLength, 4),
+        usage: em
+      }), e.queue.writeBuffer(l, 0, d);
     }
-    return new qt({
+    return new Yt({
       label: r,
       topology: n.topology ?? "triangle-list",
-      attributes: l,
+      attributes: c,
       vertexCount: a,
       instanceCount: o,
-      indexBuffer: c,
+      indexBuffer: l,
       indexFormat: h,
-      indexCount: d
+      indexCount: f
     });
   }
   get disposed() {
@@ -10598,8 +11118,8 @@ class qt {
     }
   }
 }
-function Zr(t, e) {
-  const n = Up[t];
+function ti(t, e) {
+  const n = tm[t];
   if (n && e instanceof Float32Array) return n;
   if (e instanceof Float32Array)
     return t === "position" || t === "normal" ? "float32x3" : "float32";
@@ -10610,7 +11130,7 @@ function Zr(t, e) {
 请显式写明分量，例如 \`{ data, format: 'unorm8x4' }\` 或 \`format: 'uint16x2'\`。`
   );
 }
-function Op(t, e, n) {
+function nm(t, e, n) {
   if (t instanceof Uint16Array || t instanceof Uint32Array) return t;
   const r = t;
   let i = 0;
@@ -10623,15 +11143,15 @@ function Op(t, e, n) {
     throw new u(
       `[gpu-device-api] 几何体「${n}」的索引最大值 ${i} 超过了顶点数 ${e}。`
     );
-  return pa(e) === "uint32" ? Uint32Array.from(r) : Uint16Array.from(r);
+  return Ea(e) === "uint32" ? Uint32Array.from(r) : Uint16Array.from(r);
 }
-function Kr(t, e) {
+function ni(t, e) {
   return Math.ceil(t / e) * e;
 }
-function Lg(t, e) {
-  return qt.create(t, e);
+function Yg(t, e) {
+  return Yt.create(t, e);
 }
-class Ke {
+class nt {
   label;
   texture;
   view;
@@ -10644,54 +11164,54 @@ class Ke {
   id;
   _disposed = !1;
   constructor(e) {
-    this.label = e.label, this.texture = e.texture, this.view = e.view, this.sampler = e.sampler, this.width = e.width, this.height = e.height, this.format = e.format, this.mipLevelCount = e.mipLevelCount, this.id = G("gfxTexture");
+    this.label = e.label, this.texture = e.texture, this.view = e.view, this.sampler = e.sampler, this.width = e.width, this.height = e.height, this.format = e.format, this.mipLevelCount = e.mipLevelCount, this.id = B("gfxTexture");
   }
   /** 创建纹理（含可选 mip 链）。 */
   static create(e, n) {
-    const r = n.label ?? "texture", i = n.format ?? "rgba8unorm", s = n.flipY ?? Ln(n.data), a = n.mipmaps ?? (Ln(n.data) && i === "rgba8unorm");
+    const r = n.label ?? "texture", i = n.format ?? "rgba8unorm", s = n.flipY ?? Bn(n.data), a = n.mipmaps ?? (Bn(n.data) && i === "rgba8unorm");
     if (i !== "rgba8unorm")
       throw new u(
         `[gpu-device-api] 便捷层的纹理目前只支持 rgba8unorm（收到「${i}」）。需要其它格式请直接用 core 的 device.createTexture() + queue.writeTexture()。`
       );
-    const o = Dp(n.data, n.width, n.height, s), l = a ? Ip(o.data, o.width, o.height) : [o], c = {
+    const o = rm(n.data, n.width, n.height, s), c = a ? im(o.data, o.width, o.height) : [o], l = {
       label: r,
       size: { width: o.width, height: o.height },
       format: i,
-      mipLevelCount: l.length,
-      usage: ya(0) | x.CopyDst
-    }, h = e.createTexture(c);
-    for (let f = 0; f < l.length; f++) {
-      const p = l[f];
+      mipLevelCount: c.length,
+      usage: Ba(0) | v.CopyDst
+    }, h = e.createTexture(l);
+    for (let d = 0; d < c.length; d++) {
+      const p = c[d];
       e.queue.writeTexture(
-        { texture: h, mipLevel: f, origin: { x: 0, y: 0, z: 0 } },
+        { texture: h, mipLevel: d, origin: { x: 0, y: 0, z: 0 } },
         p.data,
         { offset: 0, bytesPerRow: p.width * 4, rowsPerImage: p.height },
         { width: p.width, height: p.height, depthOrArrayLayers: 1 }
       );
     }
-    const d = e.createSampler({
+    const f = e.createSampler({
       label: `${r}:sampler`,
       addressModeU: n.wrapS ?? n.wrap ?? "clamp-to-edge",
       addressModeV: n.wrapT ?? n.wrap ?? "clamp-to-edge",
       magFilter: n.magFilter ?? "linear",
       minFilter: n.minFilter ?? "linear",
-      mipmapFilter: l.length > 1 ? "linear" : "nearest"
+      mipmapFilter: c.length > 1 ? "linear" : "nearest"
     });
-    return new Ke({
+    return new nt({
       device: e,
       label: r,
       texture: h,
       view: h.createView(),
-      sampler: d,
+      sampler: f,
       width: o.width,
       height: o.height,
       format: i,
-      mipLevelCount: l.length
+      mipLevelCount: c.length
     });
   }
   /** 用一张 1×1 的纯色纹理占位（材质还没拿到真纹理时用，避免绑到未定义数据）。 */
   static solid(e, n) {
-    return Ke.create(e, {
+    return nt.create(e, {
       label: "solid",
       data: new Uint8Array([
         Math.round(n[0] * 255),
@@ -10711,23 +11231,23 @@ class Ke {
     this._disposed || (this._disposed = !0, this.sampler.dispose(), this.texture.destroy());
   }
 }
-function Ln(t) {
+function Bn(t) {
   if (!t || typeof t != "object") return !1;
   const e = t.constructor?.name ?? "";
   return e === "ImageBitmap" || e === "HTMLImageElement" || e === "HTMLCanvasElement" || e === "OffscreenCanvas" || e === "ImageData" || e === "VideoFrame" || e === "HTMLVideoElement";
 }
-function Dp(t, e, n, r) {
-  if (!Ln(t)) {
-    const d = t, f = new Uint8Array(d.buffer, d.byteOffset, d.byteLength), p = e ?? 0, m = n ?? 0;
+function rm(t, e, n, r) {
+  if (!Bn(t)) {
+    const f = t, d = new Uint8Array(f.buffer, f.byteOffset, f.byteLength), p = e ?? 0, m = n ?? 0;
     if (p <= 0 || m <= 0)
       throw new u(
         "[gpu-device-api] 用原始像素创建纹理时必须给出 width 与 height（无法从字节数推断）。"
       );
-    if (f.byteLength < p * m * 4)
+    if (d.byteLength < p * m * 4)
       throw new u(
-        `[gpu-device-api] 纹理数据只有 ${f.byteLength} 字节，但 ${p}x${m} 的 RGBA8 需要 ${p * m * 4} 字节。`
+        `[gpu-device-api] 纹理数据只有 ${d.byteLength} 字节，但 ${p}x${m} 的 RGBA8 需要 ${p * m * 4} 字节。`
       );
-    return { data: r ? Qr(f.subarray(0, p * m * 4), p, m) : f.subarray(0, p * m * 4), width: p, height: m };
+    return { data: r ? ri(d.subarray(0, p * m * 4), p, m) : d.subarray(0, p * m * 4), width: p, height: m };
   }
   if (typeof document > "u" && typeof OffscreenCanvas > "u")
     throw new u(
@@ -10740,14 +11260,14 @@ function Dp(t, e, n, r) {
     );
   const o = typeof OffscreenCanvas < "u" ? new OffscreenCanvas(s, a) : document.createElement("canvas");
   o.width = s, o.height = a;
-  const l = o.getContext("2d");
-  if (!l)
+  const c = o.getContext("2d");
+  if (!c)
     throw new u("[gpu-device-api] 无法取得 2D context，图片解码失败。");
-  l.drawImage(t, 0, 0, s, a);
-  const c = l.getImageData(0, 0, s, a), h = new Uint8Array(c.data.buffer.slice(0));
-  return { data: r ? Qr(h, s, a) : h, width: s, height: a };
+  c.drawImage(t, 0, 0, s, a);
+  const l = c.getImageData(0, 0, s, a), h = new Uint8Array(l.data.buffer.slice(0));
+  return { data: r ? ri(h, s, a) : h, width: s, height: a };
 }
-function Qr(t, e, n) {
+function ri(t, e, n) {
   const r = e * 4, i = new Uint8Array(t.byteLength);
   for (let s = 0; s < n; s++) {
     const a = s * r, o = (n - 1 - s) * r;
@@ -10755,25 +11275,186 @@ function Qr(t, e, n) {
   }
   return i;
 }
-function Ip(t, e, n) {
+function im(t, e, n) {
   const r = [{ data: t, width: e, height: n }];
   let i = t, s = e, a = n;
   for (; s > 1 || a > 1; ) {
-    const o = Math.max(1, s >> 1), l = Math.max(1, a >> 1), c = new Uint8Array(o * l * 4);
-    for (let h = 0; h < l; h++) {
-      const d = Math.min(h * 2, a - 1), f = Math.min(h * 2 + 1, a - 1);
+    const o = Math.max(1, s >> 1), c = Math.max(1, a >> 1), l = new Uint8Array(o * c * 4);
+    for (let h = 0; h < c; h++) {
+      const f = Math.min(h * 2, a - 1), d = Math.min(h * 2 + 1, a - 1);
       for (let p = 0; p < o; p++) {
-        const m = Math.min(p * 2, s - 1), g = Math.min(p * 2 + 1, s - 1), b = (d * s + m) * 4, w = (d * s + g) * 4, T = (f * s + m) * 4, $ = (f * s + g) * 4, A = (h * o + p) * 4;
+        const m = Math.min(p * 2, s - 1), g = Math.min(p * 2 + 1, s - 1), b = (f * s + m) * 4, w = (f * s + g) * 4, S = (d * s + m) * 4, $ = (d * s + g) * 4, A = (h * o + p) * 4;
         for (let _ = 0; _ < 4; _++)
-          c[A + _] = i[b + _] + i[w + _] + i[T + _] + i[$ + _] >> 2;
+          l[A + _] = i[b + _] + i[w + _] + i[S + _] + i[$ + _] >> 2;
       }
     }
-    r.push({ data: c, width: o, height: l }), i = c, s = o, a = l;
+    r.push({ data: l, width: o, height: c }), i = l, s = o, a = c;
   }
   return r;
 }
-const Vp = ne();
-class Qs {
+const ua = "timestamp-query", ii = 32, si = 8, sm = 4;
+class Ke {
+  /** 每个环形槽占用几个 query 下标：WebGPU 需要「开始 + 结束」，WebGL2 只需要一个区间结果。 */
+  slotStride;
+  frames;
+  delay;
+  backend;
+  device;
+  querySet;
+  frameIndex = 0;
+  /** 每个环形位置最近一次真正写入的槽位；null 表示那一帧没有写（见 {@link selectSlot}）。 */
+  recentSlots;
+  /** 正在被读回的槽位：既不重写，也不重复读。 */
+  busySlots = /* @__PURE__ */ new Set();
+  /** 本帧选定的槽位；{@link slotChosen} 区分「还没选」与「选了但没有空槽」。 */
+  frameSlot = null;
+  slotChosen = !1;
+  inFlight = 0;
+  lastMs = null;
+  sampleCount = 0;
+  skippedCount = 0;
+  lastError = null;
+  _disposed = !1;
+  /**
+   * 该设备是否具备 GPU 计时能力。
+   *
+   * WebGL2 后端把「拿到 `EXT_disjoint_timer_query_webgl2`」映射成同名 feature（见
+   * `glCapabilities.queryGlFeatures`），所以两个后端可以同一句话判断。
+   * WebGPU 上它只表示 adapter 支持 —— 设备是否真的启用了该 feature 由 `createQuerySet()` 决定，
+   * 那正是 {@link GpuTiming} 构造函数会立刻失败并给出精确原因的地方。
+   */
+  static isAvailable(e) {
+    return e.features.has(ua);
+  }
+  constructor(e, n = {}) {
+    this.device = e, this.backend = e.backend, this.frames = ai(n.frames ?? ii, ii, 4, 256), this.delay = ai(n.delay ?? si, si, 1, this.frames - 1), this.slotStride = e.backend === "webgl2" ? 1 : 2, this.recentSlots = new Array(this.frames).fill(null), this.querySet = e.createQuerySet({
+      label: "gfx-gpu-timing",
+      type: ze.Timestamp,
+      count: this.frames * this.slotStride
+    });
+  }
+  get disposed() {
+    return this._disposed;
+  }
+  get stats() {
+    return {
+      enabled: !this._disposed,
+      available: Ke.isAvailable(this.device),
+      frames: this.frames,
+      delay: this.delay,
+      gpuFrameTimeMs: this.lastMs,
+      samples: this.sampleCount,
+      skipped: this.skippedCount,
+      inFlight: this.inFlight,
+      error: this.lastError
+    };
+  }
+  /**
+   * 本帧开始时的钩子：WebGPU 在这里写「帧开始」时间戳。
+   *
+   * WebGL2 不用（它的计时由 pass 的 `timestampWrites` 包住整个通道）。
+   * 本帧没有空闲槽位时是空操作 —— 那一帧就没有 GPU 样本，这是刻意的取舍：
+   * 宁可少一个样本，也不要覆盖一个正在读的槽位而拿到错的数字。
+   */
+  beforeFrame(e) {
+    if (this.slotStride < 2) return;
+    const n = this.selectSlot();
+    n !== null && e.writeTimestamp(this.querySet, n * this.slotStride);
+  }
+  /**
+   * 本帧结束时的钩子：WebGPU 写「帧结束」时间戳。
+   *
+   * 必须在所有 pass 都 `end()` 之后、`finish()` 之前调用（WebGPU 规定 encoder 上写时间戳时
+   * 不能有打开的 pass）。
+   */
+  afterFrameEncoding(e) {
+    if (this.slotStride < 2) return;
+    const n = this.selectSlot();
+    n !== null && e.writeTimestamp(this.querySet, n * this.slotStride + 1);
+  }
+  /**
+   * 给本帧的 render pass 用的 `timestampWrites`；WebGPU 不需要（它用 encoder 级时间戳），
+   * 因此返回 undefined。
+   */
+  passTimestampWrites() {
+    if (this.slotStride !== 1) return;
+    const e = this.selectSlot();
+    if (e !== null)
+      return { querySet: this.querySet, beginningOfPassWriteIndex: e * this.slotStride };
+  }
+  /**
+   * 帧提交之后调用：延迟 `delay` 帧读回一次（如果条件允许）。
+   *
+   * 注意调用时机必须在 `device.queue.submit()` 之后 —— 读回本身会再提交一个小 command buffer
+   * （WebGPU）或轮询 GL 查询（WebGL2），队列顺序保证它看到的是已经写完的时间戳。
+   */
+  onFrameSubmitted() {
+    if (this._disposed) return;
+    const e = this.frameIndex;
+    this.recentSlots[e % this.frames] = this.slotChosen ? this.frameSlot : null, this.frameIndex += 1, this.frameSlot = null, this.slotChosen = !1;
+    const n = e - this.delay;
+    if (n < 0) {
+      this.skippedCount += 1;
+      return;
+    }
+    if (this.inFlight >= sm) {
+      this.skippedCount += 1;
+      return;
+    }
+    const r = this.recentSlots[n % this.frames];
+    if (r == null) {
+      this.skippedCount += 1;
+      return;
+    }
+    if (this.busySlots.has(r)) {
+      this.skippedCount += 1;
+      return;
+    }
+    const i = r * this.slotStride, s = this.device.readQuerySet(this.querySet, {
+      label: `gfx-gpu-timing:frame${n}`,
+      firstQuery: i,
+      queryCount: this.slotStride
+    }), a = s.timestampPeriod;
+    this.busySlots.add(r), this.inFlight += 1, s.read().then((o) => {
+      const c = o[0] ?? 0n, l = this.slotStride === 2 ? o[1] ?? c : c, h = this.slotStride === 2 ? c : 0n;
+      this.lastMs = Da(h, l, a), this.sampleCount += 1;
+    }).catch((o) => {
+      this.lastError = o instanceof Error ? o.message : String(o);
+    }).finally(() => {
+      this.busySlots.delete(r), this.inFlight -= 1;
+    });
+  }
+  destroy() {
+    this._disposed || (this._disposed = !0, this.querySet.destroy());
+  }
+  /**
+   * 选定本帧要写的槽位：从环形位置开始往后找第一个空闲的；都忙则返回 null（本帧不写时间戳）。
+   *
+   * 同一帧里 `beforeFrame` / `afterFrameEncoding` / `passTimestampWrites` 可能各问一次，
+   * 所以要记住本帧的选择，不能让它们算出不同的槽位。
+   */
+  selectSlot() {
+    if (this.slotChosen) return this.frameSlot;
+    this.slotChosen = !0, this.frameSlot = null;
+    for (let e = 0; e < this.frames; e++) {
+      const n = (this.frameIndex + e) % this.frames;
+      if (!this.busySlots.has(n)) {
+        this.frameSlot = n;
+        break;
+      }
+    }
+    return this.frameSlot;
+  }
+}
+function ai(t, e, n, r) {
+  return Number.isFinite(t) ? Math.max(n, Math.min(Math.trunc(t), r)) : e;
+}
+function am(t) {
+  const e = t instanceof Error ? t.message : String(t);
+  return e.startsWith("[gpu-device-api]") ? e : `[gpu-device-api] ${e}`;
+}
+const om = re();
+class ha {
   backend;
   device;
   context;
@@ -10790,8 +11471,13 @@ class Qs {
     triangles: 0,
     instances: 0,
     pipelineSwitches: 0,
-    frameTime: 0
+    frameTime: 0,
+    gpuFrameTime: null
   };
+  /** GPU 计时；`enableGpuTiming()` 之前是 null（默认关闭：需要额外 feature、要读回、有开销）。 */
+  gpuTimingValue = null;
+  /** 打开 GPU 计时失败的原因；供 `gpuTiming.error` 与诊断使用。 */
+  gpuTimingError = null;
   _clearColor;
   _pixelRatio;
   _width;
@@ -10806,14 +11492,14 @@ class Qs {
   defaultTexture = null;
   frameStart = 0;
   /** 计算法线矩阵时复用的暂存区，避免每帧分配。 */
-  normalMatrixScratch = Ai();
+  normalMatrixScratch = Bi();
   _disposed = !1;
   constructor(e) {
-    this.backend = e.backend, this.device = e.device, this.context = e.context, this.canvas = e.canvas, this.logger = e.logger, this.camera = e.options.camera ?? null, this._clearColor = e.options.clearColor ?? "#0b0e13", this._pixelRatio = e.options.pixelRatio ?? e.context.pixelRatio, this._width = e.context.width, this._height = e.context.height, this.arenaPool = new Bp(e.device);
+    this.backend = e.backend, this.device = e.device, this.context = e.context, this.canvas = e.canvas, this.logger = e.logger, this.camera = e.options.camera ?? null, this._clearColor = e.options.clearColor ?? "#0b0e13", this._pixelRatio = e.options.pixelRatio ?? e.context.pixelRatio, this._width = e.context.width, this._height = e.context.height, this.arenaPool = new Kp(e.device);
   }
   /** 创建渲染器：自动探测后端、创建设备、配置 canvas。 */
   static async create(e) {
-    const n = e.logger ?? Je("gpu-device-api/gfx"), r = {
+    const n = e.logger ?? it("gpu-device-api/gfx"), r = {
       antialias: e.antialias ?? !0,
       alpha: e.alpha ?? !1,
       depth: e.depth ?? !0,
@@ -10822,11 +11508,16 @@ class Qs {
       preserveDrawingBuffer: !1,
       powerPreference: e.powerPreference ?? "high-performance",
       ...e.contextAttributes
-    }, i = r.depth !== !1, s = await Hs({
+    }, i = r.depth !== !1, s = await oa({
       canvas: e.canvas,
       backend: e.backend ?? "auto",
       label: "gfx-renderer",
-      contextAttributes: r
+      contextAttributes: r,
+      // GPU 计时需要 `timestamp-query`，而 WebGPU 只能在 requestDevice 时申请。
+      // 用 optionalFeatures：后端不支持时忽略而不是让整个 Renderer.create 失败
+      //（真正的失败原因由 enableGpuTiming() → createQuerySet() 给出）。
+      ...e.requiredFeatures ? { requiredFeatures: e.requiredFeatures } : {},
+      ...e.gpuTiming ? { optionalFeatures: [ua] } : {}
     });
     if (!s.context)
       throw new u("[gpu-device-api] 创建 Renderer 必须提供 canvas。");
@@ -10835,7 +11526,7 @@ class Qs {
       ...a !== void 0 ? { sampleCount: a } : {},
       ...i ? {} : { depth: !1 }
     });
-    const o = new Qs({
+    const o = new ha({
       backend: s.backend,
       device: s.device,
       context: s.context,
@@ -10843,7 +11534,13 @@ class Qs {
       logger: n,
       options: e
     });
-    return e.pixelRatio && o.setPixelRatio(e.pixelRatio), o.resize(), o;
+    if (e.pixelRatio && o.setPixelRatio(e.pixelRatio), o.resize(), e.gpuTiming)
+      try {
+        o.enableGpuTiming(typeof e.gpuTiming == "object" ? e.gpuTiming : {});
+      } catch (c) {
+        o.gpuTimingError = am(c), n.warn(`GPU 计时不可用：${o.gpuTimingError}`);
+      }
+    return o;
   }
   /* ------------------------------------------------------------------ 尺寸 ------------------- */
   get width() {
@@ -10886,23 +11583,23 @@ class Qs {
   }
   /* ------------------------------------------------------------------ 资源 ------------------- */
   createGeometry(e) {
-    const n = qt.create(this.device, e);
+    const n = Yt.create(this.device, e);
     return this.geometries.add(n), n;
   }
   /** 创建（或直接登记）一个材质。 */
   createMaterial(e) {
-    const n = e instanceof Wt ? e : Mp(e);
+    const n = e instanceof Xt ? e : Yp(e);
     return this.materials.has(n) || this.materials.set(n, {
       material: n,
       layout: n.createPipelineLayout(this.device),
       pipeline: null,
       // 还原掉 createUniforms() 的 Proxy：渲染器的每 draw 写入路径直接操作原始对象，
       // 免得每次 set()/has() 都穿一遍 Proxy 陷阱（见 unwrapUniforms 的说明）。
-      values: n.uniforms ? $p(n.createUniforms()) : null
+      values: n.uniforms ? zp(n.createUniforms()) : null
     }), n;
   }
   createTexture(e) {
-    const n = Ke.create(this.device, e);
+    const n = nt.create(this.device, e);
     return this.textures.add(n), n;
   }
   /** 当前设置的材质（`draw()` 未显式指定时使用）。 */
@@ -10915,23 +11612,71 @@ class Qs {
   get stats() {
     return this.statsValue;
   }
+  /* ------------------------------------------------------------------ GPU 计时 --------------- */
+  /** 当前后端 + 设备是否具备 GPU 计时能力（不创建设备资源，可先判断再决定要不要开）。 */
+  get supportsGpuTiming() {
+    return Ke.isAvailable(this.device);
+  }
+  /**
+   * GPU 计时状态。默认 `enabled: false`。
+   *
+   * 读 `gpuFrameTimeMs` 拿到最近一次成功读回的 GPU 帧耗时（毫秒），`samples` / `skipped`
+   * 说明样本数量与跳过的读回次数；失败原因在 `error` 里。
+   */
+  get gpuTiming() {
+    return this.gpuTimingValue ? this.gpuTimingValue.stats : {
+      enabled: !1,
+      available: Ke.isAvailable(this.device),
+      frames: 0,
+      delay: 0,
+      gpuFrameTimeMs: null,
+      samples: 0,
+      skipped: 0,
+      inFlight: 0,
+      error: this.gpuTimingError
+    };
+  }
+  /**
+   * 打开 GPU 计时。
+   *
+   * 显式调用时**失败就抛错**（带 `[gpu-device-api] ` 前缀的英文消息，说明缺哪个 feature/扩展）——
+   * 例如 WebGL2 上没有 `EXT_disjoint_timer_query_webgl2`、或 WebGPU 设备没启用 `timestamp-query`。
+   * 想让失败静默降级请用 `Renderer.create({ gpuTiming: true })`（它会把原因写进 `gpuTiming.error`）。
+   *
+   * 实现方式是环形 query set + 延迟若干帧的异步读回，**不会每帧阻塞等待 GPU**；
+   * 详见 `GpuTiming` 的说明。
+   */
+  enableGpuTiming(e = {}) {
+    if (this.gpuTimingValue) return;
+    const n = new Ke(this.device, e);
+    this.gpuTimingValue = n, this.gpuTimingError = null;
+  }
+  /** 关闭 GPU 计时并释放 query set。 */
+  disableGpuTiming() {
+    this.gpuTimingValue?.destroy(), this.gpuTimingValue = null, this.statsValue.gpuFrameTime = null;
+  }
   /* ------------------------------------------------------------------ 帧 --------------------- */
   beginFrame(e = {}) {
-    this._inFrame && this.endFrame(), this.frameStart = typeof performance < "u" ? performance.now() : Date.now(), this.resize(), this.arenaPool.beginFrame(), this.updateCamera(), this.encoder = this.device.createCommandEncoder({ label: "gfx-frame" });
+    this._inFrame && this.endFrame(), this.frameStart = typeof performance < "u" ? performance.now() : Date.now(), this.resize(), this.arenaPool.beginFrame(), this.updateCamera(), this.encoder = this.device.createCommandEncoder({ label: "gfx-frame" }), this.gpuTimingValue?.beforeFrame(this.encoder);
     const n = e.color ?? this._clearColor, r = this.createPassDescriptor(e, n);
     if (!r.colorAttachments[0]?.view)
       throw new u("[gpu-device-api] 当前帧没有颜色附件，无法开始渲染通道。");
     this.pass = this.encoder.beginRenderPass({
       label: "gfx-pass",
       colorAttachments: r.colorAttachments,
-      ...r.depthStencilAttachment ? { depthStencilAttachment: r.depthStencilAttachment } : {}
+      ...r.depthStencilAttachment ? { depthStencilAttachment: r.depthStencilAttachment } : {},
+      // GPU 计时只标在本帧第一个通道上：单通道帧（beginFrame 的默认形态）就是整帧；
+      // 多通道时 beginPass() 开的通道不写时间戳，避免把不同通道混进同一个样本。
+      ...this.timestampWritesForPass()
     }), this.commandBuffers = [], this.statsValue.drawCalls = 0, this.statsValue.triangles = 0, this.statsValue.instances = 0, this.statsValue.pipelineSwitches = 0, this.currentPipeline = null, this._inFrame = !0;
   }
   endFrame() {
     if (!this._inFrame) return;
-    this.pass?.end(), this.encoder && this.commandBuffers.push(this.encoder.finish()), this.commandBuffers.length > 0 && this.device.queue.submit(this.commandBuffers);
-    const e = typeof performance < "u" ? performance.now() : Date.now();
-    this.statsValue.frameTime = e - this.frameStart, this.pass = null, this.encoder = null, this.commandBuffers = [], this._inFrame = !1;
+    this.pass?.end();
+    const e = this.encoder;
+    e && (this.gpuTimingValue && this.gpuTimingValue.afterFrameEncoding(e), this.commandBuffers.push(e.finish())), this.commandBuffers.length > 0 && this.device.queue.submit(this.commandBuffers);
+    const n = typeof performance < "u" ? performance.now() : Date.now();
+    this.statsValue.frameTime = n - this.frameStart, this.gpuTimingValue && (this.gpuTimingValue.onFrameSubmitted(), this.statsValue.gpuFrameTime = this.gpuTimingValue.stats.gpuFrameTimeMs), this.pass = null, this.encoder = null, this.commandBuffers = [], this._inFrame = !1;
   }
   get inFrame() {
     return this._inFrame;
@@ -10953,6 +11698,11 @@ class Qs {
       colorAttachments: r.colorAttachments,
       ...r.depthStencilAttachment ? { depthStencilAttachment: r.depthStencilAttachment } : {}
     }), this.currentPipeline = null;
+  }
+  /** 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。 */
+  timestampWritesForPass() {
+    const e = this.gpuTimingValue?.passTimestampWrites();
+    return e ? { timestampWrites: e } : {};
   }
   /**
    * 「画到离屏 target」与「画到 canvas」走同一段代码，只是附件来源不同。
@@ -10986,13 +11736,13 @@ class Qs {
     e.validateAgainst(r.attributes, r.name), this.assertInstanceCount(e, n.instances);
     const s = this.acquirePipeline(i);
     if (this.pass.setPipeline(s), this.currentPipeline !== s && (this.currentPipeline = s, this.statsValue.pipelineSwitches += 1), r.uniforms && i.values) {
-      if (this.applyCameraUniforms(i.values, r), r.uniforms.has("model") && i.values.set("model", n.model ?? Vp), this.updateNormalMatrix(i.values, r), n.uniforms)
-        for (const [o, l] of Object.entries(n.uniforms))
-          this.setIfPresent(i.values, o, l);
+      if (this.applyCameraUniforms(i.values, r), r.uniforms.has("model") && i.values.set("model", n.model ?? om), this.updateNormalMatrix(i.values, r), n.uniforms)
+        for (const [o, c] of Object.entries(n.uniforms))
+          this.setIfPresent(i.values, o, c);
       const a = r.createUniformBindGroupLayout(this.device);
       if (a) {
-        const o = this.arenaPool.acquire(r.uniforms), l = o.write(i.values);
-        this.pass.setBindGroup(r.uniforms.group, o.bindGroup(a), [l]);
+        const o = this.arenaPool.acquire(r.uniforms), c = o.write(i.values);
+        this.pass.setBindGroup(r.uniforms.group, o.bindGroup(a), [c]);
       }
     }
     if (r.textures.length > 0) {
@@ -11011,7 +11761,7 @@ class Qs {
       vertexCount: n.count ?? e.vertexCount,
       ...n.first !== void 0 ? { firstVertex: n.first } : {},
       ...n.instances !== void 0 ? { instanceCount: n.instances } : {}
-    }), this.statsValue.drawCalls += 1, this.statsValue.instances += n.instances ?? 1, this.statsValue.triangles += Np(e, n) * (n.instances ?? 1);
+    }), this.statsValue.drawCalls += 1, this.statsValue.instances += n.instances ?? 1, this.statsValue.triangles += lm(e, n) * (n.instances ?? 1);
   }
   /** 一次画多个实例（需要材质配合 `perInstance` 属性）。 */
   drawInstanced(e, n, r = {}) {
@@ -11037,7 +11787,7 @@ class Qs {
   }
   destroy() {
     if (!this._disposed) {
-      this._disposed = !0, this._inFrame && this.endFrame();
+      this._disposed = !0, this._inFrame && this.endFrame(), this.gpuTimingValue?.destroy(), this.gpuTimingValue = null;
       for (const e of this.materials.values())
         e.pipeline?.dispose(), e.values = null;
       this.materials.clear();
@@ -11088,7 +11838,7 @@ class Qs {
   updateNormalMatrix(e, n) {
     if (!n.uniforms?.has("normalMatrix") || !n.uniforms.has("model")) return;
     const r = e.get("model");
-    Rn(this.normalMatrixScratch, r) || _i(this.normalMatrixScratch), e.set("normalMatrix", this.normalMatrixScratch);
+    Vn(this.normalMatrixScratch, r) || Gi(this.normalMatrixScratch), e.set("normalMatrix", this.normalMatrixScratch);
   }
   setIfPresent(e, n, r) {
     e.has(n) && e.set(n, r);
@@ -11103,24 +11853,24 @@ class Qs {
   acquireTextureBindGroup(e, n) {
     const r = e.createTextureGroupLayout(this.device);
     if (!r) return null;
-    const i = e.textures.map((c) => n[c.name] ?? this.getDefaultTexture()), s = `${e.name}|${i.map((c) => c.id).join(",")}`, a = this.bindGroups.get(s);
+    const i = e.textures.map((l) => n[l.name] ?? this.getDefaultTexture()), s = `${e.name}|${i.map((l) => l.id).join(",")}`, a = this.bindGroups.get(s);
     if (a) return a;
-    const o = e.textures.flatMap((c, h) => {
-      const d = i[h];
+    const o = e.textures.flatMap((l, h) => {
+      const f = i[h];
       return [
-        { binding: c.binding, resource: { view: d.view } },
-        { binding: c.samplerBinding, resource: { sampler: d.sampler } }
+        { binding: l.binding, resource: { view: f.view } },
+        { binding: l.samplerBinding, resource: { sampler: f.sampler } }
       ];
-    }), l = this.device.createBindGroup({
+    }), c = this.device.createBindGroup({
       label: `${e.name}:textures`,
       layout: r,
       entries: o
     });
-    return this.bindGroups.set(s, l), l;
+    return this.bindGroups.set(s, c), c;
   }
   /** 缺省纹理（材质声明了纹理但调用方没给时用，避免绑到未定义数据）。 */
   getDefaultTexture() {
-    return this.defaultTexture || (this.defaultTexture = Ke.create(this.device, {
+    return this.defaultTexture || (this.defaultTexture = nt.create(this.device, {
       label: "default-white",
       data: new Uint8Array([255, 255, 255, 255]),
       width: 1,
@@ -11129,7 +11879,7 @@ class Qs {
     })), this.defaultTexture;
   }
 }
-function Np(t, e) {
+function lm(t, e) {
   const n = e.count ?? t.drawCount;
   switch (t.topology) {
     case "triangle-list":
@@ -11146,8 +11896,8 @@ function Np(t, e) {
       return 0;
   }
 }
-const kp = 1e-6, Jr = F(), ei = F();
-function Ve(t, e, n, r, i) {
+const cm = 1e-6, oi = R(), li = R();
+function ke(t, e, n, r, i) {
   if (e === void 0) return pe(t, n, r, i);
   if (e.length < 3)
     throw new RangeError("[gpu-device-api] A vector option needs at least 3 components.");
@@ -11156,10 +11906,10 @@ function Ve(t, e, n, r, i) {
     throw new RangeError(`[gpu-device-api] A vector option must be finite, got (${s}, ${a}, ${o}).`);
   return pe(t, s, a, o);
 }
-function Js(t) {
+function da(t) {
   return Number.isFinite(t) && t > 0 ? t : 1;
 }
-function zp(t, e, n) {
+function um(t, e, n) {
   if (!(t > 0) || t >= 180)
     throw new RangeError(`[gpu-device-api] fov must be in (0, 180) degrees, got ${t}.`);
   if (!(e > 0))
@@ -11167,20 +11917,20 @@ function zp(t, e, n) {
   if (Number.isNaN(n) || n <= e)
     throw new RangeError(`[gpu-device-api] far must be greater than near (Infinity is allowed), got ${n}.`);
 }
-function Wp(t, e, n) {
+function hm(t, e, n) {
   if (!Number.isFinite(t) || t <= 0)
     throw new RangeError(`[gpu-device-api] size must be a finite positive number, got ${t}.`);
   if (!Number.isFinite(e) || Number.isNaN(n) || n <= e)
     throw new RangeError(`[gpu-device-api] far must be greater than near, got near = ${e}, far = ${n}.`);
 }
-function ea(t) {
-  if (oe(Jr, t.position, t.target), Oe(Jr) < kp) {
-    pe(ei, t.target[0], t.target[1], t.target[2] + 1), xn(t.viewMatrix, ei, t.target, t.up);
+function fa(t) {
+  if (le(oi, t.position, t.target), Ie(oi) < cm) {
+    pe(li, t.target[0], t.target[1], t.target[2] + 1), $n(t.viewMatrix, li, t.target, t.up);
     return;
   }
-  xn(t.viewMatrix, t.position, t.target, t.up);
+  $n(t.viewMatrix, t.position, t.target, t.up);
 }
-class Cg {
+class Hg {
   /** 相机位置（世界空间）。 */
   position;
   /** 视线落点（世界空间）。 */
@@ -11197,14 +11947,14 @@ class Cg {
   aspect;
   /** 使用哪一套深度范围约定，决定 `projectionMatrix` 指向两份矩阵中的哪一份。 */
   depthRange;
-  viewMatrix = ne();
+  viewMatrix = re();
   /** 裁剪空间 z ∈ [-1, 1]（WebGL2）的投影矩阵。 */
-  projectionMatrixGL = ne();
+  projectionMatrixGL = re();
   /** 裁剪空间 z ∈ [0, 1]（WebGPU）的投影矩阵。 */
-  projectionMatrixZO = ne();
-  projectionViewMatrix = ne();
+  projectionMatrixZO = re();
+  projectionViewMatrix = re();
   constructor(e = {}) {
-    this.position = Ve(F(), e.position, 0, 0, 5), this.target = Ve(F(), e.target, 0, 0, 0), this.up = Ve(F(), e.up, 0, 1, 0), this.fov = e.fov ?? 60, this.near = e.near ?? 0.1, this.far = e.far ?? 1e3, this.aspect = e.aspect ?? 1, this.depthRange = e.depthRange ?? "gl", this.update();
+    this.position = ke(R(), e.position, 0, 0, 5), this.target = ke(R(), e.target, 0, 0, 0), this.up = ke(R(), e.up, 0, 1, 0), this.fov = e.fov ?? 60, this.near = e.near ?? 0.1, this.far = e.far ?? 1e3, this.aspect = e.aspect ?? 1, this.depthRange = e.depthRange ?? "gl", this.update();
   }
   /**
    * 按 `depthRange` 选出的那一套投影矩阵。
@@ -11216,12 +11966,12 @@ class Cg {
   }
   /** 重新计算 view / projection / projectionView 三组矩阵。 */
   update() {
-    zp(this.fov, this.near, this.far), ea(this);
-    const e = us(this.fov), n = Js(this.aspect);
-    Ui(this.projectionMatrixGL, e, n, this.near, this.far), Oi(this.projectionMatrixZO, e, n, this.near, this.far), K(this.projectionViewMatrix, this.projectionMatrix, this.viewMatrix);
+    um(this.fov, this.near, this.far), fa(this);
+    const e = ys(this.fov), n = da(this.aspect);
+    qi(this.projectionMatrixGL, e, n, this.near, this.far), ji(this.projectionMatrixZO, e, n, this.near, this.far), Z(this.projectionViewMatrix, this.projectionMatrix, this.viewMatrix);
   }
 }
-class Mg {
+class Zg {
   /** 相机位置（世界空间）。 */
   position;
   /** 视线落点（世界空间）。 */
@@ -11238,14 +11988,14 @@ class Mg {
   aspect;
   /** 使用哪一套深度范围约定，决定 `projectionMatrix` 指向两份矩阵中的哪一份。 */
   depthRange;
-  viewMatrix = ne();
+  viewMatrix = re();
   /** 裁剪空间 z ∈ [-1, 1]（WebGL2）的投影矩阵。 */
-  projectionMatrixGL = ne();
+  projectionMatrixGL = re();
   /** 裁剪空间 z ∈ [0, 1]（WebGPU）的投影矩阵。 */
-  projectionMatrixZO = ne();
-  projectionViewMatrix = ne();
+  projectionMatrixZO = re();
+  projectionViewMatrix = re();
   constructor(e = {}) {
-    this.position = Ve(F(), e.position, 0, 0, 5), this.target = Ve(F(), e.target, 0, 0, 0), this.up = Ve(F(), e.up, 0, 1, 0), this.size = e.size ?? 2, this.near = e.near ?? 0.1, this.far = e.far ?? 1e3, this.aspect = e.aspect ?? 1, this.depthRange = e.depthRange ?? "gl", this.update();
+    this.position = ke(R(), e.position, 0, 0, 5), this.target = ke(R(), e.target, 0, 0, 0), this.up = ke(R(), e.up, 0, 1, 0), this.size = e.size ?? 2, this.near = e.near ?? 0.1, this.far = e.far ?? 1e3, this.aspect = e.aspect ?? 1, this.depthRange = e.depthRange ?? "gl", this.update();
   }
   /**
    * 按 `depthRange` 选出的那一套投影矩阵，返回的是另外两份矩阵之一本身（同一个对象）。
@@ -11255,18 +12005,18 @@ class Mg {
   }
   /** 重新计算 view / projection / projectionView 三组矩阵。 */
   update() {
-    Wp(this.size, this.near, this.far), ea(this);
-    const e = this.size / 2, n = e * Js(this.aspect);
-    Di(this.projectionMatrixGL, -n, n, -e, e, this.near, this.far), Ii(this.projectionMatrixZO, -n, n, -e, e, this.near, this.far), K(this.projectionViewMatrix, this.projectionMatrix, this.viewMatrix);
+    hm(this.size, this.near, this.far), fa(this);
+    const e = this.size / 2, n = e * da(this.aspect);
+    Qi(this.projectionMatrixGL, -n, n, -e, e, this.near, this.far), Xi(this.projectionMatrixZO, -n, n, -e, e, this.near, this.far), Z(this.projectionViewMatrix, this.projectionMatrix, this.viewMatrix);
   }
 }
-const ti = 1e-4, fe = 1e-6, qp = 0.95, H = F(), ni = F(), ri = F();
-function ve(t, e) {
+const ci = 1e-4, fe = 1e-6, dm = 0.95, Y = R(), ui = R(), hi = R();
+function ye(t, e) {
   if (!Number.isFinite(t))
     throw new RangeError(`[gpu-device-api] ${e} must be a finite number, got ${t}.`);
   return t;
 }
-class Pg {
+class Kg {
   /** 是否响应输入；置为 false 时正在进行的拖拽会停止生效，但状态仍会正常清理。 */
   enabled;
   enableRotate;
@@ -11297,12 +12047,12 @@ class Pg {
   /** 本帧待消耗的缩放比例（乘在 radius 上，小于 1 表示拉近）。 */
   scale = 1;
   /** 本帧待消耗的平移增量（世界空间）。 */
-  panOffset = F();
+  panOffset = R();
   /** `reset()` 要恢复到的初始状态。 */
-  initialPosition = F();
-  initialTarget = F();
-  previousPosition = F();
-  previousTarget = F();
+  initialPosition = R();
+  initialTarget = R();
+  previousPosition = R();
+  previousTarget = R();
   pointers = /* @__PURE__ */ new Map();
   mode = "none";
   /** 双指捏合时，上一次两指之间的距离。 */
@@ -11313,7 +12063,7 @@ class Pg {
       throw new TypeError("[gpu-device-api] OrbitControls requires a DOM element with addEventListener/removeEventListener.");
     if (!e || !e.position || !e.target || typeof e.update != "function")
       throw new TypeError("[gpu-device-api] OrbitControls requires a PerspectiveCamera instance.");
-    if (this.camera = e, this.element = n, this.enabled = r.enabled ?? !0, this.enableRotate = r.enableRotate ?? !0, this.enableZoom = r.enableZoom ?? !0, this.enablePan = r.enablePan ?? !0, this.enableDamping = r.enableDamping ?? !0, this.dampingFactor = Ue(r.dampingFactor ?? 0.08, 0, 1), this.rotateSpeed = ve(r.rotateSpeed ?? 1, "options.rotateSpeed"), this.zoomSpeed = ve(r.zoomSpeed ?? 1, "options.zoomSpeed"), this.panSpeed = ve(r.panSpeed ?? 1, "options.panSpeed"), this.minDistance = ve(r.minDistance ?? 0.1, "options.minDistance"), this.maxDistance = ve(r.maxDistance ?? 1e3, "options.maxDistance"), this.minPolarAngle = ve(r.minPolarAngle ?? 0, "options.minPolarAngle"), this.maxPolarAngle = ve(r.maxPolarAngle ?? Math.PI, "options.maxPolarAngle"), this.minDistance <= 0)
+    if (this.camera = e, this.element = n, this.enabled = r.enabled ?? !0, this.enableRotate = r.enableRotate ?? !0, this.enableZoom = r.enableZoom ?? !0, this.enablePan = r.enablePan ?? !0, this.enableDamping = r.enableDamping ?? !0, this.dampingFactor = De(r.dampingFactor ?? 0.08, 0, 1), this.rotateSpeed = ye(r.rotateSpeed ?? 1, "options.rotateSpeed"), this.zoomSpeed = ye(r.zoomSpeed ?? 1, "options.zoomSpeed"), this.panSpeed = ye(r.panSpeed ?? 1, "options.panSpeed"), this.minDistance = ye(r.minDistance ?? 0.1, "options.minDistance"), this.maxDistance = ye(r.maxDistance ?? 1e3, "options.maxDistance"), this.minPolarAngle = ye(r.minPolarAngle ?? 0, "options.minPolarAngle"), this.maxPolarAngle = ye(r.maxPolarAngle ?? Math.PI, "options.maxPolarAngle"), this.minDistance <= 0)
       throw new RangeError(`[gpu-device-api] minDistance must be positive, got ${this.minDistance}.`);
     if (this.maxDistance < this.minDistance)
       throw new RangeError(`[gpu-device-api] maxDistance must not be smaller than minDistance, got ${this.maxDistance}.`);
@@ -11323,7 +12073,7 @@ class Pg {
       );
     if (this.rotateSpeed < 0 || this.zoomSpeed < 0 || this.panSpeed < 0)
       throw new RangeError("[gpu-device-api] Speed options must be non-negative.");
-    se(this.initialPosition, e.position), se(this.initialTarget, e.target), se(this.previousPosition, e.position), se(this.previousTarget, e.target), this.readSpherical(), this.element.addEventListener("pointerdown", this.onPointerDown), this.element.addEventListener("pointermove", this.onPointerMove), this.element.addEventListener("pointerup", this.onPointerUp), this.element.addEventListener("pointercancel", this.onPointerUp), this.element.addEventListener("wheel", this.onWheel, { passive: !1 }), this.element.addEventListener("contextmenu", this.onContextMenu);
+    ae(this.initialPosition, e.position), ae(this.initialTarget, e.target), ae(this.previousPosition, e.position), ae(this.previousTarget, e.target), this.readSpherical(), this.element.addEventListener("pointerdown", this.onPointerDown), this.element.addEventListener("pointermove", this.onPointerMove), this.element.addEventListener("pointerup", this.onPointerUp), this.element.addEventListener("pointercancel", this.onPointerUp), this.element.addEventListener("wheel", this.onWheel, { passive: !1 }), this.element.addEventListener("contextmenu", this.onContextMenu);
   }
   /** 是否已经释放。 */
   get isDisposed() {
@@ -11337,31 +12087,31 @@ class Pg {
   update() {
     if (this.disposed) return !1;
     const e = this.camera, n = e.target, r = e.position;
-    se(this.previousPosition, r), se(this.previousTarget, n), oe(H, r, n);
-    let i = Oe(H);
-    i < fe ? i = this.minDistance : (this.theta = Math.atan2(H[0], H[2]), this.phi = Math.acos(Ue(H[1] / i, -1, 1)));
-    const s = Math.abs(this.deltaTheta) > fe || Math.abs(this.deltaPhi) > fe, a = Math.abs(this.scale - 1) > fe, o = Oe(this.panOffset) > fe;
+    ae(this.previousPosition, r), ae(this.previousTarget, n), le(Y, r, n);
+    let i = Ie(Y);
+    i < fe ? i = this.minDistance : (this.theta = Math.atan2(Y[0], Y[2]), this.phi = Math.acos(De(Y[1] / i, -1, 1)));
+    const s = Math.abs(this.deltaTheta) > fe || Math.abs(this.deltaPhi) > fe, a = Math.abs(this.scale - 1) > fe, o = Ie(this.panOffset) > fe;
     if (!s && !a && !o)
       return !1;
-    const l = this.enableDamping ? this.dampingFactor : 1;
-    this.theta += this.deltaTheta * l, this.phi += this.deltaPhi * l, this.phi = Ue(
+    const c = this.enableDamping ? this.dampingFactor : 1;
+    this.theta += this.deltaTheta * c, this.phi += this.deltaPhi * c, this.phi = De(
       this.phi,
-      Math.max(this.minPolarAngle, ti),
-      Math.min(this.maxPolarAngle, Math.PI - ti)
-    ), i = Ue(i * this.scale, this.minDistance, this.maxDistance), yt(n, n, this.panOffset, l);
-    const c = Math.sin(this.phi) * i;
+      Math.max(this.minPolarAngle, ci),
+      Math.min(this.maxPolarAngle, Math.PI - ci)
+    ), i = De(i * this.scale, this.minDistance, this.maxDistance), _t(n, n, this.panOffset, c);
+    const l = Math.sin(this.phi) * i;
     pe(
       r,
-      n[0] + c * Math.sin(this.theta),
+      n[0] + l * Math.sin(this.theta),
       n[1] + Math.cos(this.phi) * i,
-      n[2] + c * Math.cos(this.theta)
-    ), this.enableDamping ? (this.deltaTheta *= 1 - this.dampingFactor, this.deltaPhi *= 1 - this.dampingFactor, _t(this.panOffset, this.panOffset, 1 - this.dampingFactor)) : (this.deltaTheta = 0, this.deltaPhi = 0, wn(this.panOffset)), this.scale = 1, e.update();
-    const h = !vn(r, this.previousPosition, fe), d = !vn(n, this.previousTarget, fe);
-    return h || d;
+      n[2] + l * Math.cos(this.theta)
+    ), this.enableDamping ? (this.deltaTheta *= 1 - this.dampingFactor, this.deltaPhi *= 1 - this.dampingFactor, Mt(this.panOffset, this.panOffset, 1 - this.dampingFactor)) : (this.deltaTheta = 0, this.deltaPhi = 0, Sn(this.panOffset)), this.scale = 1, e.update();
+    const h = !Tn(r, this.previousPosition, fe), f = !Tn(n, this.previousTarget, fe);
+    return h || f;
   }
   /** 恢复构造函数时刻的相机位置、target 与内部状态。 */
   reset() {
-    this.disposed || (se(this.camera.position, this.initialPosition), se(this.camera.target, this.initialTarget), this.deltaTheta = 0, this.deltaPhi = 0, this.scale = 1, wn(this.panOffset), this.mode = "none", this.pinchDistance = 0, this.pointers.clear(), this.readSpherical(), this.camera.update());
+    this.disposed || (ae(this.camera.position, this.initialPosition), ae(this.camera.target, this.initialTarget), this.deltaTheta = 0, this.deltaPhi = 0, this.scale = 1, Sn(this.panOffset), this.mode = "none", this.pinchDistance = 0, this.pointers.clear(), this.readSpherical(), this.camera.update());
   }
   /** 移除全部事件监听。可重复调用，第二次开始是空操作。 */
   dispose() {
@@ -11372,9 +12122,9 @@ class Pg {
   }
   /** 从相机当前位置反推 theta / phi；两者重合时保持原值。 */
   readSpherical() {
-    oe(H, this.camera.position, this.camera.target);
-    const e = Oe(H);
-    e < fe || (this.theta = Math.atan2(H[0], H[2]), this.phi = Math.acos(Ue(H[1] / e, -1, 1)));
+    le(Y, this.camera.position, this.camera.target);
+    const e = Ie(Y);
+    e < fe || (this.theta = Math.atan2(Y[0], Y[2]), this.phi = Math.acos(De(Y[1] / e, -1, 1)));
   }
   /** 元素的可视高度；取不到（例如无布局的测试替身）时退回 1，避免除零。 */
   clientHeight() {
@@ -11405,9 +12155,9 @@ class Pg {
    */
   panBy(e, n) {
     const r = this.camera, i = r.viewMatrix, s = this.clientHeight();
-    oe(H, r.position, r.target);
-    const o = 2 * (Oe(H) * Math.tan(us(r.fov) / 2)) * this.panSpeed / s;
-    pe(ni, i[0], i[4], i[8]), pe(ri, i[1], i[5], i[9]), yt(this.panOffset, this.panOffset, ni, -e * o), yt(this.panOffset, this.panOffset, ri, n * o);
+    le(Y, r.position, r.target);
+    const o = 2 * (Ie(Y) * Math.tan(ys(r.fov) / 2)) * this.panSpeed / s;
+    pe(ui, i[0], i[4], i[8]), pe(hi, i[1], i[5], i[9]), _t(this.panOffset, this.panOffset, ui, -e * o), _t(this.panOffset, this.panOffset, hi, n * o);
   }
   onPointerDown = (e) => {
     if (!this.enabled) return;
@@ -11447,27 +12197,27 @@ class Pg {
   onWheel = (e) => {
     if (!this.enabled || !this.enableZoom) return;
     e.cancelable && e.preventDefault();
-    const n = Math.pow(qp, this.zoomSpeed);
+    const n = Math.pow(dm, this.zoomSpeed);
     e.deltaY < 0 ? this.scale *= n : e.deltaY > 0 && (this.scale /= n);
   };
   onContextMenu = (e) => {
     !this.enabled || !this.enablePan || e.cancelable && e.preventDefault();
   };
 }
-const Re = F();
-function ke() {
+const Oe = R();
+function je() {
   return { position: [], normal: [], uv: [], index: [] };
 }
-function ta() {
+function pa() {
   return { position: [], color: [] };
 }
-function ge(t, e, n, r, i, s, a, o, l) {
-  pe(Re, i, s, a), Fn(Re, Re), t.position.push(e, n, r), t.normal.push(Re[0], Re[1], Re[2]), t.uv.push(o, l);
+function ge(t, e, n, r, i, s, a, o, c) {
+  pe(Oe, i, s, a), Dn(Oe, Oe), t.position.push(e, n, r), t.normal.push(Oe[0], Oe[1], Oe[2]), t.uv.push(o, c);
 }
-function P(t, e, n, r, i, s, a, o) {
+function F(t, e, n, r, i, s, a, o) {
   t.position.push(e, n, r), t.color.push(i, s, a, o);
 }
-function ze(t) {
+function Qe(t) {
   return {
     position: Float32Array.from(t.position),
     normal: Float32Array.from(t.normal),
@@ -11475,13 +12225,13 @@ function ze(t) {
     indices: Uint32Array.from(t.index)
   };
 }
-function na(t) {
+function ma(t) {
   return {
     position: Float32Array.from(t.position),
     color: Float32Array.from(t.color)
   };
 }
-function ra(t) {
+function ga(t) {
   return t.position.length / 3;
 }
 function j(t, e) {
@@ -11489,136 +12239,136 @@ function j(t, e) {
     throw new RangeError(`[gpu-device-api] ${e} must be a finite positive number, got ${t}.`);
   return t;
 }
-function ii(t, e) {
+function di(t, e) {
   if (!Number.isFinite(t) || t < 0)
     throw new RangeError(`[gpu-device-api] ${e} must be a finite non-negative number, got ${t}.`);
   return t;
 }
-function Z(t, e, n) {
+function H(t, e, n) {
   if (!Number.isInteger(t) || t < e)
     throw new RangeError(`[gpu-device-api] ${n} must be an integer greater than or equal to ${e}, got ${t}.`);
   return t;
 }
-const jp = [0.5, 0.5, 0.5, 1];
-function Xp(t = {}) {
-  const e = j(t.radius ?? 0.5, "options.radius"), n = ke();
+const fm = [0.5, 0.5, 0.5, 1];
+function pm(t = {}) {
+  const e = j(t.radius ?? 0.5, "options.radius"), n = je();
   for (let r = 0; r < 3; r++) {
     const i = Math.PI / 2 + r * 2 * Math.PI / 3, s = Math.cos(i) * e, a = Math.sin(i) * e;
     ge(n, s, a, 0, 0, 0, 1, s / (2 * e) + 0.5, a / (2 * e) + 0.5);
   }
-  return n.index.push(0, 1, 2), ze(n);
+  return n.index.push(0, 1, 2), Qe(n);
 }
-function Yp(t = {}) {
-  const e = j(t.width ?? 1, "options.width"), n = j(t.height ?? 1, "options.height"), r = Z(t.widthSegments ?? 1, 1, "options.widthSegments"), i = Z(t.heightSegments ?? 1, 1, "options.heightSegments"), s = ke(), a = r + 1;
+function mm(t = {}) {
+  const e = j(t.width ?? 1, "options.width"), n = j(t.height ?? 1, "options.height"), r = H(t.widthSegments ?? 1, 1, "options.widthSegments"), i = H(t.heightSegments ?? 1, 1, "options.heightSegments"), s = je(), a = r + 1;
   for (let o = 0; o <= i; o++) {
-    const l = o / i, c = -n / 2 + l * n;
+    const c = o / i, l = -n / 2 + c * n;
     for (let h = 0; h <= r; h++) {
-      const d = h / r, f = -e / 2 + d * e;
-      ge(s, f, c, 0, 0, 0, 1, d, l);
+      const f = h / r, d = -e / 2 + f * e;
+      ge(s, d, l, 0, 0, 0, 1, f, c);
     }
   }
   for (let o = 0; o < i; o++)
-    for (let l = 0; l < r; l++) {
-      const c = o * a + l, h = c + 1, d = c + a + 1, f = c + a;
-      s.index.push(c, h, d, c, d, f);
+    for (let c = 0; c < r; c++) {
+      const l = o * a + c, h = l + 1, f = l + a + 1, d = l + a;
+      s.index.push(l, h, f, l, f, d);
     }
-  return ze(s);
+  return Qe(s);
 }
-function Ge(t, e, n, r, i, s, a) {
-  const o = ra(t), l = s + 1;
-  for (let c = 0; c <= a; c++) {
-    const h = c / a;
-    for (let d = 0; d <= s; d++) {
-      const f = d / s;
+function Ue(t, e, n, r, i, s, a) {
+  const o = ga(t), c = s + 1;
+  for (let l = 0; l <= a; l++) {
+    const h = l / a;
+    for (let f = 0; f <= s; f++) {
+      const d = f / s;
       ge(
         t,
-        e[0] + n[0] * f + r[0] * h,
-        e[1] + n[1] * f + r[1] * h,
-        e[2] + n[2] * f + r[2] * h,
+        e[0] + n[0] * d + r[0] * h,
+        e[1] + n[1] * d + r[1] * h,
+        e[2] + n[2] * d + r[2] * h,
         i[0],
         i[1],
         i[2],
-        f,
+        d,
         h
       );
     }
   }
-  for (let c = 0; c < a; c++)
+  for (let l = 0; l < a; l++)
     for (let h = 0; h < s; h++) {
-      const d = o + c * l + h, f = d + 1, p = d + l + 1, m = d + l;
-      t.index.push(d, f, p, d, p, m);
+      const f = o + l * c + h, d = f + 1, p = f + c + 1, m = f + c;
+      t.index.push(f, d, p, f, p, m);
     }
 }
-function Hp(t = {}) {
-  const e = j(t.width ?? 1, "options.width"), n = j(t.height ?? 1, "options.height"), r = j(t.depth ?? 1, "options.depth"), i = Z(t.widthSegments ?? 1, 1, "options.widthSegments"), s = Z(t.heightSegments ?? 1, 1, "options.heightSegments"), a = Z(t.depthSegments ?? 1, 1, "options.depthSegments"), o = e / 2, l = n / 2, c = r / 2, h = ke();
-  return Ge(h, [o, -l, -c], [0, n, 0], [0, 0, r], [1, 0, 0], s, a), Ge(h, [-o, -l, -c], [0, 0, r], [0, n, 0], [-1, 0, 0], a, s), Ge(h, [-o, l, -c], [0, 0, r], [e, 0, 0], [0, 1, 0], a, i), Ge(h, [-o, -l, -c], [e, 0, 0], [0, 0, r], [0, -1, 0], i, a), Ge(h, [-o, -l, c], [e, 0, 0], [0, n, 0], [0, 0, 1], i, s), Ge(h, [-o, -l, -c], [0, n, 0], [e, 0, 0], [0, 0, -1], s, i), ze(h);
+function gm(t = {}) {
+  const e = j(t.width ?? 1, "options.width"), n = j(t.height ?? 1, "options.height"), r = j(t.depth ?? 1, "options.depth"), i = H(t.widthSegments ?? 1, 1, "options.widthSegments"), s = H(t.heightSegments ?? 1, 1, "options.heightSegments"), a = H(t.depthSegments ?? 1, 1, "options.depthSegments"), o = e / 2, c = n / 2, l = r / 2, h = je();
+  return Ue(h, [o, -c, -l], [0, n, 0], [0, 0, r], [1, 0, 0], s, a), Ue(h, [-o, -c, -l], [0, 0, r], [0, n, 0], [-1, 0, 0], a, s), Ue(h, [-o, c, -l], [0, 0, r], [e, 0, 0], [0, 1, 0], a, i), Ue(h, [-o, -c, -l], [e, 0, 0], [0, 0, r], [0, -1, 0], i, a), Ue(h, [-o, -c, l], [e, 0, 0], [0, n, 0], [0, 0, 1], i, s), Ue(h, [-o, -c, -l], [0, n, 0], [e, 0, 0], [0, 0, -1], s, i), Qe(h);
 }
-function Zp(t = {}) {
-  const e = j(t.radius ?? 0.5, "options.radius"), n = Z(t.widthSegments ?? 32, 3, "options.widthSegments"), r = Z(t.heightSegments ?? 16, 2, "options.heightSegments"), i = ke(), s = n + 1;
+function bm(t = {}) {
+  const e = j(t.radius ?? 0.5, "options.radius"), n = H(t.widthSegments ?? 32, 3, "options.widthSegments"), r = H(t.heightSegments ?? 16, 2, "options.heightSegments"), i = je(), s = n + 1;
   for (let a = 0; a <= r; a++) {
-    const o = a / r, l = o * Math.PI, c = Math.sin(l), h = Math.cos(l);
-    for (let d = 0; d <= n; d++) {
-      const f = d / n, p = f * Math.PI * 2, m = c * Math.cos(p), g = h, b = c * Math.sin(p);
-      ge(i, m * e, g * e, b * e, m, g, b, f, 1 - o);
+    const o = a / r, c = o * Math.PI, l = Math.sin(c), h = Math.cos(c);
+    for (let f = 0; f <= n; f++) {
+      const d = f / n, p = d * Math.PI * 2, m = l * Math.cos(p), g = h, b = l * Math.sin(p);
+      ge(i, m * e, g * e, b * e, m, g, b, d, 1 - o);
     }
   }
   for (let a = 0; a < r; a++)
     for (let o = 0; o < n; o++) {
-      const l = a * s + o, c = l + 1, h = l + s + 1, d = l + s;
-      i.index.push(l, c, h, l, h, d);
+      const c = a * s + o, l = c + 1, h = c + s + 1, f = c + s;
+      i.index.push(c, l, h, c, h, f);
     }
-  return ze(i);
+  return Qe(i);
 }
-function Kp(t = {}) {
-  const e = j(t.radius ?? 0.5, "options.radius"), n = j(t.tube ?? 0.2, "options.tube"), r = Z(t.radialSegments ?? 16, 3, "options.radialSegments"), i = Z(t.tubularSegments ?? 32, 3, "options.tubularSegments"), s = ke(), a = r + 1;
+function wm(t = {}) {
+  const e = j(t.radius ?? 0.5, "options.radius"), n = j(t.tube ?? 0.2, "options.tube"), r = H(t.radialSegments ?? 16, 3, "options.radialSegments"), i = H(t.tubularSegments ?? 32, 3, "options.tubularSegments"), s = je(), a = r + 1;
   for (let o = 0; o <= i; o++) {
-    const l = o / i, c = l * Math.PI * 2, h = Math.cos(c), d = Math.sin(c);
-    for (let f = 0; f <= r; f++) {
-      const p = f / r, m = p * Math.PI * 2, g = Math.cos(m), b = Math.sin(m), w = e + n * g, T = g * h, $ = b, A = g * d;
-      ge(s, w * h, n * b, w * d, T, $, A, l, p);
+    const c = o / i, l = c * Math.PI * 2, h = Math.cos(l), f = Math.sin(l);
+    for (let d = 0; d <= r; d++) {
+      const p = d / r, m = p * Math.PI * 2, g = Math.cos(m), b = Math.sin(m), w = e + n * g, S = g * h, $ = b, A = g * f;
+      ge(s, w * h, n * b, w * f, S, $, A, c, p);
     }
   }
   for (let o = 0; o < i; o++)
-    for (let l = 0; l < r; l++) {
-      const c = o * a + l, h = c + 1, d = c + a + 1, f = c + a;
-      s.index.push(c, h, d, c, d, f);
+    for (let c = 0; c < r; c++) {
+      const l = o * a + c, h = l + 1, f = l + a + 1, d = l + a;
+      s.index.push(l, h, f, l, f, d);
     }
-  return ze(s);
+  return Qe(s);
 }
-function si(t, e, n, r, i) {
-  const s = ra(t);
+function fi(t, e, n, r, i) {
+  const s = ga(t);
   ge(t, 0, e, 0, 0, r, 0, 0.5, 0.5);
   for (let a = 0; a <= i; a++) {
-    const o = a / i * Math.PI * 2, l = Math.sin(o), c = Math.cos(o);
-    ge(t, n * l, e, n * c, 0, r, 0, 0.5 + l * 0.5, 0.5 + c * 0.5);
+    const o = a / i * Math.PI * 2, c = Math.sin(o), l = Math.cos(o);
+    ge(t, n * c, e, n * l, 0, r, 0, 0.5 + c * 0.5, 0.5 + l * 0.5);
   }
   for (let a = 0; a < i; a++) {
-    const o = s + 1 + a, l = o + 1;
-    r > 0 ? t.index.push(s, o, l) : t.index.push(s, l, o);
+    const o = s + 1 + a, c = o + 1;
+    r > 0 ? t.index.push(s, o, c) : t.index.push(s, c, o);
   }
 }
-function ia(t = {}) {
-  const e = ii(t.radiusTop ?? 0.5, "options.radiusTop"), n = ii(t.radiusBottom ?? 0.5, "options.radiusBottom"), r = j(t.height ?? 1, "options.height"), i = Z(t.radialSegments ?? 24, 3, "options.radialSegments"), s = Z(t.heightSegments ?? 1, 1, "options.heightSegments"), a = t.caps ?? !0;
+function ba(t = {}) {
+  const e = di(t.radiusTop ?? 0.5, "options.radiusTop"), n = di(t.radiusBottom ?? 0.5, "options.radiusBottom"), r = j(t.height ?? 1, "options.height"), i = H(t.radialSegments ?? 24, 3, "options.radialSegments"), s = H(t.heightSegments ?? 1, 1, "options.heightSegments"), a = t.caps ?? !0;
   if (e === 0 && n === 0)
     throw new RangeError("[gpu-device-api] createCylinder requires radiusTop > 0 or radiusBottom > 0.");
-  const o = ke(), l = i + 1, c = Math.hypot(r, n - e), h = r / c, d = (n - e) / c;
-  for (let f = 0; f <= s; f++) {
-    const p = f / s, m = r / 2 - p * r, g = e + (n - e) * p;
+  const o = je(), c = i + 1, l = Math.hypot(r, n - e), h = r / l, f = (n - e) / l;
+  for (let d = 0; d <= s; d++) {
+    const p = d / s, m = r / 2 - p * r, g = e + (n - e) * p;
     for (let b = 0; b <= i; b++) {
-      const w = b / i, T = w * Math.PI * 2, $ = Math.sin(T), A = Math.cos(T);
-      ge(o, g * $, m, g * A, h * $, d, h * A, w, 1 - p);
+      const w = b / i, S = w * Math.PI * 2, $ = Math.sin(S), A = Math.cos(S);
+      ge(o, g * $, m, g * A, h * $, f, h * A, w, 1 - p);
     }
   }
-  for (let f = 0; f < s; f++)
+  for (let d = 0; d < s; d++)
     for (let p = 0; p < i; p++) {
-      const m = f * l + p, g = m + 1, b = m + l + 1, w = m + l;
+      const m = d * c + p, g = m + 1, b = m + c + 1, w = m + c;
       o.index.push(m, w, b, m, b, g);
     }
-  return a && (e > 0 && si(o, r / 2, e, 1, i), n > 0 && si(o, -r / 2, n, -1, i)), ze(o);
+  return a && (e > 0 && fi(o, r / 2, e, 1, i), n > 0 && fi(o, -r / 2, n, -1, i)), Qe(o);
 }
-function Qp(t = {}) {
+function ym(t = {}) {
   const e = j(t.radius ?? 0.5, "options.radius");
-  return ia({
+  return ba({
     radiusTop: 0,
     radiusBottom: e,
     height: t.height ?? 1,
@@ -11627,45 +12377,45 @@ function Qp(t = {}) {
     caps: t.caps ?? !0
   });
 }
-function Jp(t = {}) {
-  const e = j(t.size ?? 10, "options.size"), n = Z(t.divisions ?? 10, 1, "options.divisions"), r = t.plane ?? "xz", i = t.color ?? jp, [s, a, o, l] = i, c = ta(), h = e / 2, d = e / n;
-  for (let f = 0; f <= n; f++) {
-    const p = -h + f * d;
-    r === "xz" ? (P(c, -h, 0, p, s, a, o, l), P(c, h, 0, p, s, a, o, l), P(c, p, 0, -h, s, a, o, l), P(c, p, 0, h, s, a, o, l)) : r === "xy" ? (P(c, -h, p, 0, s, a, o, l), P(c, h, p, 0, s, a, o, l), P(c, p, -h, 0, s, a, o, l), P(c, p, h, 0, s, a, o, l)) : (P(c, 0, -h, p, s, a, o, l), P(c, 0, h, p, s, a, o, l), P(c, 0, p, -h, s, a, o, l), P(c, 0, p, h, s, a, o, l));
+function vm(t = {}) {
+  const e = j(t.size ?? 10, "options.size"), n = H(t.divisions ?? 10, 1, "options.divisions"), r = t.plane ?? "xz", i = t.color ?? fm, [s, a, o, c] = i, l = pa(), h = e / 2, f = e / n;
+  for (let d = 0; d <= n; d++) {
+    const p = -h + d * f;
+    r === "xz" ? (F(l, -h, 0, p, s, a, o, c), F(l, h, 0, p, s, a, o, c), F(l, p, 0, -h, s, a, o, c), F(l, p, 0, h, s, a, o, c)) : r === "xy" ? (F(l, -h, p, 0, s, a, o, c), F(l, h, p, 0, s, a, o, c), F(l, p, -h, 0, s, a, o, c), F(l, p, h, 0, s, a, o, c)) : (F(l, 0, -h, p, s, a, o, c), F(l, 0, h, p, s, a, o, c), F(l, 0, p, -h, s, a, o, c), F(l, 0, p, h, s, a, o, c));
   }
-  return na(c);
+  return ma(l);
 }
-function em(t = {}) {
-  const e = j(t.size ?? 1, "options.size"), n = ta();
-  return P(n, 0, 0, 0, 1, 0, 0, 1), P(n, e, 0, 0, 1, 0, 0, 1), P(n, 0, 0, 0, 0, 1, 0, 1), P(n, 0, e, 0, 0, 1, 0, 1), P(n, 0, 0, 0, 0, 0, 1, 1), P(n, 0, 0, e, 0, 0, 1, 1), na(n);
+function xm(t = {}) {
+  const e = j(t.size ?? 1, "options.size"), n = pa();
+  return F(n, 0, 0, 0, 1, 0, 0, 1), F(n, e, 0, 0, 1, 0, 0, 1), F(n, 0, 0, 0, 0, 1, 0, 1), F(n, 0, e, 0, 0, 1, 0, 1), F(n, 0, 0, 0, 0, 0, 1, 1), F(n, 0, 0, e, 0, 0, 1, 1), ma(n);
 }
-const Fg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const Jg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  createAxes: em,
-  createBox: Hp,
-  createCone: Qp,
-  createCylinder: ia,
-  createGrid: Jp,
-  createPlane: Yp,
-  createSphere: Zp,
-  createTorus: Kp,
-  createTriangle: Xp
+  createAxes: xm,
+  createBox: gm,
+  createCone: ym,
+  createCylinder: ba,
+  createGrid: vm,
+  createPlane: mm,
+  createSphere: bm,
+  createTorus: wm,
+  createTriangle: pm
 }, Symbol.toStringTag, { value: "Module" }));
-function Qe(t, e) {
+function rt(t, e) {
   return t ? [t[0], t[1], t[2], t[3] ?? 1] : [...e];
 }
-const Ee = {
+const Le = {
   projectionView: "mat4x4f",
   model: "mat4x4f",
   /** 模型矩阵左上 3x3 的逆转置；非等比缩放下变换法线必须用它。 */
   normalMatrix: "mat3x3f"
 };
-function sa(t = {}) {
-  const e = Qe(t.color, [1, 1, 1, 1]);
+function wa(t = {}) {
+  const e = rt(t.color, [1, 1, 1, 1]);
   return {
     name: "unlit",
     attributes: { position: "float32x3", normal: "float32x3", uv: "float32x2" },
-    uniforms: { ...Ee, baseColor: "vec4f" },
+    uniforms: { ...Le, baseColor: "vec4f" },
     glsl: {
       vs: `void main() {
   gl_Position = u.projectionView * u.model * vec4(position, 1.0);
@@ -11684,13 +12434,13 @@ function sa(t = {}) {
     defaults: { baseColor: e }
   };
 }
-function aa(t = {}) {
-  const e = ha(t.direction ?? [0.5, 1, 0.6]), n = Qe(t.color, [1, 1, 1, 1]);
+function ya(t = {}) {
+  const e = $a(t.direction ?? [0.5, 1, 0.6]), n = rt(t.color, [1, 1, 1, 1]);
   return {
     name: "lambert",
     attributes: { position: "float32x3", normal: "float32x3", uv: "float32x2" },
     uniforms: {
-      ...Ee,
+      ...Le,
       baseColor: "vec4f",
       lightDirection: "vec3f",
       ambient: "f32"
@@ -11732,13 +12482,13 @@ void main() {
     defaults: { baseColor: n, lightDirection: e, ambient: t.ambient ?? 0.18 }
   };
 }
-function oa(t = {}) {
-  const e = ha(t.direction ?? [0.5, 1, 0.6]), n = Qe(t.color, [0.9, 0.9, 0.95, 1]), r = Qe(t.specular, [1, 1, 1, 1]);
+function va(t = {}) {
+  const e = $a(t.direction ?? [0.5, 1, 0.6]), n = rt(t.color, [0.9, 0.9, 0.95, 1]), r = rt(t.specular, [1, 1, 1, 1]);
   return {
     name: "phong",
     attributes: { position: "float32x3", normal: "float32x3", uv: "float32x2" },
     uniforms: {
-      ...Ee,
+      ...Le,
       baseColor: "vec4f",
       specularColor: "vec4f",
       lightDirection: "vec3f",
@@ -11803,11 +12553,11 @@ void main() {
     }
   };
 }
-function ca() {
+function xa() {
   return {
     name: "normalDebug",
     attributes: { position: "float32x3", normal: "float32x3", uv: "float32x2" },
-    uniforms: { ...Ee },
+    uniforms: { ...Le },
     glsl: {
       vs: `out vec3 vNormal;
 void main() {
@@ -11836,14 +12586,14 @@ void main() {
 }`
   };
 }
-function la(t = {}) {
-  const e = Qe(t.color, [0.5, 0.55, 0.62, 1]);
+function Sa(t = {}) {
+  const e = rt(t.color, [0.5, 0.55, 0.62, 1]);
   return {
     name: "flatLine",
     topology: "line-list",
     cullMode: "none",
     attributes: { position: "float32x3" },
-    uniforms: { ...Ee, baseColor: "vec4f" },
+    uniforms: { ...Le, baseColor: "vec4f" },
     glsl: {
       vs: `void main() {
   gl_Position = u.projectionView * u.model * vec4(position, 1.0);
@@ -11862,13 +12612,13 @@ function la(t = {}) {
     defaults: { baseColor: e }
   };
 }
-function ua() {
+function Ta() {
   return {
     name: "vertexColorLine",
     topology: "line-list",
     cullMode: "none",
     attributes: { position: "float32x3", color: "float32x4" },
-    uniforms: { ...Ee },
+    uniforms: { ...Le },
     glsl: {
       vs: `out vec4 vColor;
 void main() {
@@ -11897,245 +12647,252 @@ void main() {
 }`
   };
 }
-const tm = {
-  unlit: sa,
-  lambert: aa,
-  phong: oa,
-  normalDebug: ca,
-  flatLine: la,
-  vertexColorLine: ua
+const Sm = {
+  unlit: wa,
+  lambert: ya,
+  phong: va,
+  normalDebug: xa,
+  flatLine: Sa,
+  vertexColorLine: Ta
 };
-function nm(t) {
+function Tm(t) {
   return t.defaults ? { ...t.defaults } : {};
 }
-function ha(t) {
+function $a(t) {
   const e = Math.hypot(t[0], t[1], t[2]) || 1;
   return [t[0] / e, t[1] / e, t[2] / e];
 }
-const Bg = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
+const eb = /* @__PURE__ */ Object.freeze(/* @__PURE__ */ Object.defineProperty({
   __proto__: null,
-  SCENE_UNIFORM_FIELDS: Ee,
-  defaultUniformsOf: nm,
-  flatLine: la,
-  lambert: aa,
-  materials: tm,
-  normalDebug: ca,
-  phong: oa,
-  unlit: sa,
-  vertexColorLine: ua
+  SCENE_UNIFORM_FIELDS: Le,
+  defaultUniformsOf: Tm,
+  flatLine: Sa,
+  lambert: ya,
+  materials: Sm,
+  normalDebug: xa,
+  phong: va,
+  unlit: wa,
+  vertexColorLine: Ta
 }, Symbol.toStringTag, { value: "Module" }));
 export {
-  Yr as ATTRIBUTE_PLACEHOLDER,
-  wm as AddressMode,
-  Sa as BLEND_PRESETS,
-  Ku as BackendRegistry,
-  R as BindingType,
-  dm as BlendFactor,
-  pm as BlendOperation,
-  O as BufferUsage,
-  gi as CANVAS_DEPTH_FORMAT,
-  ae as ColorWriteMask,
-  fm as CompareFunction,
-  gm as CullMode,
-  wp as DEFAULT_BACKEND_ORDER,
-  Ta as DEFAULT_BLEND_COMPONENT,
-  rr as DEFAULT_DEPTH_STATE,
-  jt as DEFAULT_PRIMITIVE_STATE,
-  Au as DEG2RAD,
-  ai as DEPTH_STENCIL_FORMATS,
-  gn as DeviceLostError,
-  Ym as DisposalScope,
-  cg as EPSILON,
-  vm as FilterMode,
-  bm as FrontFace,
-  dg as GLSL_PREAMBLE,
-  ps as GLSL_PRECISION_PREAMBLE,
-  Xu as GLSL_SAMPLER_TYPES,
-  qu as GLSL_TYPE_NAMES,
-  ds as GLSL_VERSION_DIRECTIVE,
-  qt as Geometry,
-  Ke as GfxTexture,
-  de as GpuError,
-  lm as IndexFormat,
-  Wm as LOG_LEVEL_NAMES,
-  La as LOG_LEVEL_VALUES,
-  um as LoadOp,
+  Jr as ATTRIBUTE_PLACEHOLDER,
+  Im as AddressMode,
+  Oa as BLEND_PRESETS,
+  hh as BackendRegistry,
+  O as BindingType,
+  Bm as BlendFactor,
+  Gm as BlendOperation,
+  C as BufferUsage,
+  Ai as CANVAS_DEPTH_FORMAT,
+  oe as ColorWriteMask,
+  Rm as CompareFunction,
+  Um as CullMode,
+  Op as DEFAULT_BACKEND_ORDER,
+  Ga as DEFAULT_BLEND_COMPONENT,
+  cr as DEFAULT_DEPTH_STATE,
+  si as DEFAULT_GPU_TIMING_DELAY,
+  ii as DEFAULT_GPU_TIMING_FRAMES,
+  Ht as DEFAULT_PRIMITIVE_STATE,
+  Iu as DEG2RAD,
+  pi as DEPTH_STENCIL_FORMATS,
+  xn as DeviceLostError,
+  mg as DisposalScope,
+  Lg as EPSILON,
+  Vm as FilterMode,
+  Dm as FrontFace,
+  Bg as GLSL_PREAMBLE,
+  Ts as GLSL_PRECISION_PREAMBLE,
+  oh as GLSL_SAMPLER_TYPES,
+  sh as GLSL_TYPE_NAMES,
+  Ss as GLSL_VERSION_DIRECTIVE,
+  ua as GPU_TIMING_FEATURE,
+  Yt as Geometry,
+  nt as GfxTexture,
+  K as GpuError,
+  Ke as GpuTiming,
+  Cm as IndexFormat,
+  hg as LOG_LEVEL_NAMES,
+  ka as LOG_LEVEL_VALUES,
+  Mm as LoadOp,
   W as LogLevel,
-  Yr as MATERIAL_ATTRIBUTE_PLACEHOLDER,
-  pn as MATERIAL_TEXTURE_PLACEHOLDER,
-  dn as MATERIAL_UNIFORM_PLACEHOLDER,
-  Wt as Material,
-  Pg as OrbitControls,
-  Mg as OrthographicCamera,
-  va as OutOfMemoryError,
-  Cg as PerspectiveCamera,
-  am as PrimitiveTopology,
-  bn as QueryType,
-  _u as RAD2DEG,
-  rm as RENDERABLE_FORMATS,
-  Qs as Renderer,
-  Ee as SCENE_UNIFORM_FIELDS,
-  sm as SHADER_STAGE_NAMES,
-  Up as STANDARD_ATTRIBUTE_FORMATS,
-  at as STENCIL_FACE_DEFAULT,
+  Jr as MATERIAL_ATTRIBUTE_PLACEHOLDER,
+  yn as MATERIAL_TEXTURE_PLACEHOLDER,
+  wn as MATERIAL_UNIFORM_PLACEHOLDER,
+  Xt as Material,
+  Kg as OrbitControls,
+  Zg as OrthographicCamera,
+  Fa as OutOfMemoryError,
+  Hg as PerspectiveCamera,
+  Em as PrimitiveTopology,
+  ze as QueryType,
+  Vu as RAD2DEG,
+  $m as RENDERABLE_FORMATS,
+  ha as Renderer,
+  Le as SCENE_UNIFORM_FIELDS,
+  _m as SHADER_STAGE_NAMES,
+  tm as STANDARD_ATTRIBUTE_FORMATS,
+  ht as STENCIL_FACE_DEFAULT,
   q as ShaderStage,
-  mm as StencilOperation,
-  hm as StoreOp,
-  pn as TEXTURE_PLACEHOLDER,
-  xt as TextureDimension,
-  x as TextureUsage,
-  zr as UNIFORM_FIELD_TYPES,
-  dn as UNIFORM_PLACEHOLDER,
-  Fp as UniformArena,
-  Bp as UniformArenaPool,
-  zt as UniformLayout,
-  jr as UniformValues,
-  ma as VERTEX_FORMAT_INFO,
+  Om as StencilOperation,
+  Fm as StoreOp,
+  yn as TEXTURE_PLACEHOLDER,
+  At as TextureDimension,
+  v as TextureUsage,
+  Xr as UNIFORM_FIELD_TYPES,
+  wn as UNIFORM_PLACEHOLDER,
+  Zp as UniformArena,
+  Kp as UniformArenaPool,
+  Qt as UniformLayout,
+  Zr as UniformValues,
+  Pa as VERTEX_FORMAT_INFO,
   u as ValidationError,
-  xm as VertexStepMode,
-  wi as alignTo,
-  Rm as alignTo4,
-  Mn as assert,
-  Cm as assertDefined,
-  L as assertNever,
-  Bt as assertNonNegativeInteger,
-  Ye as assertPositiveInteger,
-  Mm as assertPowerOfTwo,
-  rg as box3,
-  Ip as buildMipChain,
-  Bm as byteLengthOf,
-  pi as cacheKey,
-  Ue as clamp,
-  Tg as clearShaders,
-  ag as color,
-  Vm as combineFlags,
-  Tn as compileShaderStage,
-  Um as concatTypedArrays,
-  em as createAxes,
-  Hp as createBox,
-  Qp as createCone,
-  ia as createCylinder,
-  tr as createDefaultBackendRegistry,
-  Eg as createDevice,
-  Hs as createDeviceWithAdapter,
-  Lg as createGeometry,
-  Jp as createGrid,
-  Je as createLogger,
-  $a as createPipelineCache,
-  Yp as createPlane,
-  Zp as createSphere,
-  Kp as createTorus,
-  Xp as createTriangle,
-  _p as createUniforms,
-  km as currentId,
-  bi as defaultPixelRatio,
-  ya as defaultTextureUsage,
-  nm as defaultUniformsOf,
-  Mp as defineMaterial,
-  Zs as defineUniforms,
-  us as degToRad,
-  Lm as describeAdapter,
-  Cu as describeShaderSource,
-  vp as detectBackend,
-  vi as disposeAll,
-  tg as euler,
-  $g as findWgslEntryPoint,
-  la as flatLine,
-  Nm as formatFlags,
-  pg as formatShaderErrorLog,
-  sg as frustum,
-  xa as fullMipLevelCount,
-  jm as getGlobalLogLevel,
-  vg as getShader,
-  Bu as glslDefines,
-  fs as glslFieldForStage,
-  ju as glslTypeName,
-  Im as hasAllFlags,
-  Dm as hasAnyFlag,
-  Om as hasFlag,
-  wg as hasShader,
-  da as indexFormatByteSize,
-  Zu as inferBindGroupLayoutEntries,
-  Eu as inverseLerp,
-  Fm as isArrayBufferView,
-  _g as isBackendAvailable,
-  oi as isBufferBinding,
-  Sm as isBufferBindingResource,
-  fa as isDepthStencilFormat,
-  Ca as isDisposable,
-  wa as isGpuError,
-  Ln as isImageSource,
-  ci as isSamplerBinding,
-  $m as isSamplerBindingResource,
-  bs as isSamplerType,
-  im as isSrgbFormat,
-  ym as isTextureBinding,
-  Am as isTextureBindingResource,
-  om as isTriangleTopology,
-  Pm as isTypedArray,
-  aa as lambert,
-  hs as languageForBackend,
-  ug as lerp,
-  Du as listShaderKeys,
-  Qm as mat3,
-  Jm as mat4,
-  Bg as materials,
-  je as measureCanvas,
-  Mu as missingSourceMessage,
-  fg as nextAfter,
-  G as nextId,
-  ca as normalDebug,
-  hi as normalizeBindGroupLayoutEntries,
-  Xm as nullLogger,
-  mg as numberLines,
-  Ea as paddedCopy,
-  oa as phong,
-  ng as plane,
-  cm as primitiveCount,
-  eg as quat,
-  lg as radToDeg,
-  ig as ray,
-  og as raycaster,
-  Yu as reflectGlslProgram,
-  Hu as reflectSamplerUniforms,
-  Sg as reflectWgslBindings,
-  Wu as reflectWgslEntryPoints,
-  Ou as registerShader,
-  gg as registerShaders,
-  bg as replaceShader,
-  xg as requireShader,
-  zm as resetIdCounter,
-  _m as resolveBindingLayoutEntry,
-  Em as resolveBlendState,
-  ms as resolveGlslWrapOptions,
-  mi as resolveLimits,
-  li as resolveSamplerDescriptor,
-  ui as resolveShaderSource,
-  Cn as resolveTextureSize,
-  $t as resolveTextureViewDescriptor,
-  Tm as samplerKey,
-  qm as setGlobalLogLevel,
-  Fg as shapes,
-  pa as smallestIndexFormat,
-  hg as smoothstep,
-  Lu as stageSource,
-  gs as stripWgslComments,
-  _a as toUint8View,
-  Gm as typedArrayElementSize,
-  sa as unlit,
-  yg as unregisterShader,
-  fi as validateVertexBufferLayout,
-  Hm as vec2,
-  Zm as vec3,
-  Km as vec4,
-  di as vertexBufferLayoutsKey,
-  ua as vertexColorLine,
-  ga as vertexFormatGlslType,
-  Se as vertexFormatInfo,
-  ba as vertexFormatWgslType,
-  Ag as wgslBindingKeys,
-  Ru as wgslDefines,
-  Gu as wrapGlslSource,
-  Uu as wrapWgslSource
+  Nm as VertexStepMode,
+  Ei as alignTo,
+  tg as alignTo4,
+  On as assert,
+  Hm as assertDefined,
+  P as assertNever,
+  Te as assertNonNegativeInteger,
+  yi as assertPassTimestampWrites,
+  We as assertPositiveInteger,
+  Zm as assertPowerOfTwo,
+  $g as box3,
+  im as buildMipChain,
+  eg as byteLengthOf,
+  Ti as cacheKey,
+  De as clamp,
+  zg as clearShaders,
+  Eg as color,
+  og as combineFlags,
+  _n as compileShaderStage,
+  rg as concatTypedArrays,
+  xm as createAxes,
+  gm as createBox,
+  ym as createCone,
+  ba as createCylinder,
+  or as createDefaultBackendRegistry,
+  Xg as createDevice,
+  oa as createDeviceWithAdapter,
+  Yg as createGeometry,
+  vm as createGrid,
+  it as createLogger,
+  Ua as createPipelineCache,
+  mm as createPlane,
+  bm as createSphere,
+  wm as createTorus,
+  pm as createTriangle,
+  qp as createUniforms,
+  cg as currentId,
+  _i as defaultPixelRatio,
+  Ba as defaultTextureUsage,
+  Tm as defaultUniformsOf,
+  Yp as defineMaterial,
+  la as defineUniforms,
+  ys as degToRad,
+  Ym as describeAdapter,
+  am as describeGpuTimingFailure,
+  zu as describeShaderSource,
+  Up as detectBackend,
+  Pi as disposeAll,
+  Sg as euler,
+  qg as findWgslEntryPoint,
+  Sa as flatLine,
+  lg as formatFlags,
+  Gg as formatShaderErrorLog,
+  _g as frustum,
+  Ra as fullMipLevelCount,
+  fg as getGlobalLogLevel,
+  Vg as getShader,
+  Qu as glslDefines,
+  xs as glslFieldForStage,
+  ah as glslTypeName,
+  ag as hasAllFlags,
+  sg as hasAnyFlag,
+  ig as hasFlag,
+  Ig as hasShader,
+  _a as indexFormatByteSize,
+  uh as inferBindGroupLayoutEntries,
+  Nu as inverseLerp,
+  Jm as isArrayBufferView,
+  Qg as isBackendAvailable,
+  mi as isBufferBinding,
+  Wm as isBufferBindingResource,
+  Aa as isDepthStencilFormat,
+  za as isDisposable,
+  Ma as isGpuError,
+  Bn as isImageSource,
+  gi as isSamplerBinding,
+  qm as isSamplerBindingResource,
+  _s as isSamplerType,
+  Am as isSrgbFormat,
+  km as isTextureBinding,
+  jm as isTextureBindingResource,
+  Pm as isTriangleTopology,
+  Km as isTypedArray,
+  ya as lambert,
+  vs as languageForBackend,
+  Mg as lerp,
+  Ku as listShaderKeys,
+  yg as mat3,
+  vg as mat4,
+  eb as materials,
+  He as measureCanvas,
+  Wu as missingSourceMessage,
+  Rg as nextAfter,
+  B as nextId,
+  xa as normalDebug,
+  vi as normalizeBindGroupLayoutEntries,
+  pg as nullLogger,
+  Og as numberLines,
+  Na as paddedCopy,
+  va as phong,
+  Tg as plane,
+  Lm as primitiveCount,
+  xg as quat,
+  Cg as radToDeg,
+  Ag as ray,
+  Pg as raycaster,
+  lh as reflectGlslProgram,
+  ch as reflectSamplerUniforms,
+  Wg as reflectWgslBindings,
+  ih as reflectWgslEntryPoints,
+  Zu as registerShader,
+  Ug as registerShaders,
+  Dg as replaceShader,
+  Ng as requireShader,
+  ug as resetIdCounter,
+  Qm as resolveBindingLayoutEntry,
+  Xm as resolveBlendState,
+  $s as resolveGlslWrapOptions,
+  $i as resolveLimits,
+  bi as resolveSamplerDescriptor,
+  wi as resolveShaderSource,
+  Gn as resolveTextureSize,
+  Lt as resolveTextureViewDescriptor,
+  zm as samplerKey,
+  dg as setGlobalLogLevel,
+  Jg as shapes,
+  Ea as smallestIndexFormat,
+  Fg as smoothstep,
+  ku as stageSource,
+  As as stripWgslComments,
+  Da as timestampDeltaToMilliseconds,
+  Va as toUint8View,
+  ng as typedArrayElementSize,
+  wa as unlit,
+  kg as unregisterShader,
+  xi as validateVertexBufferLayout,
+  gg as vec2,
+  bg as vec3,
+  wg as vec4,
+  Si as vertexBufferLayoutsKey,
+  Ta as vertexColorLine,
+  La as vertexFormatGlslType,
+  Ae as vertexFormatInfo,
+  Ca as vertexFormatWgslType,
+  jg as wgslBindingKeys,
+  Xu as wgslDefines,
+  Yu as wrapGlslSource,
+  Hu as wrapWgslSource
 };
 //# sourceMappingURL=gpu-device-api.js.map
