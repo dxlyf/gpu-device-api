@@ -3,6 +3,7 @@ dist-demo/
 *.local
 .DS_Store
 
-# 调试产生的截图，不入库
+# 璋冭瘯浜х敓鐨勬埅鍥句笌涓存椂鐩綍锛屼笉鍏ュ簱
 examples/*.png
+.tmp-*/
 .npmrc
