@@ -492,7 +492,7 @@ u.set('bones', boneMatrices);
 | `examples/core-triangle.html` | 最小的一次绘制：交织顶点缓冲、`layout: 'auto'`，没有 uniform / bind group |
 | `examples/core-box.html` | 3D 必备件：投影与视图矩阵、uniform 块的字节打包、bind group layout、带深度的管线 |
 | `examples/core-texture.html` | `createTexture` + `queue.writeTexture` + `createSampler`；sampler 按 `<纹理名>_sampler` 配对 |
-| `examples/core-instancing.html` | 每实例属性（`stepMode: 'instance'`）：1 次 draw call 画 N 个实例，`?count=` 调数量。布局是**正对相机的 2D 格点面**（每实例一个四边形，压满格距并叠加逐实例抖动/自转/深度抖动），`?spin=0` 冻结摆动 |
+| `examples/core-instancing.html` | 每实例属性（`stepMode: 'instance'`）：1 次 draw call 画 N 个实例，`?count=` 调数量。画面是**绕竖直轴匀速转动的立体格点云**（每实例一个立方体：盒边长正比于到相机的距离，投影后大小恒定，所以再斜的角度也不露清屏色），`?spin=0` 冻结转动、`?angle=<弧度>` 定在某个角度（截图比对用） |
 | `examples/core-batch.html` | N 次 draw call + **动态偏移** uniform（`hasDynamicOffset` + `setBindGroup(1, bg, [offset])`） |
 
 这五个页面共用 `examples/core-shared.ts`（设备创建、离屏像素自检、帧循环、uniform 绑定等样板），
