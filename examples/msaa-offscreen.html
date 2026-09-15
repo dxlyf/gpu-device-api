@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>gpu-device-api 离屏 MSAA 证据页</title>
+    <style>
+      /* canvas 必须贴在左上角且尺寸精确，截图才能按 0,0,512,512 无偏差裁剪。 */
+      html, body { margin: 0; padding: 0; background: #141a26; }
+      canvas { display: block; margin: 0; padding: 0; width: 512px; height: 512px; }
+      pre {
+        font-family: ui-monospace, monospace; color: #d7dde5; background: #141a26;
+        margin: 0; padding: 8px 12px; font-size: 12px; line-height: 1.5;
+      }
+      .pass { color: #6ee7a8; }
+      .fail { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view" width="512" height="512"></canvas>
+    <pre id="out">running…</pre>
+    <script type="module" src="./msaa-offscreen.ts"></script>
+  </body>
+</html>

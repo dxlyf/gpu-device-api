@@ -11,6 +11,16 @@
  * 3. **设备丢失**：`device.lost` 映射为 {@link DeviceLostInfo}，并在非主动销毁的情况下
  *    额外上报一个 {@link DeviceLostError}。
  *
+ * ## 丢失之后能做什么、不能做什么
+ *
+ * 能：同步查询（{@link WebGPUDevice.lostInfo} / {@link WebGPUDevice.usable}）、`await device.lost`、
+ * 通过 `onError` 收到通知，并且**所有后续提交都会明确报错**（`queue.submit` / `writeBuffer` /
+ * 各 `create*`）而不是被实现静默丢弃。
+ *
+ * 不能：**恢复**。`GPUDevice` 一旦丢失就永久失效，本层拿不到任何可以重建它的东西
+ * （`GPUAdapter` 也不在设备上）。正确的恢复流程是：`dispose()` → 用 adapter 重新
+ * `requestDevice()` → 重建全部资源。本层不做这件事，也不假装 `usable` 会回到 true。
+ *
  * 另外本类额外暴露了 `defaultSampleCount`：core 的 `DeviceDescriptor` 有这个字段，
  * 但 `Device` 接口没有把它读出来，而 `CanvasConfig.sampleCount` 的默认值又要求读设备默认值。
  */
@@ -113,7 +123,7 @@ export class WebGPUDevice implements Device {
   private readonly canvasContexts = new Map<HTMLCanvasElement | OffscreenCanvas, WebGPUCanvasContext>();
   private readonly errorCallbacks = new Set<(error: GpuError) => void>();
   private readonly resolveLost: (info: DeviceLostInfo) => void;
-  private lostInfo: DeviceLostInfo | null = null;
+  private lostInfoValue: DeviceLostInfo | null = null;
   private _disposed = false;
 
   constructor(native: GPUDevice, init: WebGPUDeviceInit) {
@@ -158,7 +168,18 @@ export class WebGPUDevice implements Device {
 
   /** 设备是否仍然可用。 */
   get usable(): boolean {
-    return !this._disposed && this.lostInfo === null;
+    return !this._disposed && this.lostInfoValue === null;
+  }
+
+  /**
+   * 已丢失时的信息；未丢失时为 `null`。
+   *
+   * 与 `lost` promise 表达同一件事，但可以同步查询 —— 帧循环里「现在还能不能提交」需要它。
+   * 丢失一旦发生就**不可撤销**：`GPUDevice` 失效后没有任何原生手段把它救回来，
+   * 恢复只能重新 `requestDevice` 并重建全部资源（本层不做这件事，见类文档）。
+   */
+  get lostInfo(): DeviceLostInfo | null {
+    return this.lostInfoValue;
   }
 
   /** 当前仍在追踪中的资源数量；仅供诊断与测试（core 的 `Device` 接口没有这个成员）。 */
@@ -431,15 +452,25 @@ export class WebGPUDevice implements Device {
     this.resources.delete(resource);
   }
 
-  private assertUsable(context: string): void {
+  /**
+   * 在任何会创建资源 / 提交工作之前检查设备仍可用。
+   *
+   * 丢失后 `GPUDevice` 上的所有调用都会被实现**静默丢弃**（命令不执行、也不报错），
+   * 表现就是「画不出来但一切正常」；所以这里必须主动抛出带 `[gpu-device-api] ` 前缀的
+   * {@link DeviceLostError}，并带上丢失原因。
+   *
+   * 公开（而不是 private）是因为 `WebGPUQueue` 的提交路径也要用它 —— 设备丢失后
+   * `queue.submit()` 是唯一「静默无效」的提交入口，必须在那一层拦下。
+   */
+  assertUsable(operation: string): void {
     if (this._disposed) {
-      throw new ValidationError(`[gpu-device-api] Device.${context}: device "${this.label}" has been disposed.`);
+      throw new ValidationError(`[gpu-device-api] Device.${operation}: device "${this.label}" has been disposed.`);
     }
-    if (this.lostInfo) {
+    if (this.lostInfoValue) {
       throw new DeviceLostError(
-        `[gpu-device-api] Device.${context}: device "${this.label}" was lost (${this.lostInfo.reason}): ` +
-          this.lostInfo.message,
-        { reason: this.lostInfo.reason },
+        `[gpu-device-api] Device.${operation}: device "${this.label}" was lost (${this.lostInfoValue.reason}): ` +
+          this.lostInfoValue.message,
+        { reason: this.lostInfoValue.reason },
       );
     }
   }
@@ -447,7 +478,7 @@ export class WebGPUDevice implements Device {
   private handleDeviceLost(info: GPUDeviceLostInfo): void {
     const reason: DeviceLostReason = info.reason === 'destroyed' ? 'destroyed' : 'unknown';
     const lostInfo: DeviceLostInfo = { reason, message: info.message };
-    this.lostInfo = lostInfo;
+    this.lostInfoValue = lostInfo;
     this.resolveLost(lostInfo);
     if (!this._disposed) {
       this.reportError(

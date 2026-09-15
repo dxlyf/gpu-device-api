@@ -56,6 +56,8 @@ export class WebGPUQueue implements Queue {
     dataOffset = 0,
     size?: number,
   ): void {
+    // 设备丢失后原生 queue 的调用会被静默丢弃，这里必须主动报错（见 WebGPUDevice.assertUsable）。
+    this.device.assertUsable('Queue.writeBuffer');
     // DataView 没有「元素」概念，按字节计；TypedArray 用它的 BYTES_PER_ELEMENT。
     const bytesPerElement =
       data instanceof DataView
@@ -84,6 +86,7 @@ export class WebGPUQueue implements Queue {
     layout: TexelCopyBufferLayout,
     size: Extent3D,
   ): void {
+    this.device.assertUsable('Queue.writeTexture');
     this.native.writeTexture(
       toGPUTexelCopyTextureInfo(destination, 'Queue.writeTexture'),
       toAllowSharedBufferSource(data),
@@ -104,6 +107,7 @@ export class WebGPUQueue implements Queue {
     copySize: Extent3D,
     flipY = false,
   ): void {
+    this.device.assertUsable('Queue.copyExternalImageToTexture');
     this.native.copyExternalImageToTexture(
       { source, flipY },
       toGPUTexelCopyTextureInfo(destination, 'Queue.copyExternalImageToTexture'),
@@ -124,6 +128,7 @@ export class WebGPUQueue implements Queue {
     destinationOffset: number,
     size: number,
   ): void {
+    this.device.assertUsable('Queue.copyBufferToBuffer');
     const encoder = this.device.native.createCommandEncoder({ label: 'Queue.copyBufferToBuffer' });
     encoder.copyBufferToBuffer(
       asGPUBuffer(source, 'Queue.copyBufferToBuffer(source)'),
@@ -137,6 +142,7 @@ export class WebGPUQueue implements Queue {
 
   /** buffer → texture 的拷贝；同样通过临时 command encoder 实现。 */
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void {
+    this.device.assertUsable('Queue.copyBufferToTexture');
     const encoder = this.device.native.createCommandEncoder({ label: 'Queue.copyBufferToTexture' });
     encoder.copyBufferToTexture(
       {
@@ -151,8 +157,15 @@ export class WebGPUQueue implements Queue {
     this.native.submit([encoder.finish()]);
   }
 
-  /** 提交 command buffer；提交后这些 buffer 不可再次使用。 */
+  /**
+   * 提交 command buffer；提交后这些 buffer 不可再次使用。
+   *
+   * **设备丢失后会抛 `DeviceLostError`**：WebGPU 规定丢失设备上的提交被静默丢弃，
+   * 不检查的话就是「每帧都在提交、画面永远不动、一行错误都没有」。这是本层唯一能
+   * 把这件事变成明确错误的地方。
+   */
   submit(commandBuffers: readonly CommandBuffer[]): void {
+    this.device.assertUsable('Queue.submit');
     this.native.submit(commandBuffers.map((commandBuffer) => asGPUCommandBuffer(commandBuffer, 'Queue.submit')));
   }
 

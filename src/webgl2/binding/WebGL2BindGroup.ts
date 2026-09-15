@@ -21,13 +21,19 @@ export class WebGL2BindGroup implements BindGroup {
   readonly layout: WebGL2BindGroupLayout;
   readonly entries: readonly BindGroupEntry[];
   private readonly byBinding: Map<number, BindGroupEntry>;
+  private readonly onDispose: () => void;
   private _disposed = false;
 
-  constructor(descriptor: BindGroupDescriptor) {
+  /**
+   * @param onDispose 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+   *   （见 `WebGL2Device.untrack`）。不传时为空操作。
+   */
+  constructor(descriptor: BindGroupDescriptor, onDispose: () => void = () => {}) {
     this.label = descriptor.label ?? nextId('bindGroup');
     this.layout = descriptor.layout as WebGL2BindGroupLayout;
     this.entries = [...descriptor.entries];
     this.byBinding = new Map(this.entries.map((entry) => [entry.binding, entry]));
+    this.onDispose = onDispose;
     this.validate();
   }
 
@@ -44,9 +50,15 @@ export class WebGL2BindGroup implements BindGroup {
     return this.byBinding.get(binding);
   }
 
+  /**
+   * GL 里没有 bind group 对象，释放只是把本包装对象标记为不可用并通知设备。
+   * 幂等：重复调用不会重复通知设备。
+   */
   dispose(): void {
+    if (this._disposed) return;
     this._disposed = true;
     this.byBinding.clear();
+    this.onDispose();
   }
 
   /** 校验：每个条目都能在布局里找到，且类型对得上。 */

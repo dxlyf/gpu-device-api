@@ -9,7 +9,17 @@
  * - `ProgramCache`：program 编译与链接缓存（可跨管线共享）；
  * - `BindingPlanCache`：`PipelineLayout` 到 GL 槽位分配的缓存；
  * - `FramebufferCache`：原始附件组合的 framebuffer 缓存；
- * - 资源登记表：`dispose()` 时统一释放。
+ * - 资源登记表：`dispose()` 时统一释放。每个资源在自己的 `destroy()` / `dispose()` 里会通过
+ *   {@link WebGL2Device.untrack} 把自己摘掉，所以「每帧 create/destroy」不会把登记表撑大。
+ *
+ * ## 上下文丢失（device lost）
+ *
+ * `webglcontextlost` / `webglcontextrestored` 都会被监听并**如实上报**（见 {@link WebGL2Device.lostInfo}、
+ * {@link WebGL2Device.usable}、{@link WebGL2Device.onContextRestored}）。但**完整恢复做不到**：
+ * 上下文丢失会让本设备创建过的每一个 GL 对象失效，而包装对象里只有作废的句柄、没有可重放的
+ * descriptor，本层无法重建它们。所以丢失之后所有 `create*` / 读回入口都会抛带
+ * `[gpu-device-api] ` 前缀的 `DeviceLostError`，恢复的正确做法是 `dispose()` 之后重新 `createDevice()`
+ * 并重建全部资源 —— 详见 `docs/backend-limits.md`，不在本层偷偷假装可用。
  */
 
 import { ValidationError } from '../core/errors/ValidationError.js';
@@ -91,9 +101,26 @@ export class WebGL2Device implements Device {
   private readonly logger: Logger;
   private readonly resources = new Set<Disposable>();
   private readonly errorCallbacks = new Set<(error: GpuError) => void>();
+  /** 上下文恢复事件的订阅者；与 `errorCallbacks` 一样在 `dispose()` 时清空。 */
+  private readonly contextRestoredCallbacks = new Set<(info: DeviceLostInfo) => void>();
   private readonly canvasContexts = new Map<HTMLCanvasElement | OffscreenCanvas, WebGL2CanvasContext>();
   private lostResolve!: (info: DeviceLostInfo) => void;
   private lostPromise: Promise<DeviceLostInfo>;
+  /**
+   * 设备丢失信息；未丢失（或只是 `dispose()`）时为 null。
+   *
+   * WebGL2 的「设备丢失」就是 GL context 丢失：`webglcontextlost` 一旦触发，
+   * 本设备创建过的**每一个** GL 对象都已经失效，而且我们没有任何办法把它们重建
+   * （包装对象里只有已经作废的句柄，没有可重放的 descriptor）—— 所以这里如实记录，
+   * 让后续所有操作明确报错，而不是在失效句柄上静默地画不出东西。
+   */
+  private lostInfoValue: DeviceLostInfo | null = null;
+  /** `webglcontextrestored` 触发的次数（诊断与测试用）。 */
+  private contextRestoreCount = 0;
+  /** 安装监听器的目标（canvas 或 OffscreenCanvas）；不支持事件时保持 null。 */
+  private readonly eventTarget: EventTarget | null;
+  private readonly handleContextLost: ((event: Event) => void) | null;
+  private readonly handleContextRestored: ((event: Event) => void) | null;
   private _disposed = false;
 
   constructor(options: WebGL2DeviceOptions) {
@@ -133,13 +160,34 @@ export class WebGL2Device implements Device {
       this.lostResolve = resolve;
     });
 
-    // WebGL2 的上下文丢失事件：把它转成与 WebGPU 一致的 device.lost。
-    const canvasElement = options.canvas as HTMLCanvasElement;
-    if (typeof canvasElement.addEventListener === 'function') {
-      canvasElement.addEventListener('webglcontextlost', (event) => {
+    /*
+     * WebGL2 的上下文丢失事件：把它转成与 WebGPU 一致的 device.lost。
+     *
+     * - `webglcontextlost`：`preventDefault()` 是**必须**的 —— 不调用它浏览器就不会再
+     *   尝试恢复上下文（也就永远不会触发 restored），而且默认行为还会继续把错误抛到控制台。
+     * - `webglcontextrestored`：GL context 对象本身又能用了，但**它创建过的所有对象都已经
+     *   不存在**。本抽象层没有「重建全部资源」的能力（见 lostInfo 的说明），所以这里只如实上报。
+     *
+     * 两个监听器都保存在字段里，`dispose()` 会 removeEventListener —— 否则 device 被丢弃后
+     * canvas 仍然强引用着它（连同它的资源集合），是实打实的监听器泄漏。
+     */
+    const candidate = options.canvas as unknown as Partial<EventTarget>;
+    this.eventTarget =
+      typeof candidate.addEventListener === 'function' && typeof candidate.removeEventListener === 'function'
+        ? (options.canvas as unknown as EventTarget)
+        : null;
+    if (this.eventTarget) {
+      this.handleContextLost = (event: Event) => {
         event.preventDefault();
-        this.lostResolve({ reason: 'unknown', message: 'WebGL2 上下文丢失（通常是驱动重置或资源占用过高）。' });
-      });
+        this.handleContextLostEvent();
+      };
+      this.handleContextRestored = () => this.handleContextRestoredEvent();
+      this.eventTarget.addEventListener('webglcontextlost', this.handleContextLost);
+      this.eventTarget.addEventListener('webglcontextrestored', this.handleContextRestored);
+    } else {
+      this.handleContextLost = null;
+      this.handleContextRestored = null;
+      this.logger.debug('canvas 上没有 addEventListener，跳过 webglcontextlost/restored 监听。');
     }
   }
 
@@ -149,6 +197,46 @@ export class WebGL2Device implements Device {
 
   get lost(): Promise<DeviceLostInfo> {
     return this.lostPromise;
+  }
+
+  /**
+   * 设备是否仍然可用：没有 `dispose()`，也没有丢失过 GL context。
+   *
+   * 注意「上下文恢复」**不会**把这里变回 true：restored 只说明这个 canvas 又能取到可用的
+   * GL context，本设备已经创建过的资源全部失效且无法重建（见 {@link lostInfo}）。
+   */
+  get usable(): boolean {
+    return !this._disposed && this.lostInfoValue === null;
+  }
+
+  /** 设备丢失信息；未丢失时为 null。与 `lost` promise 表达同一件事，但可以直接查询。 */
+  get lostInfo(): DeviceLostInfo | null {
+    return this.lostInfoValue;
+  }
+
+  /** 当前仍在追踪中的资源数量；仅供诊断与测试（core 的 `Device` 接口没有这个成员）。 */
+  get trackedResourceCount(): number {
+    return this.resources.size;
+  }
+
+  /** `webglcontextrestored` 已触发的次数；恢复只影响 canvas，不影响本设备持有的资源。 */
+  get contextRestoredCount(): number {
+    return this.contextRestoreCount;
+  }
+
+  /**
+   * 订阅「GL context 被浏览器恢复」事件，返回取消订阅函数。
+   *
+   * 为什么需要它：`webglcontextlost` 会让 `device.lost` resolve（一次性的），而 restored 可能
+   * 在其后任意时刻发生。恢复后 canvas 与 GL context 本身又能用了，但**本设备创建过的资源
+   * 全部失效**（GL 对象随上下文一起消失，我们没有 descriptor 可以重建它们）。
+   * 因此收到这个回调后应当：`device.dispose()` → 重新 `createDevice()` → 重建全部资源。
+   */
+  onContextRestored(callback: (info: DeviceLostInfo) => void): () => void {
+    this.contextRestoredCallbacks.add(callback);
+    return () => {
+      this.contextRestoredCallbacks.delete(callback);
+    };
   }
 
   /** 让 GL 状态缓存失效；外部通过 escape hatch 改动状态后必须调用。 */
@@ -162,7 +250,8 @@ export class WebGL2Device implements Device {
     this.assertUsable('createBuffer');
     return this.track(
       new WebGL2Buffer(this.gl, this.state, descriptor, (buffer) => {
-        void buffer;
+        // 释放时把自己从追踪集合里摘掉，否则「每帧 create/destroy」会一直堆积到 device.dispose()。
+        this.untrack(buffer);
       }),
     );
   }
@@ -170,9 +259,10 @@ export class WebGL2Device implements Device {
   createTexture(descriptor: TextureDescriptor): Texture {
     this.assertUsable('createTexture');
     return this.track(
-      new WebGL2Texture(this.gl, this.state, descriptor, () => {
+      new WebGL2Texture(this.gl, this.state, descriptor, (texture) => {
         // 纹理销毁时清掉引用它的 framebuffer 缓存，避免复用到已经失效的附件。
         this.framebuffers.clear();
+        this.untrack(texture);
       }),
     );
   }
@@ -185,24 +275,31 @@ export class WebGL2Device implements Device {
     usage: BufferUsage | number,
     label: string,
   ): WebGL2Texture {
-    return this.track(
-      new WebGL2Texture(
-        this.gl,
-        this.state,
-        { format, size: { width, height }, usage: usage as TextureDescriptor['usage'], label },
-        () => this.framebuffers.clear(),
-      ),
+    const texture = new WebGL2Texture(
+      this.gl,
+      this.state,
+      { format, size: { width, height }, usage: usage as TextureDescriptor['usage'], label },
+      (destroyed) => {
+        this.framebuffers.clear();
+        this.untrack(destroyed);
+      },
     );
+    return this.track(texture);
   }
 
   createSampler(descriptor: SamplerDescriptor = {}): Sampler {
     this.assertUsable('createSampler');
-    return this.track(new WebGL2Sampler(this.gl, this.state, descriptor));
+    const sampler = new WebGL2Sampler(this.gl, this.state, descriptor, (destroyed) =>
+      this.untrack(destroyed),
+    );
+    return this.track(sampler);
   }
 
   createShaderModule(descriptor: ShaderModuleDescriptor): ShaderModule {
     this.assertUsable('createShaderModule');
-    return this.track(new WebGL2ShaderModule(descriptor));
+    // 回调只会在 dispose() 时执行，那时 `module` 早已初始化完毕。
+    const module = new WebGL2ShaderModule(descriptor, () => this.untrack(module));
+    return this.track(module);
   }
 
   /**
@@ -262,17 +359,20 @@ export class WebGL2Device implements Device {
 
   createBindGroupLayout(descriptor: BindGroupLayoutDescriptor): BindGroupLayout {
     this.assertUsable('createBindGroupLayout');
-    return this.track(new WebGL2BindGroupLayout(descriptor));
+    const layout = new WebGL2BindGroupLayout(descriptor, () => this.untrack(layout));
+    return this.track(layout);
   }
 
   createBindGroup(descriptor: BindGroupDescriptor): BindGroup {
     this.assertUsable('createBindGroup');
-    return this.track(new WebGL2BindGroup(descriptor));
+    const bindGroup = new WebGL2BindGroup(descriptor, () => this.untrack(bindGroup));
+    return this.track(bindGroup);
   }
 
   createPipelineLayout(descriptor: PipelineLayoutDescriptor): PipelineLayout {
     this.assertUsable('createPipelineLayout');
-    return this.track(new WebGL2PipelineLayout(descriptor, false, this));
+    const layout = new WebGL2PipelineLayout(descriptor, false, this, () => this.untrack(layout));
+    return this.track(layout);
   }
 
   /* ------------------------------------------------------------------ 管线 ------------------- */
@@ -317,18 +417,21 @@ export class WebGL2Device implements Device {
         layout = 'auto';
         this.programs.bindPlan(compiled, null);
       } else {
-        const inferredLayout = new WebGL2BindGroupLayout({
-          label: `${label}:autoLayout`,
-          entries,
-        });
-        this.track(inferredLayout);
-        layout = this.track(
-          new WebGL2PipelineLayout(
-            { label: `${label}:autoPipelineLayout`, bindGroupLayouts: [inferredLayout] },
-            true,
-            this,
-          ),
+        const inferredLayout = new WebGL2BindGroupLayout(
+          {
+            label: `${label}:autoLayout`,
+            entries,
+          },
+          () => this.untrack(inferredLayout),
         );
+        this.track(inferredLayout);
+        const synthesizedLayout = new WebGL2PipelineLayout(
+          { label: `${label}:autoPipelineLayout`, bindGroupLayouts: [inferredLayout] },
+          true,
+          this,
+          () => this.untrack(synthesizedLayout),
+        );
+        layout = this.track(synthesizedLayout);
         this.programs.bindPlan(compiled, (layout as WebGL2PipelineLayout).bindingPlan);
       }
     } else {
@@ -343,6 +446,7 @@ export class WebGL2Device implements Device {
         maxVertexAttributes: this.limits.maxVertexAttributes,
         maxVertexBufferArrayStride: this.limits.maxVertexBufferArrayStride,
       },
+      onDispose: (destroyed) => this.untrack(destroyed),
     });
     return this.track(pipeline);
   }
@@ -356,14 +460,14 @@ export class WebGL2Device implements Device {
 
   createRenderTarget(descriptor: RenderTargetDescriptor = {}): RenderTarget {
     this.assertUsable('createRenderTarget');
-    return this.track(
-      new WebGL2RenderTarget(descriptor, {
-        gl: this.gl,
-        state: this.state,
-        createTexture: (format, width, height, usage, label) =>
-          this.createAttachmentTexture(format, width, height, usage, label),
-      }),
-    );
+    const target = new WebGL2RenderTarget(descriptor, {
+      gl: this.gl,
+      state: this.state,
+      createTexture: (format, width, height, usage, label) =>
+        this.createAttachmentTexture(format, width, height, usage, label),
+      onDispose: (destroyed) => this.untrack(destroyed),
+    });
+    return this.track(target);
   }
 
   createCommandEncoder(descriptor?: CommandEncoderDescriptor): CommandEncoder {
@@ -422,6 +526,13 @@ export class WebGL2Device implements Device {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    // 先摘掉 canvas 上的事件监听器：device 被丢弃后 canvas 不能再强引用它。
+    if (this.eventTarget && this.handleContextLost) {
+      this.eventTarget.removeEventListener('webglcontextlost', this.handleContextLost);
+    }
+    if (this.eventTarget && this.handleContextRestored) {
+      this.eventTarget.removeEventListener('webglcontextrestored', this.handleContextRestored);
+    }
     // 先释放资源（它们可能引用了缓存里的对象），再清空各缓存。
     const resources = [...this.resources];
     this.resources.clear();
@@ -437,8 +548,13 @@ export class WebGL2Device implements Device {
     this.planCache.clear();
     for (const context of this.canvasContexts.values()) context.dispose();
     this.canvasContexts.clear();
+    this.contextRestoredCallbacks.clear();
+    this.errorCallbacks.clear();
     this.state.invalidate();
-    this.lostResolve({ reason: 'destroyed', message: '设备已调用 dispose()。' });
+    // 与 WebGPU 侧一致：主动销毁也是一种「设备不再可用」，原因记为 destroyed 以便查询。
+    const destroyed: DeviceLostInfo = { reason: 'destroyed', message: 'Device.dispose() was called.' };
+    this.lostInfoValue = destroyed;
+    this.lostResolve(destroyed);
   }
 
   /**
@@ -472,11 +588,80 @@ export class WebGL2Device implements Device {
     this.resources.delete(resource);
   }
 
-  private assertUsable(operation: string): void {
+  /**
+   * 在任何会创建资源 / 提交工作之前检查设备仍可用。
+   *
+   * 两条独立的失败路径，都给带 `[gpu-device-api] ` 前缀的英文错误：
+   * - 已经 `dispose()`：消息说明设备已被释放；
+   * - GL context 丢失：消息带上 `GPUDeviceLostInfo.reason` 与 message，说明「上下文丢失后
+   *   GL 对象全部失效」，而不是让调用方在失效句柄上白画一帧。
+   */
+  assertUsable(operation: string): void {
     if (this._disposed) {
-      throw new DeviceLostError(`[gpu-device-api] 设备已 dispose()，不能再调用 ${operation}()。`, {
-        reason: 'destroyed',
-      });
+      throw new DeviceLostError(
+        `[gpu-device-api] Device.${operation}: device "${this.label}" has been disposed.`,
+        { reason: 'destroyed' },
+      );
+    }
+    const lost = this.lostInfoValue;
+    if (lost) {
+      throw new DeviceLostError(
+        `[gpu-device-api] Device.${operation}: device "${this.label}" lost its WebGL2 context ` +
+          `(${lost.reason}): ${lost.message}`,
+        { reason: lost.reason },
+      );
+    }
+  }
+
+  /**
+   * `webglcontextlost` 的处理：记录丢失信息、resolve `lost`、并上报一个 `DeviceLostError`。
+   *
+   * 幂等：浏览器可能连续触发多次 lost（例如恢复流程里又丢一次），这里只处理第一次 ——
+   * promise 只能 resolve 一次，丢失原因也应该保持最早的那一条。
+   */
+  private handleContextLostEvent(): void {
+    if (this.lostInfoValue) return;
+    const info: DeviceLostInfo = {
+      reason: 'unknown',
+      message:
+        'the WebGL2 context was lost (webglcontextlost). Every GL object created by this device is now ' +
+        'invalid; the device cannot rebuild them, so create a new device and recreate its resources.',
+    };
+    this.lostInfoValue = info;
+    this.lostResolve(info);
+    if (!this._disposed) {
+      this.reportError(
+        new DeviceLostError(
+          `[gpu-device-api] WebGL2 context lost: ${info.message}`,
+          { reason: info.reason },
+        ),
+      );
+    }
+  }
+
+  /**
+   * `webglcontextrestored` 的处理：只如实上报，**不**重建任何资源。
+   *
+   * 恢复的是「canvas 上的 GL context 本身」，不是本设备创建过的对象 —— GL 的对象命名空间
+   * 随上下文一起消失，而我们的包装对象里只有已经作废的句柄（没有可重放的 descriptor），
+   * 因此本抽象层无法做到「完整恢复」。调用方收到通知后应丢弃本设备并重新创建。
+   */
+  private handleContextRestoredEvent(): void {
+    this.contextRestoreCount += 1;
+    const info = this.lostInfoValue ?? {
+      reason: 'unknown' as const,
+      message: 'the WebGL2 context was restored without a preceding loss event.',
+    };
+    this.logger.warn(
+      `WebGL2 context restored (第 ${this.contextRestoreCount} 次)：canvas 又能用了，但本设备创建过的` +
+        '资源全部失效且无法重建，请 dispose() 后重新 createDevice()。',
+    );
+    for (const callback of [...this.contextRestoredCallbacks]) {
+      try {
+        callback(info);
+      } catch (error) {
+        this.logger.error(`context-restored callback threw: ${String(error)}`);
+      }
     }
   }
 }

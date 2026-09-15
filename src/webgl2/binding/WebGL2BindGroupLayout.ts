@@ -19,12 +19,18 @@ export class WebGL2BindGroupLayout implements BindGroupLayout {
   readonly label: string;
   readonly entries: readonly BindGroupLayoutEntry[];
   readonly sortedEntries: readonly BindGroupLayoutEntry[];
+  private readonly onDispose: () => void;
   private _disposed = false;
 
-  constructor(descriptor: BindGroupLayoutDescriptor) {
+  /**
+   * @param onDispose 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+   *   （见 `WebGL2Device.untrack`）。不传时为空操作。
+   */
+  constructor(descriptor: BindGroupLayoutDescriptor, onDispose: () => void = () => {}) {
     this.label = descriptor.label ?? nextId('bindGroupLayout');
     this.sortedEntries = normalizeBindGroupLayoutEntries(descriptor.entries);
     this.entries = this.sortedEntries;
+    this.onDispose = onDispose;
   }
 
   /** GL 没有布局对象，这里把条目列表本身作为「原生句柄」暴露出来。 */
@@ -40,8 +46,11 @@ export class WebGL2BindGroupLayout implements BindGroupLayout {
     return this.sortedEntries.find((entry) => entry.binding === binding);
   }
 
+  /** 幂等：重复调用不会重复通知设备。 */
   dispose(): void {
+    if (this._disposed) return;
     this._disposed = true;
+    this.onDispose();
   }
 }
 

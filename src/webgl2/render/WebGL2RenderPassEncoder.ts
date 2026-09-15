@@ -26,6 +26,7 @@ import {
   pushDebugGroup as pushGlDebugGroup,
 } from '../utils/debugMarkers.js';
 import type { IndexFormat } from '../../core/enums/IndexFormat.js';
+import type { LoadOp } from '../../core/enums/LoadOp.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
 import type { Color } from '../../core/render/RenderTarget.js';
 import type {
@@ -48,6 +49,7 @@ import type {
   VertexBufferBinding,
 } from '../pipeline/WebGL2RenderPipeline.js';
 import type { RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
+import { webgl2RenderTargetOfView } from './WebGL2RenderTarget.js';
 import type { WebGL2RenderTarget } from './WebGL2RenderTarget.js';
 import { isDefaultFramebufferView } from '../WebGL2CanvasContext.js';
 import type { FramebufferCache } from './framebuffer-cache.js';
@@ -99,6 +101,12 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   private readonly dynamicOffsets = new Map<number, readonly number[]>();
   private readonly vertexBuffers: (VertexBufferBinding | null)[] = [];
   private indexBuffer: IndexBufferBinding | null = null;
+  /**
+   * 本通道画进的离屏渲染目标（没有就是 canvas 默认帧缓冲或临时拼的 FBO）。
+   *
+   * 它有两个用途：多重采样目标要在 `end()` 时做 resolve；以及决定 `variantShape.sampleCount`。
+   */
+  private renderTarget: WebGL2RenderTarget | null = null;
   private stencilReference = 0;
   private _ended = false;
   /**
@@ -151,6 +159,7 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
       });
       this.state.invalidate();
       this.state.setViewport(0, 0, target.width, target.height);
+      this.renderTarget = target;
     } else {
       const attachments = descriptor.colorAttachments.filter((attachment) => attachment !== null);
       if (attachments.length === 0 && !descriptor.depthStencilAttachment) {
@@ -167,7 +176,12 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
           descriptor.depthStencilAttachment !== null &&
           isDefaultFramebufferView(descriptor.depthStencilAttachment.view));
 
-      if (usesDefaultFramebuffer) {
+      // 附件列表整体来自一个多重采样渲染目标时，必须走它的 draw FBO + resolve，
+      // 否则多重采样会被静默忽略（见 WebGL2RenderTarget 的类注释）。
+      const multisampled = this.multisampleTargetOf(descriptor, attachments);
+      if (multisampled) {
+        this.beginMultisampleTargetPass(descriptor, multisampled);
+      } else if (usesDefaultFramebuffer) {
         this.beginDefaultFramebufferPass(descriptor);
       } else {
         const framebuffer = options.framebuffers.acquire(descriptor);
@@ -184,7 +198,11 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
     }
 
     // 附件形态到这里就定了：之后的 setPipeline / draw 都复用这一个请求对象。
-    this.variantShape = { colorFormats: this.colorFormats, sampleCount: 1, depthFormat: this.depthFormat };
+    this.variantShape = {
+      colorFormats: this.colorFormats,
+      sampleCount: this.renderTarget?.sampleCount ?? 1,
+      depthFormat: this.depthFormat,
+    };
 
     // 查询必须在附件/清屏之后开始，否则时间戳会把「切 framebuffer、清屏」这段算在外面。
     this.beginQuerySetup(descriptor);
@@ -446,15 +464,114 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
           'endOcclusionQuery() before ending the pass.',
       );
     }
+    // 多重采样目标在这里 resolve（blit 到单采样纹理）。放在 endTimerQuery() 之前，
+    // 这样时间查询测到的就是「含 resolve 在内」的整个通道耗时。
+    this.renderTarget?.resolve();
     this.endTimerQuery();
     this._ended = true;
     // GL 没有「结束渲染通道」这一步：默认帧缓冲会在浏览器合成时自动呈现，
-    // 离屏目标则已经写在纹理里。这里只需要把状态缓存作废，
+    // 离屏目标则已经写在纹理里（多重采样目标刚刚 resolve 过）。这里只需要把状态缓存作废，
     // 因为下一个通道会换 framebuffer / 附件组合。
     this.state.invalidate();
   }
 
   /* ------------------------------------------------------------------ 内部 ------------------- */
+
+  /**
+   * 判断这组原始附件是否**整体**来自同一个多重采样渲染目标。
+   *
+   * 为什么需要它：上层（`Renderer`）走的是 WebGPU 风格的写法 —— `target.createPassDescriptor()`
+   * 拿到附件列表再交给 `beginRenderPass`，而不是把 `target` 直接传下来。没有这一步，
+   * 多重采样目标会落到「按附件临时拼一个单采样 FBO」的分支，MSAA 被静默忽略。
+   *
+   * 返回值：
+   * - `null`：不是多重采样目标（或者只是单采样目标的附件，此时行为与从前完全一致）；
+   * - 目标：所有附件都属于同一个多重采样目标；
+   * - 抛错：把一个多重采样目标的附件与别的目标的附件混在一起用 —— 这种组合本层无法正确
+   *   表达（renderbuffer 与纹理不能挂在同一个 FBO 上），所以明确报错而不是画错。
+   */
+  private multisampleTargetOf(
+    descriptor: RenderPassDescriptor,
+    attachments: readonly NonNullable<RenderPassDescriptor['colorAttachments'][number]>[],
+  ): WebGL2RenderTarget | null {
+    const views: unknown[] = attachments.map((attachment) => attachment.view);
+    if (descriptor.depthStencilAttachment) views.push(descriptor.depthStencilAttachment.view);
+
+    let target: WebGL2RenderTarget | null = null;
+    for (const view of views) {
+      const owner = webgl2RenderTargetOfView(view);
+      if (!owner) continue;
+      if (target === null) target = owner;
+      else if (target !== owner) {
+        throw new ValidationError(
+          `[gpu-device-api] 渲染通道「${this.label}」把多个渲染目标的附件混在了一起。` +
+            '一个渲染通道的附件必须来自同一个渲染目标（多重采样的附件是 renderbuffer，' +
+            '无法与别的 target 的纹理挂在同一个 framebuffer 上）。',
+        );
+      }
+    }
+    if (!target || target.sampleCount === 1) return null;
+
+    for (const view of views) {
+      if (webgl2RenderTargetOfView(view) !== target) {
+        throw new ValidationError(
+          `[gpu-device-api] 渲染通道「${this.label}」把多重采样目标「${target.label}」的附件与其它附件` +
+            '混在了一起。多重采样目标的附件全部是 renderbuffer，只能整组使用；' +
+            '请传 `target`（或完整使用 `target.createPassDescriptor()` 的结果），' +
+            '或把该目标的 sampleCount 设为 1。',
+        );
+      }
+    }
+    return target;
+  }
+
+  /**
+   * 用渲染目标自己的 framebuffer 开始通道（多重采样路径）。
+   *
+   * 清屏参数从附件列表归并而来：GL 的 `clearBuffer*` 对同一帧的所有颜色附件用同一个颜色
+   * （见 `WebGL2RenderTarget.bind`），所以这里要求各附件的 `loadOp` / `clearValue` 一致，
+   * 不一致就明确报错，而不是悄悄只按第一个附件清屏。
+   */
+  private beginMultisampleTargetPass(
+    descriptor: RenderPassDescriptor,
+    target: WebGL2RenderTarget,
+  ): void {
+    let loadOp: LoadOp = 'clear';
+    let clearValue: Color | undefined;
+    for (const attachment of descriptor.colorAttachments) {
+      if (!attachment) continue;
+      const attachmentLoadOp = attachment.loadOp ?? 'clear';
+      if (attachmentLoadOp === 'load') {
+        loadOp = 'load';
+        continue;
+      }
+      if (clearValue === undefined) clearValue = attachment.clearValue;
+      else if (JSON.stringify(clearValue) !== JSON.stringify(attachment.clearValue)) {
+        throw new ValidationError(
+          `[gpu-device-api] 渲染通道「${this.label}」给多个颜色附件指定了不同的 clearValue，` +
+            '而 WebGL2 的清屏对整帧只有一个颜色。请让它们一致（或改用 sampleCount = 1 的目标）。',
+        );
+      }
+    }
+    if (loadOp === 'clear' && descriptor.colorAttachments.some((item) => item?.loadOp === 'load')) {
+      throw new ValidationError(
+        `[gpu-device-api] 渲染通道「${this.label}」给一部分颜色附件用了 loadOp: 'load'、另一部分用了 ` +
+          "'clear'，WebGL2 无法在一次清屏里表达这种组合。请统一 loadOp。",
+      );
+    }
+
+    const depthStencil = descriptor.depthStencilAttachment;
+    target.bind({
+      clearColor: loadOp === 'load' ? undefined : clearValue,
+      clearDepth: depthStencil?.depthClearValue,
+      clearStencil: depthStencil?.stencilClearValue,
+      loadOp,
+      depthLoadOp: depthStencil?.depthLoadOp,
+    });
+    this.renderTarget = target;
+    this.state.invalidate();
+    this.state.setViewport(0, 0, target.width, target.height);
+  }
 
   /**
    * 处理 `RenderPassDescriptor.timestampWrites` 与 `occlusionQuerySet`。

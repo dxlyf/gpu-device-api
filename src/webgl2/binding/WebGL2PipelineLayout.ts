@@ -24,11 +24,23 @@ export class WebGL2PipelineLayout implements PipelineLayout {
   readonly isAuto: boolean;
 
   private readonly plan: WebGLBindingPlan | null;
+  private readonly onDispose: () => void;
+  private _disposed = false;
 
-  constructor(descriptor: PipelineLayoutDescriptor, isAuto: boolean, planSource: BindingPlanProvider | null) {
+  /**
+   * @param onDispose 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+   *   （见 `WebGL2Device.untrack`）。不传时为空操作。
+   */
+  constructor(
+    descriptor: PipelineLayoutDescriptor,
+    isAuto: boolean,
+    planSource: BindingPlanProvider | null,
+    onDispose: () => void = () => {},
+  ) {
     this.label = descriptor.label ?? nextId('pipelineLayout');
     this.bindGroupLayouts = [...descriptor.bindGroupLayouts];
     this.isAuto = isAuto;
+    this.onDispose = onDispose;
 
     if (this.bindGroupLayouts.length > 4) {
       throw new ValidationError(
@@ -53,11 +65,16 @@ export class WebGL2PipelineLayout implements PipelineLayout {
   }
 
   get disposed(): boolean {
-    return false;
+    return this._disposed;
   }
 
-  /** 布局本身不持有 GL 资源，释放由 program 缓存负责。 */
+  /**
+   * 布局本身不持有 GL 资源，释放只是标记不可用并通知设备（绑定计划由设备级缓存管理）。
+   * 幂等：重复调用不会重复通知设备。
+   */
   dispose(): void {
-    // 无操作：绑定计划由设备级缓存管理。
+    if (this._disposed) return;
+    this._disposed = true;
+    this.onDispose();
   }
 }
