@@ -1159,3 +1159,10 @@ pass 带深度附件时管线必须声明同格式，否则整条 command buffer
   gfx 的纹理上传与异步创建 —— 每一项的实测数字写在 [性能优化](#性能优化) 一节。
 - 量性能前先想清楚要哪个数：`stats.frameTime` 是 CPU 提交、`stats.gpuFrameTime` 是 GPU 执行
   （默认 `null`），两者不可互相替代。见 [GPU 计时](#gpu-计时)。
+- 无头脚本（`scripts/verify-headless.mjs` / `scripts/capture-screenshot.mjs`）会在系统临时目录下建 Chrome 的
+  `--user-data-dir`（`%TEMP%\gpu-device-api-headless-*` / `-shot-*`）。这些目录现在所有退出路径都会回收
+  （正常结束、`exit`、`SIGINT`/`SIGTERM`、未捕获异常），并且每次启动会先清扫陈旧残留 —— 只认自己这两个前缀，
+  创建者进程还活着的目录一律不碰（不会误删并行运行的另一个调用）。**教训**：早先只在正常退出路径上删，
+  于是用管道提前掐断进程（`... | Select-Object -First 20`、Ctrl-C、超时被 kill）就会把目录留在磁盘上，
+  实测堆过 **488 个、约 34GB**，把 C 盘挤到**只剩 232MB**，连 `node` 都起不来 —— 别在无头脚本外面套会提前
+  终止管道的命令；真要打断，优先用 Ctrl-C，让它走清理路径。

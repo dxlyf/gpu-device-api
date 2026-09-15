@@ -7,15 +7,28 @@
  * 真实时间里才能跑完，而 `--virtual-time-budget` 会抢跑；CDP 里可以按真实时间轮询，
  * 等到页面自己给出结论再截图。WebGL2 也能用同一套流程，两边口径完全一致。
  *
+ * 临时 profile（Chrome 的 `--user-data-dir`）建在系统临时目录下，由 scripts/headless-chrome.mjs
+ * 统一管理：启动时清扫陈旧残留、所有退出路径（正常 / exit / 信号 / 未捕获异常）都回收。
+ * 历史事故见该文件头部说明 —— 被管道提前掐断时留下的 profile 曾堆到 34GB。
+ *
  * 用法：
  *   node scripts/capture-screenshot.mjs --chrome <chrome.exe> --url <url> --wait <dataKey> \
  *     --out <png> [--width 966] [--height 678] [--timeout 90000] [--dpr 1] [-- <chrome flags>]
+ *
+ * `--timeout` 既约束等 `data-*` 结论的时间，也约束「等 Chrome 暴露 page target」的总重试预算
+ * （下限 30s、上限 120s），详见 headless-chrome.mjs。
  */
 
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import {
+  PROFILE_PREFIX_SHOT,
+  createHeadlessSession,
+  describeKeptProfile,
+  formatSweepReport,
+  installSessionCleanup,
+  noteworthyKeptProfiles,
+  sweepStaleProfiles,
+} from './headless-chrome.mjs';
 
 function parseArgs(argv) {
   const options = { timeout: 90000, port: 0, width: 966, height: 678, dpr: 1, flags: [] };
@@ -46,11 +59,20 @@ function parseArgs(argv) {
 
 const options = parseArgs(process.argv.slice(2));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const profileDir = mkdtempSync(join(tmpdir(), 'gpu-device-api-shot-'));
+const label = '[gpu-device-api] capture-screenshot:';
+// 诊断信息一律走 stderr，stdout 留给截图结论。
+const log = (message) => console.error(message);
 
-const chrome = spawn(
-  options.chrome,
-  [
+// 启动时先清扫：上一次被掐断（或删失败）的运行留下的 profile。
+// 只认本工具自己的两个前缀；所有者进程还活着的目录一律跳过（并行运行的另一个调用）。
+const sweep = sweepStaleProfiles();
+if (sweep.scanned > 0) log(`${label} 启动清扫：${formatSweepReport(sweep)}。`);
+for (const kept of noteworthyKeptProfiles(sweep)) log(`${label} 清扫跳过 — ${describeKeptProfile(kept)}`);
+
+const session = createHeadlessSession({
+  label,
+  chrome: options.chrome,
+  args: [
     '--headless=new',
     '--disable-gpu-sandbox',
     '--no-sandbox',
@@ -59,51 +81,26 @@ const chrome = spawn(
     '--hide-scrollbars',
     `--window-size=${options.width},${options.height}`,
     `--force-device-scale-factor=${options.dpr}`,
-    `--user-data-dir=${profileDir}`,
-    ...options.flags,
-    options.url,
   ],
-  { stdio: 'ignore' },
-);
+  flags: options.flags,
+  url: options.url,
+  port: options.port,
+  profilePrefix: PROFILE_PREFIX_SHOT,
+  timeoutMs: options.timeout,
+  log,
+});
 
-let socket = null;
-function shutdown() {
+installSessionCleanup(session, { label, log });
+
+const target = await session.start();
+let socket = new WebSocket(target.webSocketDebuggerUrl);
+process.on('exit', () => {
   try {
     socket?.close();
   } catch {
-    /* 关闭失败无所谓 */
+    // 关闭失败无所谓：进程马上就要退出了。
   }
-  try {
-    chrome.kill();
-  } catch {
-    /* 同上 */
-  }
-  try {
-    rmSync(profileDir, { recursive: true, force: true });
-  } catch {
-    /* 临时 profile 删不掉不影响结论 */
-  }
-}
-process.on('exit', shutdown);
-
-async function findPageTarget() {
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${options.port}/json/list`);
-      const targets = await response.json();
-      const page = targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl);
-      if (page) return page;
-    } catch {
-      /* Chrome 还没起来 */
-    }
-    await sleep(200);
-  }
-  throw new Error('[gpu-device-api] capture-screenshot: Chrome did not expose a page target.');
-}
-
-const target = await findPageTarget();
-socket = new WebSocket(target.webSocketDebuggerUrl);
+});
 await new Promise((resolve, reject) => {
   socket.addEventListener('open', resolve, { once: true });
   socket.addEventListener('error', reject, { once: true });
@@ -178,5 +175,5 @@ if (payload.text && payload.text.trim()) {
   console.log('--- page out ---');
   console.log(payload.text.trim());
 }
-shutdown();
+await session.stop();
 process.exit(0);
