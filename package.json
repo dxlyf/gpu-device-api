@@ -4,6 +4,7 @@
   "description": "Unified low-level WebGL2 / WebGPU abstraction library for easy drawing on either backend.",
   "type": "module",
   "sideEffects": false,
+  "private": true,
   "main": "./dist/gpu-device-api.js",
   "module": "./dist/gpu-device-api.js",
   "types": "./dist/types/index.d.ts",
@@ -43,7 +44,8 @@
     "preview": "vite preview --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "node scripts/block-publish.mjs"
   },
   "devDependencies": {
     "lil-gui": "^0.20.0",
