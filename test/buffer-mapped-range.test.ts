@@ -19,7 +19,9 @@
  *   并按原生的语义把它 detach 掉）。
  *
  * 原生 `getMappedRange()` 的语义细节（也在两端实现的注释里写明）：
- * 1. `offset` 相对于**映射范围的起点**（`mapAsync(offset, size)` 的 `offset`），不是 buffer 起点；
+ * 1. 原生 `offset` 相对 **buffer 起点**且必须落在映射范围内（Chrome 实测：`mapAsync(_,16,32)` 之后
+ *    `getMappedRange(16,32)` 成功、`(0,32)` 与 `(8,4)` 都报 OperationError）；
+ *    本库对外的 `offset` 则相对**映射起点**（与 WebGL2 后端一致），平移只发生在 `mapAsync()` 里；
  * 2. 同一段范围重复取只能取一次，重叠会报错；因此本库只在 `mapAsync()` 里调一次原生
  *    `getMappedRange()`，其余一律在它返回的内存上建视图；
  * 3. `unmap()` 会让之前取出的所有 `ArrayBuffer` **detach**，此后长度归零、写入被静默忽略
@@ -111,16 +113,18 @@ class FakeNativeGpuBuffer {
   }
 
   /**
-   * 原生语义：`offset` 相对映射起点；同一段范围只能取一次（重复取会以「重叠」报错）。
-   * 本 mock 只支持「整段」这一次调用 —— 库若还去取子范围，说明它没有复用映射内存，测试会立刻炸。
+   * 原生语义（按 Chrome 实测建模，见 `WebGPUBuffer.mapAsync` 的表格）：
+   * `offset` 相对 **buffer 起点**、`size` 必须正好是本次映射范围，同一段范围只能取一次
+   * （重复取会以「重叠」报错）。本 mock 只接受这一次「整段」调用 —— 库若还去取子范围，
+   * 或者传了相对映射起点的偏移量，测试会立刻炸。
    */
-  getMappedRange(offset = 0, size = (this.mapping?.memory.byteLength ?? 0) - offset): ArrayBuffer {
+  getMappedRange(offset = 0, size = this.mapping?.memory.byteLength ?? 0): ArrayBuffer {
     const mapping = this.mapping;
     if (!mapping) throw new Error(`FakeNativeGpuBuffer "${this.label}": not mapped`);
-    if (offset !== 0 || size !== mapping.memory.byteLength) {
+    if (offset !== mapping.offset || size !== mapping.memory.byteLength) {
       throw new Error(
         `FakeNativeGpuBuffer "${this.label}": native getMappedRange(${offset}, ${size}) — the mock only ` +
-          'supports the full mapped range once',
+          `supports the mapped range [${mapping.offset}, ${mapping.offset + mapping.memory.byteLength}) once`,
       );
     }
     if (mapping.returned) {
@@ -233,7 +237,7 @@ describe('WebGPU：getMappedRange 的视图语义', () => {
     harness.device.dispose();
   });
 
-  it('mapAsync(offset>0) 之后 getMappedRange 的偏移量相对映射起点（返回的仍是映射内存的视图）', async () => {
+  it('mapAsync(offset>0) 之后 getMappedRange 的偏移量相对映射起点（写入落在映射范围内）', async () => {
     const harness = createWebGpuHarness();
     const buffer = harness.device.createBuffer({
       label: 'webgpu-offset-map',
@@ -241,8 +245,8 @@ describe('WebGPU：getMappedRange 的视图语义', () => {
       usage: BufferUsage.MapWrite | BufferUsage.CopySrc,
     });
 
-    // 只映射 [4, 8)：映射范围只有 4 字节，因此库必须把「0」交给原生 getMappedRange
-    // （原生是相对映射起点的；传 4 会越界报错）。
+    // 只映射 [4, 8)：本库的 getMappedRange 偏移量相对映射起点，所以这里传 0；
+    // 交给原生的则是绝对偏移量 4 + 长度 4（原生相对 buffer 起点，传 0 会被原生拒绝）。
     await buffer.mapAsync('write', 4, 4);
     const view = byteView(buffer.getMappedRange(0, 4));
     view.set([4, 3, 2, 1]);

@@ -83,10 +83,22 @@ export class WebGPUBuffer implements Buffer {
    * `getMappedRange()`，把它返回的**映射内存**交给上层 —— 那是视图而不是副本，写入会真正落到
    * buffer 上（`unmap()` 时刷给 GPU）。
    *
-   * 注意传给原生的偏移量是 **0**：规范的 `GPUBuffer.getMappedRange(offset, size)` 里 `offset`
-   * 相对**映射范围的起点**（也就是这里 `mapAsync(mode, offset, size)` 的 `offset`），不是相对
-   * buffer 起点。再传一次绝对偏移量会越界报错（旧实现就有这个问题），而 core 的契约
-   * （与 WebGL2 后端一致）同样是「`getMappedRange` 的偏移量相对映射起点」。
+   * ## 传给原生的 `offset` 是**绝对偏移量**（这一点必须按实现实测，不能想当然）
+   *
+   * 规范的 `GPUBuffer.getMappedRange(offset, size)` 里 `offset` 是**相对 buffer 起点**的字节偏移
+   * （2024 年规范原文：`Offset in bytes into the buffer to return buffer contents from`），
+   * 且必须落在本次映射范围之内。Chrome 实测（无头 Chrome + `--enable-unsafe-webgpu`，Intel 适配器）：
+   *
+   * | 调用 | 结果 |
+   * | --- | --- |
+   * | `mapAsync(WRITE, 16, 32)` 后 `getMappedRange(16, 32)` | OK |
+   * | `mapAsync(WRITE, 16, 32)` 后 `getMappedRange(0, 32)` | OperationError |
+   * | `mapAsync(WRITE, 16, 32)` 后 `getMappedRange(8, 4)` | OperationError（8 在映射范围之前） |
+   *
+   * 所以这里传的是 `mapAsync()` 收到的那个绝对 `offset`（与旧实现一致），而不是 0；
+   * 传 0 在 `offset > 0` 时会直接报错。本类对外的 `getMappedRange(offset, size)` 则采用
+   * 「相对映射起点」的约定（与 WebGL2 后端一致，见 {@link WebGPUBuffer.getMappedRange}），
+   * 两者之间的平移只发生在这一处。
    */
   async mapAsync(mode: MapMode, offset = 0, size?: number): Promise<ArrayBuffer> {
     this.assertUsable('Buffer.mapAsync');
@@ -99,7 +111,7 @@ export class WebGPUBuffer implements Buffer {
     this.assertRange(offset, mapSize, 'Buffer.mapAsync');
     await this.native.mapAsync(toGPUMapMode(mode), offset, mapSize);
     this._mapped = true;
-    const data = this.native.getMappedRange(0, mapSize);
+    const data = this.native.getMappedRange(offset, mapSize);
     this.mappedRange = { offset, size: mapSize, data };
     return data;
   }
@@ -118,10 +130,14 @@ export class WebGPUBuffer implements Buffer {
    * ## 为什么不去问原生要子范围
    *
    * 原生 `getMappedRange()` 的每一段范围只能取一次，与已返回的范围重叠即报错；而 `mapAsync()`
-   * 已经取走了整段映射内存，再取任何子范围都与之重叠。所以子范围一律在已取到的那块内存上建视图：
-   * 由于 `data` 本身就是映射内存，这样做得到的是**同一块内存**上的别名，
+   * 已经取走了整段映射内存，再取任何子范围都与之重叠（原生还会拒绝映射范围以外的偏移量）。
+   * 所以子范围一律在已取到的那块内存上建视图 —— `data` 就是映射内存本身，视图是它的别名，
    * 重复调用同一段范围（`getMappedRange(4, 4)` 两次）也一定拿到 `view.buffer` 相同的视图，
    * 而不是各拿一份副本。
+   *
+   * 注意本方法的 `offset` 与原生不同：**这里相对映射起点**（`mapAsync()` 的 `offset`），
+   * 原生则相对 buffer 起点（见 {@link WebGPUBuffer.mapAsync} 的实测表格）。因为建视图不需要
+   * 再调原生，这个平移只在 `mapAsync()` 里发生一次。
    *
    * ## 生命周期（与原生一致）
    *
