@@ -164,13 +164,13 @@ describe('WebGPURenderPipeline.resolve()：变体解析复用（#36）', () => {
     for (const native of offscreenResults) expect(native).toBe(offscreenResults[0]);
     expect(canvasResults[0]).not.toBe(offscreenResults[0]);
 
-    // 两个变体确实不同（否则上面的断言没有意义）：采样数、深度附件、目标格式。
+    // 两个变体确实不同（否则上面的断言没有意义）：采样数、深度附件、cache key 都不同。
     expect(mock.descriptors[0]!.multisample?.count).toBe(1);
     expect(mock.descriptors[0]!.depthStencil?.format).toBe('depth24plus');
     expect(mock.descriptors[1]!.multisample?.count).toBe(4);
     expect(mock.descriptors[1]!.depthStencil).toBeUndefined();
-    expect(mock.descriptors[1]!.fragment?.targets[0]?.format).toBe('rgba8unorm');
-    expect(mock.descriptors[0]!.fragment?.targets[0]?.format).toBe('bgra8unorm');
+    // colorFormats / sampleCount / depthFormat 三个字段都进了 key：两个变体各占一条。
+    expect(pipeline.compiledVariants).toEqual(['bgra8unorm|1|depth24plus', 'rgba8unorm|4|none']);
 
     pipeline.dispose();
     mock.device.dispose();

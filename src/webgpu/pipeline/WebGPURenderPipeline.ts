@@ -7,6 +7,8 @@
  *
  * - cache key = `{ colorFormats, sampleCount, depthFormat, vertexLayouts }`；
  * - 每个 key 对应一个 `GPURenderPipeline`，同一个 pipeline 对象可以持有多个 variant；
+ * - 解析结果另外按「入参对象身份 + 字段身份」备忘最近 4 条（见 `variantMemo`），
+ *   这样交替服务两个 target 时不必每次 draw 重新解析；
  * - `compiled` / `native` 反映真实状态：`compiled` 只表示「至少编译过一个 variant」，
  *   `native` 会触发一次默认 variant 的编译（拒绝「为了看起来有值而瞎编」）。
  *
@@ -68,6 +70,31 @@ const EMPTY_VARIANT: Partial<RenderPipelineVariant> = Object.freeze({});
 const EMPTY_VERTEX_LAYOUTS: readonly VertexBufferLayout[] = [];
 const EMPTY_COLOR_FORMATS: readonly TextureFormat[] = [];
 
+/**
+ * 变体解析二级缓存的容量。
+ *
+ * 4 条足够覆盖「同一条管线交替服务画布 / 离屏 / 深度预通道」这类少数几个 target 的常见模式，
+ * 同时保证缓存**不会随变体数量无上限增长** —— 它是缓存，不是「记住所有变体」。
+ */
+const VARIANT_MEMO_LIMIT = 4;
+
+/**
+ * 一次变体解析的备忘条目。
+ *
+ * 字段与原来那条单条快速路径一一对应：**入参对象身份 + 四个字段的对象身份**。
+ * 一个都不能少：入参对象的字段被原地改过（而不是换对象）时，少比一个字段就会命中错误变体，
+ * 画错东西且没有任何报错。
+ */
+interface VariantMemo {
+  readonly input: Partial<RenderPipelineVariant>;
+  readonly colorFormats: readonly TextureFormat[] | undefined;
+  readonly sampleCount: number | undefined;
+  readonly depthFormat: TextureFormat | null | undefined;
+  readonly vertexLayouts: readonly VertexBufferLayout[] | undefined;
+  readonly resolved: RenderPipelineVariant;
+  readonly key: string;
+}
+
 export class WebGPURenderPipeline implements RenderPipeline {
   readonly label: string;
   readonly descriptor: RenderPipelineDescriptor;
@@ -84,14 +111,18 @@ export class WebGPURenderPipeline implements RenderPipeline {
   /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
   private defaultColorFormatsCache: readonly TextureFormat[] | null = null;
 
-  /** 上一次 `resolve()` 的入参与结果，用于按身份快速命中（见 {@link WebGPURenderPipeline.resolve}）。 */
-  private lastVariantInput: Partial<RenderPipelineVariant> | null = null;
-  private lastVariantColorFormats: readonly TextureFormat[] | undefined;
-  private lastVariantSampleCount: number | undefined;
-  private lastVariantDepthFormat: TextureFormat | null | undefined;
-  private lastVariantVertexLayouts: readonly VertexBufferLayout[] | undefined;
-  private lastVariantResolved: RenderPipelineVariant | null = null;
-  private lastVariantKey: string | null = null;
+  /**
+   * 变体解析结果的二级缓存，**最近使用优先**：下标 0 就是原来那条「上一次命中」快速路径。
+   *
+   * 为什么需要多于一条：同一个材质常常交替服务两个 target（画布通道 + 离屏通道，
+   * colorFormats / sampleCount / depthFormat 都不同），而每个 render pass 各自持有一个
+   * `variantRequest` 对象。只记一条的话，两个 pass 交替 draw 时**每一次**都要重新解析、
+   * 重新拼 cache key；记住最近用过的几条即可覆盖这种模式。
+   *
+   * 容量固定为 {@link VARIANT_MEMO_LIMIT}：这是缓存而不是「记住所有变体」。真正的原生管线
+   * 缓存是 `this.cache`（64 条 LRU）：即使某个变体被挤出这里，也不会重建 GPU 对象。
+   */
+  private readonly variantMemo: VariantMemo[] = [];
 
   constructor(device: WebGPUDevice, descriptor: RenderPipelineDescriptor) {
     this.device = device;
@@ -131,9 +162,12 @@ export class WebGPURenderPipeline implements RenderPipeline {
    * `variant` 里未给出的字段按以下顺序取值：pipeline descriptor → `render` 预设 → 默认值。
    *
    * 同一个 render pass 内每次 `setPipeline` 传的都是同一个 variant 请求对象
-   *（见 `WebGPURenderPassEncoder` 的 `variantRequest`），因此这里按「入参身份 + 字段值」
-   * 复用上一次的解析结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
+   *（见 `WebGPURenderPassEncoder` 的 `variantRequest`），因此这里按「入参身份 + 字段身份」
+   * 复用已解析的结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
    * 也不再重算 vertex layout key —— 这些原本都在每 draw 的路径上。
+   *
+   * 复用范围是最近用过的 {@link VARIANT_MEMO_LIMIT} 条（见 {@link variantMemo}），而不是只有
+   * 上一次：两个 target 交替 draw 时，只记一条会让每一次 draw 都掉进解析路径。
    */
   resolve(variant: Partial<RenderPipelineVariant> = EMPTY_VARIANT): GPURenderPipeline {
     if (this._disposed) {
@@ -141,32 +175,71 @@ export class WebGPURenderPipeline implements RenderPipeline {
         `[gpu-device-api] RenderPipeline "${this.label}" has been disposed.`,
       );
     }
+    const memo = this.findVariantMemo(variant);
     let resolved: RenderPipelineVariant;
     let key: string;
-    if (
-      variant === this.lastVariantInput &&
-      variant.colorFormats === this.lastVariantColorFormats &&
-      variant.sampleCount === this.lastVariantSampleCount &&
-      variant.depthFormat === this.lastVariantDepthFormat &&
-      variant.vertexLayouts === this.lastVariantVertexLayouts &&
-      this.lastVariantResolved !== null &&
-      this.lastVariantKey !== null
-    ) {
-      resolved = this.lastVariantResolved;
-      key = this.lastVariantKey;
+    if (memo !== null) {
+      resolved = memo.resolved;
+      key = memo.key;
     } else {
       resolved = this.resolveVariant(variant);
       key = renderPipelineCacheKey(resolved);
-      // 记住入参字段的当前值：调用方若换掉某个字段（而不是原地改数组内容），下一次就会重新解析。
-      this.lastVariantInput = variant;
-      this.lastVariantColorFormats = variant.colorFormats;
-      this.lastVariantSampleCount = variant.sampleCount;
-      this.lastVariantDepthFormat = variant.depthFormat;
-      this.lastVariantVertexLayouts = variant.vertexLayouts;
-      this.lastVariantResolved = resolved;
-      this.lastVariantKey = key;
+      this.rememberVariant(variant, resolved, key);
     }
     return this.cache.resolve(key, () => this.createNative(resolved));
+  }
+
+  /**
+   * 在二级缓存里找与 `variant` 等价的条目；命中时把它提到最前（最近使用优先）。
+   *
+   * 判定与原来的单条快速路径**逐字段相同**：入参对象身份 + colorFormats / sampleCount /
+   * depthFormat / vertexLayouts 四个字段的对象身份。用身份而不是值比较是有意的（与改动前一致）：
+   * 调用方在一个 pass 内复用同一个请求对象，这里每次只做几次身份比较，不算 key、不建对象。
+   */
+  private findVariantMemo(variant: Partial<RenderPipelineVariant>): VariantMemo | null {
+    const memo = this.variantMemo;
+    for (let index = 0; index < memo.length; index += 1) {
+      const entry = memo[index]!;
+      if (
+        variant === entry.input &&
+        variant.colorFormats === entry.colorFormats &&
+        variant.sampleCount === entry.sampleCount &&
+        variant.depthFormat === entry.depthFormat &&
+        variant.vertexLayouts === entry.vertexLayouts
+      ) {
+        if (index > 0) {
+          // 提到最前：下次交替回来时它就是下标 0，走的还是原来那条快速路径。
+          memo.splice(index, 1);
+          memo.unshift(entry);
+        }
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 记住一次解析结果；超出容量时丢掉最久未使用的那条。
+   *
+   * 条目里保存的是调用方的入参对象引用（最多 4 个，且本来就是每个 pass 一个的小对象），
+   * 不会拦住任何 render pass 的回收。
+   */
+  private rememberVariant(
+    input: Partial<RenderPipelineVariant>,
+    resolved: RenderPipelineVariant,
+    key: string,
+  ): void {
+    const memo = this.variantMemo;
+    memo.unshift({
+      input,
+      colorFormats: input.colorFormats,
+      sampleCount: input.sampleCount,
+      depthFormat: input.depthFormat,
+      vertexLayouts: input.vertexLayouts,
+      resolved,
+      key,
+    });
+    if (memo.length > VARIANT_MEMO_LIMIT) memo.length = VARIANT_MEMO_LIMIT;
   }
 
   /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
@@ -331,6 +404,8 @@ export class WebGPURenderPipeline implements RenderPipeline {
     if (this._disposed) return;
     this._disposed = true;
     this.cache.dispose();
+    // 解析备忘也一并丢掉：里面的 resolved / key 已经没有意义，入参引用也不必再留。
+    this.variantMemo.length = 0;
     this.device.untrack(this);
   }
 
