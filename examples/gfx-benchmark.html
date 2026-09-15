@@ -80,8 +80,8 @@
         拿不到 GPU 计时的原因（缺 feature / 缺扩展 / disjoint）写在 <code>data-bench-gpu-error</code> 里。
       </p>
       <p class="hint">
-        <b>配对 A/B（推荐用这个看收益）</b>：<code>ab=split</code> 或 <code>ab=cull</code> 会在**同一个页面里
-        交替**测两种配置（<code>split=1/0</code> 用两条材质切换，<code>culling=1/0</code> 用渲染器的开关切换），
+        <b>配对 A/B（推荐用这个看收益）</b>：<code>ab=cull</code> 会在**同一个页面里
+        交替**测两种配置（<code>culling=1/0</code> 用渲染器的开关切换），
         每档跑 <code>rounds</code> 轮（默认 3）、每轮取最小帧耗时再比 —— 机器上有别的负载时，
         跨次运行的数字能在 9ms 与 278ms 之间摆动，只有这种交替测量才说明得了问题。
         结果写在 <code>data-bench-ab</code>：<code>档:off=..ms,on=..ms,deltaPct=..,drawCalls=..,culled=..</code>。
@@ -97,14 +97,12 @@
         <code>setVertexBuffer</code>）。两页同档的「CPU 提交(均值)」可以直接相减，差值就是便捷层的净开销。
       </p>
       <p class="hint">
-        <b>同一份构建下的三个开关</b>（刷新页面时带上参数即可，用来做 A/B）：
-        <code>split=1|0</code> 关掉 scene / per-draw 的 uniform 拆分（<code>split=0</code> 时材质写成
-        <code>sceneFields: false</code>，所有字段回到一个块、每 draw 整块重写 —— 也就是拆分前的行为）；
+        <b>同一份构建下的两个开关</b>（刷新页面时带上参数即可，用来做 A/B）：
         <code>culling=1|0</code> 打开视锥剔除（打开后 <code>draw calls</code> 会小于物体数，差额是
         「剔除/跳过测试」列的前一个数字，也写在 <code>data-bench-culled</code> 里）；
         <code>sort=none|opaque|all</code> 打开 draw 排序（按管线 → 绑定组 → 深度；半透明物只按深度
-        从远到近，绝不被管线分组打乱）。三个开关都可以用 <code>data-bench-split</code> /
-        <code>data-bench-culling</code> / <code>data-bench-sort</code> 抓取。
+        从远到近，绝不被管线分组打乱）。两个开关都可以用 <code>data-bench-culling</code> /
+        <code>data-bench-sort</code> 抓取。
       </p>
       <p class="hint">
         计时只算 CPU 时间（<code>frames</code> 是每档测量的帧数，先空跑几帧热身）。帧与帧之间只

@@ -36,10 +36,7 @@ import type { RenderPassDescriptor, RenderPassEncoder } from '../core/render/Ren
 import type { RenderTarget, Color } from '../core/render/RenderTarget.js';
 import type { RenderPipeline } from '../core/pipeline/RenderPipeline.js';
 import type { BindGroup } from '../core/binding/BindGroup.js';
-import type { BindGroupEntry } from '../core/binding/BindingTypes.js';
-import type { BindGroupLayout } from '../core/binding/BindGroupLayout.js';
 import type { PipelineLayout } from '../core/binding/PipelineLayout.js';
-import type { Buffer } from '../core/resources/Buffer.js';
 import { Material, defineMaterial, type MaterialDesc } from './Material.js';
 import { Geometry, type GeometryDesc } from './Geometry.js';
 import { GfxTexture, type TextureDesc } from './Texture.js';
@@ -53,8 +50,7 @@ import {
   type GpuTimingOptions,
   type GpuTimingStats,
 } from './GpuTiming.js';
-import type { UniformArena } from './UniformArena.js';
-import type { UniformLayout, UniformValues } from './Uniforms.js';
+import type { UniformValues } from './Uniforms.js';
 import { unwrapUniforms } from './Uniforms.js';
 import type { PerspectiveCamera, OrthographicCamera } from './Camera.js';
 
@@ -197,20 +193,6 @@ export interface RendererStats {
   cullSkipped: number;
   /** 本帧进入待排序队列的绘制数；`sort` 为 `'none'` 时恒为 0。 */
   sorted: number;
-  /**
-   * 本帧向**每 draw uniform 块**上传的次数（每次 draw 一次）。
-   *
-   * 它与 {@link RendererStats.drawCalls} 相等，用来和下面那个数字对照。
-   */
-  drawUniformWrites: number;
-  /**
-   * 本帧向**场景 uniform 块**上传的次数。
-   *
-   * 这就是「scene / per-draw 拆分」最直接的证据：拆分生效时它应当恒为 **1**（每帧只写一次），
-   * 而拆分前（`sceneFields: false`）它恒为 0、场景数据跟着每 draw 的整块上传一起走
-   *（那时 `drawUniformWrites` 每一次上传的字节数更大）。
-   */
-  sceneUniformWrites: number;
 }
 
 /**
@@ -225,39 +207,12 @@ interface MaterialState {
   readonly material: Material;
   readonly layout: PipelineLayout | 'auto';
   pipeline: RenderPipeline | null;
-  /** 「每 draw 一次」的 uniform 布局；材料没有 uniform 时为 `null`。 */
-  readonly drawLayout: UniformLayout | null;
-  /** 「每帧写一次」的场景块布局；没有场景字段时为 `null`。 */
-  readonly sceneLayout: UniformLayout | null;
-  /** 每 draw 块的数值容器模板：每次 draw 写进 arena。 */
-  draw: UniformValues | null;
-  /** 场景块：数值容器 + 本帧已经写进 arena 的那一版（见 {@link SceneState}）。 */
-  scene: SceneState | null;
+  /** 该材质的数值容器模板：每次 draw 写进 arena。 */
+  values: UniformValues | null;
   /** 排序用的管线序号（同一材质恒定）。 */
   readonly pipelineId: number;
   /** 材质是否半透明（声明了混合）—— 决定它能不能被排序挪动。 */
   readonly transparent: boolean;
-  /** 复用的动态偏移数组：每 draw 一次 `setBindGroup`，绝不因此新分配数组。 */
-  readonly dynamicOffsets: number[];
-  /** 两个块合并后的 bind group（arena 扩容后 buffer 换了要重建）。 */
-  uniformBindGroup: BindGroup | null;
-  uniformBindGroupDrawBuffer: Buffer | null;
-  uniformBindGroupSceneBuffer: Buffer | null;
-  /** arena 扩容时被替换掉的 bind group，等下一帧已提交再释放。 */
-  readonly retiredBindGroups: BindGroup[];
-  drawArena: UniformArena | null;
-  sceneArena: UniformArena | null;
-  /** 上一次把相机/时间写进 uniform 时的相机代数；相同就完全跳过。 */
-  cameraRevision: number;
-}
-
-interface SceneState {
-  readonly layout: UniformLayout;
-  readonly values: UniformValues;
-  /** 本帧已经写进 arena 的那一版内容对应的 `values.version`。 */
-  writtenVersion: number;
-  /** 本帧那段场景数据在 scene arena 里的偏移。 */
-  offset: number;
 }
 
 /** 排序模式下的待绘制记录（字段都在入队时算好，排序比较函数里不再做计算）。 */
@@ -298,8 +253,6 @@ export class Renderer {
     cullTested: 0,
     cullSkipped: 0,
     sorted: 0,
-    drawUniformWrites: 0,
-    sceneUniformWrites: 0,
   };
 
   /** GPU 计时；`enableGpuTiming()` 之前是 null（默认关闭：需要额外 feature、要读回、有开销）。 */
@@ -324,20 +277,11 @@ export class Renderer {
   private readonly normalMatrixScratch = mat3.create();
   /** 排序时算「包围球中心的世界坐标」用的暂存区。 */
   private readonly sortPointScratch: Vec3 = vec3.create();
-  /** 按名字给场景块填 `cameraDirection` 用的暂存区。 */
-  private readonly cameraDirectionScratch: Vec3 = vec3.create();
 
   /** 视锥剔除器：`updateCamera()` 里按当帧矩阵刷新。 */
   private readonly culler = new FrustumCuller();
   private _culling: boolean;
   private _sortMode: DrawSortMode;
-  /**
-   * 相机代数：`updateCamera()` 每次自增。
-   *
-   * 材质状态靠它判断「本帧的相机数据是不是已经写进 uniform 了」—— 没变就一次 `set()` 都不做，
-   * 这正是不再每 draw 重写相机矩阵的关键。
-   */
-  private cameraRevision = 1;
   /** 排序模式下本通道待提交的绘制。 */
   private readonly pending: PendingDraw[] = [];
   private nextPipelineId = 1;
@@ -349,12 +293,6 @@ export class Renderer {
    */
   private readonly textureGroupIds = new Map<BindGroup, number>();
   private nextTextureGroupId = 1;
-  private readonly createdAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  private lastFrameStart = 0;
-  /** 本帧的秒数（供声明了 `time` 的场景块使用）。 */
-  private timeSeconds = 0;
-  /** 上一帧到这一帧的间隔（供声明了 `deltaTime` 的场景块使用）。 */
-  private deltaSeconds = 0;
   private _disposed = false;
 
   private constructor(init: {
@@ -532,38 +470,16 @@ export class Renderer {
   createMaterial(material: Material | MaterialDesc): Material {
     const resolved = material instanceof Material ? material : defineMaterial(material);
     if (!this.materials.has(resolved)) {
-      // 还原掉 createUniforms() 的 Proxy：渲染器的每 draw 写入路径直接操作原始对象，
-      // 免得每次 set()/has() 都穿一遍 Proxy 陷阱（见 unwrapUniforms 的说明）。
-      const drawValues = resolved.createDrawUniforms();
-      const sceneValues = resolved.createSceneUniforms();
       this.materials.set(resolved, {
         material: resolved,
         layout: resolved.createPipelineLayout(this.device),
         pipeline: null,
-        drawLayout: resolved.drawUniforms,
-        sceneLayout: resolved.sceneUniforms,
-        draw: drawValues ? unwrapUniforms(drawValues) : null,
-        scene:
-          sceneValues && resolved.sceneUniforms
-            ? {
-                layout: resolved.sceneUniforms,
-                values: unwrapUniforms(sceneValues),
-                // -1 表示「本帧还没写过」，beginFrame() 会把它重置回 -1。
-                writtenVersion: -1,
-                offset: -1,
-              }
-            : null,
+        // 还原掉 createUniforms() 的 Proxy：渲染器的每 draw 写入路径直接操作原始对象，
+        // 免得每次 set()/has() 都穿一遍 Proxy 陷阱（见 unwrapUniforms 的说明）。
+        values: resolved.uniforms ? unwrapUniforms(resolved.createUniforms()) : null,
         pipelineId: this.nextPipelineId++,
         // 半透明物不能被随意排序（见 DrawSort）：这里解析一次混合状态，之后只读这个布尔值。
         transparent: resolved.resolveBlend() !== null,
-        dynamicOffsets: [],
-        uniformBindGroup: null,
-        uniformBindGroupDrawBuffer: null,
-        uniformBindGroupSceneBuffer: null,
-        retiredBindGroups: [],
-        drawArena: null,
-        sceneArena: null,
-        cameraRevision: 0,
       });
     }
     return resolved;
@@ -676,14 +592,9 @@ export class Renderer {
   beginFrame(options: FrameOptions = {}): void {
     if (this._inFrame) this.endFrame();
     this.frameStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    // 时间类场景数据的来源：`time` 用渲染器启动以来的秒数，`deltaTime` 用与上一帧的间隔。
-    this.timeSeconds = (this.frameStart - this.createdAt) / 1000;
-    this.deltaSeconds = this.lastFrameStart === 0 ? 0 : (this.frameStart - this.lastFrameStart) / 1000;
-    this.lastFrameStart = this.frameStart;
 
     this.resize();
     this.arenaPool.beginFrame();
-    this.resetSceneStates();
     // 相机矩阵每帧只算一次（宽高比/深度约定都依赖帧状态，所以放在这里最合适）。
     this.updateCamera();
 
@@ -722,8 +633,6 @@ export class Renderer {
     this.statsValue.cullTested = 0;
     this.statsValue.cullSkipped = 0;
     this.statsValue.sorted = 0;
-    this.statsValue.drawUniformWrites = 0;
-    this.statsValue.sceneUniformWrites = 0;
     this.currentPipeline = null;
     this._inFrame = true;
   }
@@ -931,7 +840,27 @@ export class Renderer {
     }
 
     /* ---- group 0：uniform ------------------------------------------------------------------ */
-    this.applyUniforms(state, options);
+    if (material.uniforms && state.values) {
+      this.applyCameraUniforms(state.values, material);
+      // model 只写一次：没给 options.model 时写共享的单位矩阵常量。
+      // （以前是「先写一个新 new 出来的单位矩阵、再被 options.model 覆盖」，每 draw 多一次
+      //  Float32Array(16) 分配 + 一次 64 字节上传。）
+      if (material.uniforms.has('model')) {
+        state.values.set('model' as never, (options.model ?? IDENTITY_MAT4) as never);
+      }
+      this.updateNormalMatrix(state.values, material);
+      if (options.uniforms) {
+        for (const [name, value] of Object.entries(options.uniforms)) {
+          this.setIfPresent(state.values, name, value);
+        }
+      }
+      const layout = material.createUniformBindGroupLayout(this.device);
+      if (layout) {
+        const arena = this.arenaPool.acquire(material.uniforms);
+        const dynamicOffset = arena.write(state.values);
+        this.pass!.setBindGroup(material.uniforms.group, arena.bindGroup(layout), [dynamicOffset]);
+      }
+    }
 
     /* ---- group 1：纹理 -------------------------------------------------------------------- */
     if (material.textures.length > 0) {
@@ -999,12 +928,7 @@ export class Renderer {
     this.gpuTimingValue = null;
     for (const state of this.materials.values()) {
       state.pipeline?.dispose();
-      state.uniformBindGroup?.dispose();
-      state.uniformBindGroup = null;
-      for (const group of state.retiredBindGroups) group.dispose();
-      state.retiredBindGroups.length = 0;
-      state.draw = null;
-      state.scene = null;
+      state.values = null;
     }
     this.materials.clear();
     this.pending.length = 0;
@@ -1036,127 +960,28 @@ export class Renderer {
   }
 
   /**
-   * 写 uniform 并绑定 group 0。
+   * 把相机矩阵写进 uniform（字段名存在才写，材质可以不用相机）。
    *
-   * 拆分之后这里分成三块：
-   * 1. **场景块**（`uScene.*`）：相机矩阵 / 时间 / 分辨率…`cameraRevision` 没变就一次都不写；
-   *    变了也只写一遍（`SceneState.writtenVersion` 保证本帧只写一次）；
-   * 2. **每 draw 块**（`u.*`）：`model`、法线矩阵、以及调用方这次覆盖的字段 —— 每次 draw 写一段；
-   * 3. 两个块一起绑到同一个 bind group（动态偏移按 binding 升序：先绘制块再场景块）。
-   *
-   * 没有场景字段的材质（包括 `sceneFields: false`）走的仍是老路径：所有字段在同一个块里，
-   * 每 draw 写整块 —— 行为与拆分前逐字节一致。
+   * 这里**不再**调用 `camera.update()`：相机矩阵每帧只需要算一次（见 {@link updateCamera}）。
+   * 原先每 draw 都重算 lookAt + 两套 perspective + 一次乘法，40k draw 的场景下光这一步就是
+   * 几十毫秒/帧的纯 CPU 开销，而且结果完全一样。
    */
-  private applyUniforms(state: MaterialState, options: DrawOptions): void {
-    const material = state.material;
-    const drawValues = state.draw;
-    const sceneValues = state.scene?.values ?? null;
+  private applyCameraUniforms(values: UniformValues, material: Material): void {
+    const camera = this.camera;
+    if (!camera) return;
 
-    // ---- 场景数据：每帧只写一次（相机代数变了才动） ----------------------------------------
-    if (state.cameraRevision !== this.cameraRevision) {
-      this.writeFrameUniforms(sceneValues ?? drawValues);
-      state.cameraRevision = this.cameraRevision;
+    if (material.uniforms?.has('projectionView')) {
+      values.set('projectionView' as never, camera.projectionViewMatrix as never);
     }
-
-    // ---- 每 draw 的数据 ---------------------------------------------------------------------
-    if (drawValues && state.drawLayout?.has('model')) {
-      // model 只写一次：没给 options.model 时写共享的单位矩阵常量。
-      // （以前是「先写一个新 new 出来的单位矩阵、再被 options.model 覆盖」，每 draw 多一次
-      //  Float32Array(16) 分配 + 一次 64 字节上传。）
-      drawValues.set('model' as never, (options.model ?? IDENTITY_MAT4) as never);
+    if (material.uniforms?.has('projection')) {
+      values.set('projection' as never, camera.projectionMatrix as never);
     }
-    const overrides = options.uniforms;
-    if (overrides) {
-      for (const [name, value] of Object.entries(overrides)) {
-        // 场景字段由场景块接管：它既可能来自 `defaults`，也可能像这里一样逐 draw 覆盖；
-        // 写进场景块的值是**粘住**的（与拆分前「同一个数值容器被反复改写」的语义一致）。
-        if (sceneValues && state.sceneLayout?.has(name)) {
-          sceneValues.set(name as never, value as never);
-          continue;
-        }
-        if (drawValues) this.setIfPresent(drawValues, name, value);
-      }
+    if (material.uniforms?.has('view')) {
+      values.set('view' as never, camera.viewMatrix as never);
     }
-    if (drawValues) this.updateNormalMatrix(drawValues, state.drawLayout, sceneValues);
-
-    // ---- 绑定 ------------------------------------------------------------------------------
-    if (!drawValues && !sceneValues) return;
-    const bindGroupLayout = material.createUniformBindGroupLayout(this.device);
-    if (!bindGroupLayout) return;
-
-    const offsets = state.dynamicOffsets;
-    offsets.length = 0;
-    if (drawValues) {
-      // 每次 draw 独占一段：写入内容随 draw 而变，绝不能共用同一段（见 UniformArena）。
-      offsets.push(this.drawArena(state).write(drawValues));
-      this.statsValue.drawUniformWrites += 1;
+    if (material.uniforms?.has('cameraPosition')) {
+      values.set('cameraPosition' as never, camera.position as never);
     }
-    const sceneState = state.scene;
-    if (sceneState) {
-      if (sceneState.writtenVersion !== sceneState.values.version || sceneState.offset < 0) {
-        sceneState.offset = this.sceneArena(state).write(sceneState.values);
-        sceneState.writtenVersion = sceneState.values.version;
-        this.statsValue.sceneUniformWrites += 1;
-      }
-      offsets.push(sceneState.offset);
-    }
-
-    const group = drawValues ? state.drawLayout!.group : state.sceneLayout!.group;
-    this.pass!.setBindGroup(group, this.uniformBindGroup(state, bindGroupLayout), offsets);
-  }
-
-  /**
-   * 取得（必要时创建）合并了两个 uniform 块的 bind group。
-   *
-   * 为什么要自己建而不是用 `UniformArena.bindGroup()`：一个 bind group 的两条 entry 必须指向
-   * **两个不同的 buffer**（绘制块与场景块各一个 arena），而 `bindGroup()` 只会塞进单个 arena 的
-   * 那一条。缓存按「两个 arena 的 buffer 对象身份」判断 —— arena 扩容会换 buffer，那时重建即可
-   *（旧的先记进 `retiredBindGroups`，等下一帧已经提交完再释放）。
-   */
-  private uniformBindGroup(state: MaterialState, layout: BindGroupLayout): BindGroup {
-    const drawBuffer = state.draw ? this.drawArena(state).buffer : null;
-    const sceneBuffer = state.scene ? this.sceneArena(state).buffer : null;
-    const cached = state.uniformBindGroup;
-    if (
-      cached &&
-      state.uniformBindGroupDrawBuffer === drawBuffer &&
-      state.uniformBindGroupSceneBuffer === sceneBuffer
-    ) {
-      return cached;
-    }
-    if (cached) state.retiredBindGroups.push(cached);
-
-    const entries: BindGroupEntry[] = [];
-    if (drawBuffer && state.drawLayout) {
-      entries.push({
-        binding: state.drawLayout.binding,
-        resource: { buffer: drawBuffer, offset: 0, size: state.drawLayout.byteLength },
-      });
-    }
-    if (sceneBuffer && state.sceneLayout) {
-      entries.push({
-        binding: state.sceneLayout.binding,
-        resource: { buffer: sceneBuffer, offset: 0, size: state.sceneLayout.byteLength },
-      });
-    }
-
-    const group = this.device.createBindGroup({
-      label: `${state.material.name}:uniforms`,
-      layout,
-      entries,
-    });
-    state.uniformBindGroup = group;
-    state.uniformBindGroupDrawBuffer = drawBuffer;
-    state.uniformBindGroupSceneBuffer = sceneBuffer;
-    return group;
-  }
-
-  private drawArena(state: MaterialState): UniformArena {
-    return (state.drawArena ??= this.arenaPool.acquire(state.drawLayout!));
-  }
-
-  private sceneArena(state: MaterialState): UniformArena {
-    return (state.sceneArena ??= this.arenaPool.acquire(state.sceneLayout!));
   }
 
   /** 纹理 bind group 的排序序号（对象身份 → 小整数，只在第一次见到时分配）。 */
@@ -1195,85 +1020,13 @@ export class Renderer {
     );
   }
 
-  /** 每帧开头重置场景块的「本帧是否已写」标记，并释放上一帧退役的 bind group。 */
-  private resetSceneStates(): void {
-    for (const state of this.materials.values()) {
-      if (state.scene) {
-        state.scene.writtenVersion = -1;
-        state.scene.offset = -1;
-      }
-      // 上一帧的命令已经提交，现在释放是安全的（与 UniformArena 的 retired 同一时机）。
-      if (state.retiredBindGroups.length > 0) {
-        for (const group of state.retiredBindGroups) group.dispose();
-        state.retiredBindGroups.length = 0;
-      }
-    }
-  }
-
-  /**
-   * 把「每帧变一次」的场景数据写进 uniform（字段名存在才写，材质可以不用相机）。
-   *
-   * 这里**不再**调用 `camera.update()`：相机矩阵每帧只需要算一次（见 {@link updateCamera}）。
-   * 原先每 draw 都重算 lookAt + 两套 perspective + 一次乘法，40k draw 的场景下光这一步就是
-   * 几十毫秒/帧的纯 CPU 开销，而且结果完全一样。
-   *
-   * `values` 是场景块（没有场景块时是唯一的绘制块，此时它每 draw 都会被重写，效果与拆分前一致）。
-   */
-  private writeFrameUniforms(values: UniformValues | null): void {
-    if (!values) return;
-    const camera = this.camera;
-
-    if (camera) {
-      const projectionView = camera.projectionViewMatrix;
-      if (values.has('projectionView')) values.set('projectionView' as never, projectionView as never);
-      if (values.has('viewProjection')) values.set('viewProjection' as never, projectionView as never);
-      if (values.has('projection')) values.set('projection' as never, camera.projectionMatrix as never);
-      if (values.has('view')) values.set('view' as never, camera.viewMatrix as never);
-      this.setFrameNumbers(values, 'cameraPosition', camera.position);
-      vec3.sub(this.cameraDirectionScratch, camera.target, camera.position);
-      if (vec3.length(this.cameraDirectionScratch) > 0) vec3.normalize(this.cameraDirectionScratch, this.cameraDirectionScratch);
-      this.setFrameNumbers(values, 'cameraDirection', this.cameraDirectionScratch);
-      this.setFrameScalar(values, 'cameraNear', camera.near);
-      this.setFrameScalar(values, 'cameraFar', camera.far);
-      this.setFrameScalar(values, 'aspect', camera.aspect);
-    }
-
-    this.setFrameScalar(values, 'time', this.timeSeconds);
-    this.setFrameScalar(values, 'deltaTime', this.deltaSeconds);
-    this.setFrameNumbers(values, 'resolution', [this._width, this._height]);
-    this.setFrameNumbers(values, 'viewport', [0, 0, this._width, this._height]);
-  }
-
-  /** 写一个标量场景字段（声明的类型不是单个标量时跳过，避免把数组写进标量槽）。 */
-  private setFrameScalar(values: UniformValues, name: string, value: number): void {
-    if (!values.has(name)) return;
-    const field = values.layout.field(name);
-    if (field.count !== 1 || field.info.components !== 1) return;
-    values.set(name as never, value as never);
-  }
-
-  /** 写一个多分量场景字段（按声明的分量数裁剪，多了截断、少了补 0）。 */
-  private setFrameNumbers(values: UniformValues, name: string, components: ArrayLike<number>): void {
-    if (!values.has(name)) return;
-    const field = values.layout.field(name);
-    if (field.count === 1 && field.info.components === 1) return;
-    const length = field.count * field.info.components;
-    if (components.length <= length) {
-      values.set(name as never, components as never);
-      return;
-    }
-    const trimmed: number[] = [];
-    for (let index = 0; index < length; index += 1) trimmed.push(components[index]!);
-    values.set(name as never, trimmed as never);
-  }
-
   /**
    * 按当前画布宽高比与后端深度约定刷新相机矩阵。
    *
    * `beginFrame()` 与 `setCamera()` 会自动调用；**在帧中间改了相机参数**（position/target/fov…）
    * 之后想立刻生效，就自己调一次这个方法 —— 否则改动会在下一帧的 `beginFrame()` 才反映出来。
    *
-   * 这里同时刷新视锥（剔除要用 P × V）并推进相机代数，材质据此判断要不要重写场景 uniform。
+   * 这里同时刷新视锥（剔除要用 P × V）。
    */
   updateCamera(): void {
     const camera = this.camera;
@@ -1285,7 +1038,6 @@ export class Renderer {
     // 两个后端的裁剪空间 z 约定不同，切换后端时投影矩阵要跟着换（相机自己不知道后端）。
     camera.depthRange = this.backend === 'webgpu' ? 'zo' : 'gl';
     camera.update();
-    this.cameraRevision += 1;
     // 视锥用当帧的 P × V 与同一套深度约定：用错约定会把近处的物体误剔除。
     if (this._culling) this.culler.update(camera.projectionViewMatrix, camera.depthRange);
   }
@@ -1295,20 +1047,10 @@ export class Renderer {
    *
    * 非等比缩放会破坏法线方向（法线不再垂直于表面），必须用「模型矩阵左上 3x3 的逆转置」。
    * 这里自动算好，材质只要声明了 `normalMatrix` 字段就能直接用。
-   *
-   * `model` 与 `normalMatrix` 一定在同一个块里（`model` 被强制留在每 draw 块，见
-   * `Material` 的 DRAW_ONLY_FIELDS），但为避免调用方把 `model` 塞进场景块这种边角写法出错，
-   * 找不到时再去场景块里找一次。
    */
-  private updateNormalMatrix(
-    values: UniformValues,
-    layout: UniformLayout | null,
-    sceneValues: UniformValues | null,
-  ): void {
-    if (!layout?.has('normalMatrix')) return;
-    const source = layout.has('model') ? values : sceneValues;
-    if (!source?.has('model')) return;
-    const model = source.get('model') as Float32Array;
+  private updateNormalMatrix(values: UniformValues, material: Material): void {
+    if (!material.uniforms?.has('normalMatrix') || !material.uniforms.has('model')) return;
+    const model = values.get('model') as Float32Array;
     const normalMatrix = mat3.normalFromMat4(this.normalMatrixScratch, model);
     if (!normalMatrix) {
       // 模型矩阵退化（某轴缩放为 0）时退回单位矩阵，避免把 NaN 送进着色器。

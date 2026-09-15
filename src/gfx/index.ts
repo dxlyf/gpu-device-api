@@ -31,8 +31,6 @@ export {
   UNIFORM_PLACEHOLDER,
   ATTRIBUTE_PLACEHOLDER,
   TEXTURE_PLACEHOLDER,
-  SCENE_BLOCK_INSTANCE,
-  SCENE_UNIFORM_NAMES,
   Material,
   defineMaterial,
   type MaterialDesc,

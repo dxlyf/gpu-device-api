@@ -71,55 +71,6 @@ export const UNIFORM_PLACEHOLDER = '/*%uniforms%*/';
 export const ATTRIBUTE_PLACEHOLDER = '/*%attributes%*/';
 export const TEXTURE_PLACEHOLDER = '/*%textures%*/';
 
-/**
- * 场景块在着色器里的实例名。
- *
- * 材质源码里写 `u.projectionView`、`u.time` 这类**场景字段**时，会自动被改写成
- * `uScene.projectionView`、`uScene.time`（见 {@link SCENE_UNIFORM_NAMES}）—— 调用方不用改一行源码。
- * 每 draw 变的字段（`u.model`、`u.baseColor`…）继续叫 `u`，所以绝大多数代码完全无感。
- */
-export const SCENE_BLOCK_INSTANCE = 'uScene';
-
-/**
- * 默认会被放进**场景块**（每帧只写一次）的 uniform 字段名。
- *
- * 渲染器每帧只往 GPU 写一次这些字段，而不是每次 draw 都重写一遍 —— 这正是「scene / per-draw
- * 拆分」的收益来源。名单之外的名字（`model`、`baseColor`、`shininess`…）留在每 draw 块里。
- *
- * 渲染器会**自动填**其中它知道的值：`projectionView` / `projection` / `view` /
- * `cameraPosition` / `cameraDirection` / `cameraNear` / `cameraFar` / `aspect` /
- * `time` / `deltaTime` / `resolution` / `viewport`；`lightDirection` / `lightColor` / `ambient`
- * 属于材质数据，由 `defaults` 或 `draw({ uniforms })` 提供（同样每帧只写一次）。
- *
- * 想让某个材质完全不拆分（所有字段都回到每 draw 块、行为与拆分前逐字节一致），
- * 传 `MaterialDesc.sceneFields: false`。
- */
-export const SCENE_UNIFORM_NAMES: readonly string[] = Object.freeze([
-  'projectionView',
-  'viewProjection',
-  'projection',
-  'view',
-  'cameraPosition',
-  'cameraDirection',
-  'cameraNear',
-  'cameraFar',
-  'aspect',
-  'lightDirection',
-  'lightColor',
-  'ambient',
-  'time',
-  'deltaTime',
-  'resolution',
-  'viewport',
-]);
-
-/**
- * 永远留在每 draw 块里的字段：`model` 是「本 draw 的模型矩阵」，`normalMatrix` 由它推出，
- * 两者天生一一对应，放进场景块只会让每帧多写几次（法线矩阵还是错的）。
- */
-const DRAW_ONLY_FIELDS: readonly string[] = Object.freeze(['model', 'normalMatrix']);
-
-
 /** 纹理绑定的声明。 */
 export interface MaterialTextureDesc {
   /** 着色器里的 sampler 变量名。 */
@@ -154,11 +105,6 @@ export interface MaterialDesc {
   attributes?: Record<string, MaterialAttributeInput>;
   /** uniform 布局：描述对象或已定义好的 {@link UniformLayout}。 */
   uniforms?: UniformLayoutDesc | UniformLayout | null;
-  /**
-   * 哪些字段进「场景块」（每帧只写一次）。默认按 {@link SCENE_UNIFORM_NAMES} 判断；
-   * 传数组表示只认这些名字（不在布局里的名字会被忽略）；传 `false` 表示**不做拆分**。
-   */
-  sceneFields?: readonly string[] | false;
   /** 采样的纹理。 */
   textures?: readonly (string | MaterialTextureDesc)[];
 
@@ -301,18 +247,6 @@ export class Material {
     stepMode: VertexStepMode;
   }[];
   readonly uniforms: UniformLayout | null;
-  /**
-   * 「每 draw 一次」的 uniform 块布局（`u.*`）；拆分后可能是 `null`（所有字段都进了场景块）。
-   * 不做拆分时它与 {@link uniforms} 是**同一个对象**。
-   */
-  readonly drawUniforms: UniformLayout | null;
-  /**
-   * 「每帧一次」的场景块布局（`uScene.*`）；没有场景字段时为 `null`
-   * ——这时渲染器的行为与拆分前完全一致。
-   */
-  readonly sceneUniforms: UniformLayout | null;
-  /** 进了场景块的字段名（着色器源码里 `u.名字` 会被改写成 `uScene.名字`）。 */
-  readonly sceneFieldNames: readonly string[];
   readonly textures: readonly ResolvedMaterialTexture[];
 
   /** 注入声明后的 GLSL 源码。 */
@@ -344,17 +278,6 @@ export class Material {
       this.uniforms = null;
     }
 
-    /*
-     * 把布局拆成两块：
-     * - 场景块（`uScene.*`）：相机矩阵、时间、分辨率、光源…每帧只写一次；
-     * - 每 draw 块（`u.*`）：model / normalMatrix / 颜色…每次 draw 都要换。
-     * 没有场景字段时不做拆分（draw 块就是原布局本身），行为与拆分前逐字节一致。
-     */
-    const split = splitUniformLayout(this.uniforms, desc.sceneFields);
-    this.drawUniforms = split.draw;
-    this.sceneUniforms = split.scene;
-    this.sceneFieldNames = split.sceneFieldNames;
-
     /* ---- 纹理 ------------------------------------------------------------------------------ */
     const rawTextures = (desc.textures ?? []).map((entry) =>
       typeof entry === 'string' ? ({ name: entry } as MaterialTextureDesc) : entry,
@@ -375,7 +298,7 @@ export class Material {
     const textureGroup = this.uniforms ? 1 : 0;
 
     /* ---- GLSL 注入 ------------------------------------------------------------------------- */
-    const glslUniforms = this.uniformDeclarations('glsl');
+    const glslUniforms = this.uniforms ? this.uniforms.glslDeclaration() : '';
     const glslTextures = this.textures
       .map(
         (texture) =>
@@ -387,12 +310,12 @@ export class Material {
       .join('\n');
 
     this.glsl = {
-      vs: inject(rewriteSceneAccess(desc.glsl.vs, this.sceneFieldNames), [
+      vs: inject(desc.glsl.vs, [
         { placeholder: UNIFORM_PLACEHOLDER, text: glslUniforms },
         { placeholder: ATTRIBUTE_PLACEHOLDER, text: glslAttributes },
         { placeholder: TEXTURE_PLACEHOLDER, text: glslTextures },
       ]),
-      fs: inject(rewriteSceneAccess(desc.glsl.fs, this.sceneFieldNames), [
+      fs: inject(desc.glsl.fs, [
         { placeholder: UNIFORM_PLACEHOLDER, text: glslUniforms },
         { placeholder: TEXTURE_PLACEHOLDER, text: glslTextures },
       ]),
@@ -412,8 +335,8 @@ export class Material {
     }
 
     /* ---- WGSL 注入 ------------------------------------------------------------------------- */
-    const wgslSource = rewriteSceneAccess(desc.wgsl, this.sceneFieldNames);
-    const wgslUniforms = this.uniformDeclarations('wgsl');
+    const wgslSource = desc.wgsl;
+    const wgslUniforms = this.uniforms ? this.uniforms.wgslDeclaration() : '';
     const wgslTextures = this.textures
       .map((texture) => {
         const samplerType = texture.comparison && texture.sampleType === 'depth' ? 'sampler_comparison' : 'sampler';
@@ -461,16 +384,6 @@ export class Material {
       code: { vs: this.glsl.vs, fs: this.glsl.fs, wgsl: this.wgsl },
       defines: this.desc.defines,
     });
-  }
-
-  /** 两个 uniform 块的声明文本（场景块在前）；`wgsl` 走 struct + binding，否则走 GLSL std140。 */
-  private uniformDeclarations(language: 'glsl' | 'wgsl'): string {
-    const blocks = [this.sceneUniforms, this.drawUniforms].filter(
-      (layout): layout is UniformLayout => layout !== null,
-    );
-    return blocks
-      .map((layout) => (language === 'glsl' ? layout.glslDeclaration() : layout.wgslDeclaration()))
-      .join('\n');
   }
 
   /** 按需创建 bind group layout（group 0 的 uniform 部分）；没有 uniform 块时返回 `null`。 */
@@ -598,31 +511,6 @@ export class Material {
     return this.textures.map((texture) => texture.name);
   }
 
-  /**
-   * 为**每 draw 块**创建一套数值容器，并写入描述里属于这个块的初始值。
-   * 没有拆分（或所有字段都在场景块里）时返回 `null`。
-   */
-  createDrawUniforms(): Uniforms<UniformLayoutDesc> | null {
-    return this.drawUniforms ? this.createBlockUniforms(this.drawUniforms) : null;
-  }
-
-  /** 为**场景块**创建一套数值容器（渲染器每帧写它一次）。没有场景块时返回 `null`。 */
-  createSceneUniforms(): Uniforms<UniformLayoutDesc> | null {
-    return this.sceneUniforms ? this.createBlockUniforms(this.sceneUniforms) : null;
-  }
-
-  /** 按块创建容器：`defaults` 里不属于这个块的字段会被跳过（它们归另一个块）。 */
-  private createBlockUniforms(layout: UniformLayout): Uniforms<UniformLayoutDesc> {
-    const values = createUniforms(layout) as Uniforms<UniformLayoutDesc>;
-    if (this.desc.defaults) {
-      for (const [name, value] of Object.entries(this.desc.defaults)) {
-        if (!values.has(name)) continue;
-        values.set(name as never, value as never);
-      }
-    }
-    return values;
-  }
-
   resolveBlend(): BlendState | null {
     const blend = this.desc.blend;
     if (blend === undefined || blend === 'none') return null;
@@ -645,35 +533,17 @@ export class Material {
     const visibility = 0x0003;
 
     if (group === 0 && this.uniforms) {
-      // 两个块都在 group 0：绘制块用布局原本的 binding，场景块用它的下一个（两个后端都支持
-      // 同一个 group 里多个 uniform buffer；动态偏移按 binding 升序传入）。
-      const dynamic = this.desc.dynamicUniforms !== false;
-      if (this.drawUniforms) {
-        entries.push({
-          binding: this.drawUniforms.binding,
-          visibility,
-          type: BindingType.Uniform,
-          name: this.drawUniforms.structName,
-          buffer: {
-            type: 'uniform',
-            hasDynamicOffset: dynamic,
-            minBindingSize: this.drawUniforms.byteLength,
-          },
-        });
-      }
-      if (this.sceneUniforms) {
-        entries.push({
-          binding: this.sceneUniforms.binding,
-          visibility,
-          type: BindingType.Uniform,
-          name: this.sceneUniforms.structName,
-          buffer: {
-            type: 'uniform',
-            hasDynamicOffset: dynamic,
-            minBindingSize: this.sceneUniforms.byteLength,
-          },
-        });
-      }
+      entries.push({
+        binding: this.uniforms.binding,
+        visibility,
+        type: BindingType.Uniform,
+        name: this.uniforms.structName,
+        buffer: {
+          type: 'uniform',
+          hasDynamicOffset: this.desc.dynamicUniforms !== false,
+          minBindingSize: this.uniforms.byteLength,
+        },
+      });
     }
     const textureGroup = this.uniforms ? 1 : 0;
     if (group === textureGroup) {
@@ -705,78 +575,6 @@ export class Material {
 /** 定义一个材质。 */
 export function defineMaterial(desc: MaterialDesc): Material {
   return Material.create(desc);
-}
-
-/**
- * 把一份 uniform 布局拆成「场景块」与「每 draw 块」。
- *
- * 边界情况都退化成**不拆分**（`draw` 就是原布局本身、`scene` 为 `null`），这样老路径
- * 逐字节不变：
- * - `uniforms` 为空；
- * - `sceneFields: false`；
- * - 布局里一个场景字段都没有；
- * - 所有字段都是场景字段（此时 `draw` 为 `null`，场景块接管原 binding）。
- */
-function splitUniformLayout(
-  uniforms: UniformLayout | null,
-  explicit: readonly string[] | false | undefined,
-): { draw: UniformLayout | null; scene: UniformLayout | null; sceneFieldNames: readonly string[] } {
-  if (!uniforms) return { draw: null, scene: null, sceneFieldNames: [] };
-  if (explicit === false) return { draw: uniforms, scene: null, sceneFieldNames: [] };
-
-  const wanted = new Set(explicit ?? SCENE_UNIFORM_NAMES);
-  const sceneDesc: Record<string, UniformLayoutDesc[string]> = {};
-  const drawDesc: Record<string, UniformLayoutDesc[string]> = {};
-  const sceneFieldNames: string[] = [];
-  for (const field of uniforms.fields) {
-    // `model` / `normalMatrix` 永远留在每 draw 块（见 DRAW_ONLY_FIELDS）。
-    if (wanted.has(field.name) && !DRAW_ONLY_FIELDS.includes(field.name)) {
-      sceneDesc[field.name] = field.type;
-      sceneFieldNames.push(field.name);
-    } else {
-      drawDesc[field.name] = field.type;
-    }
-  }
-  if (sceneFieldNames.length === 0) return { draw: uniforms, scene: null, sceneFieldNames: [] };
-
-  // GLSL 的块名要靠 `gl.getUniformBlockIndex` 定位，所以两个块的名字必须不同。
-  const structName = uniforms.structName;
-  const draw = Object.keys(drawDesc).length > 0
-    ? defineUniforms(drawDesc, {
-        structName,
-        group: uniforms.group,
-        binding: uniforms.binding,
-      })
-    : null;
-  const scene = defineUniforms(sceneDesc, {
-    structName: `${structName}Scene`,
-    // 两个块的实例名不能相同（GLSL/WGSL 都会报重定义），场景块用 uScene。
-    instanceName: SCENE_BLOCK_INSTANCE,
-    group: uniforms.group,
-    // 绘制块不存在时场景块接管原 binding（bind group 里不能有空洞的 binding 序号也没关系，
-    // 但复用原序号能让「只有一个块」的材质与拆分前完全一致）。
-    binding: draw ? uniforms.binding + 1 : uniforms.binding,
-  });
-  return { draw, scene, sceneFieldNames };
-}
-
-/**
- * 把 `u.<场景字段>` 改写成 `uScene.<场景字段>`。
- *
- * 为什么可以用文本改写：材质源码里对 uniform 块的引用只有 `u.成员` 这一种写法，
- * 而我们只改**确定的字段名**（都来自这个材质自己的布局），配上 `\b` 边界后
- * `u.modelView` 这类同前缀的标识符不会被误伤。调用方因此一行源码都不用改。
- */
-function rewriteSceneAccess(source: string, fieldNames: readonly string[]): string {
-  if (fieldNames.length === 0) return source;
-  let rewritten = source;
-  for (const name of fieldNames) {
-    rewritten = rewritten.replace(
-      new RegExp(`\\bu\\.${name}\\b`, 'g'),
-      `${SCENE_BLOCK_INSTANCE}.${name}`,
-    );
-  }
-  return rewritten;
 }
 
 /** 便于外部构造混合状态时复用类型。 */
