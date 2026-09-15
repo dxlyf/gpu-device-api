@@ -6,7 +6,7 @@
  * 使得在错误时机访问映射范围时能给出可读的报错，而不是 WebGPU 的通用校验失败。
  */
 
-import type { Buffer, BufferDescriptor, MapMode } from '../../core/resources/Buffer.js';
+import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { assertNonNegativeInteger, assertPositiveInteger } from '../../utils/assert.js';
@@ -22,13 +22,17 @@ export class WebGPUBuffer implements Buffer {
   private _disposed = false;
   private _mapped = false;
   /**
-   * `mapAsync` 交给上层的映射视图。
+   * `mapAsync` 时向原生取到的**整段映射内存**（`GPUBuffer.getMappedRange()` 的返回值）。
    *
-   * 必须记下来：WebGPU 规定同一个映射范围只能被 `getMappedRange` 取一次
-   *（第二次会以「与已返回的范围重叠」报错），而 core 的 `Buffer` 契约是
-   * 「`mapAsync` 以映射范围 resolve，`getMappedRange` 再取当前映射范围」——
-   * 也就是两个方法都要能用（WebGL2 后端就是这样）。所以这里自己记着已经交出去的视图，
-   * 第二次调用直接复用，不再往原生对象上问一遍。
+   * 必须记下来，两个原因：
+   *
+   * 1. WebGPU 规定同一个映射范围只能被原生 `getMappedRange()` 取一次，重复取（哪怕完全
+   *    相同的范围）都会以「与已返回的范围重叠」报错，而 core 的 `Buffer` 契约是
+   *    「`mapAsync` 以映射范围 resolve，`getMappedRange` 再取当前映射范围」——
+   *    两个方法都要能用（WebGL2 后端就是这样）。所以这里自己记着已经交出去的那一块内存，
+   *    后续一律在它上面建视图，不再往原生对象上问第二遍。
+   * 2. 它是原生返回的、指向**映射内存**的 `ArrayBuffer`：在它上面建 TypedArray 视图就是
+   *    「不拷贝地访问映射内存」，写入自然落到 buffer 上。
    */
   private mappedRange: { offset: number; size: number; data: ArrayBuffer } | null = null;
 
@@ -75,8 +79,14 @@ export class WebGPUBuffer implements Buffer {
   /**
    * 把 buffer 的某个范围映射给 CPU，并以该范围的 `ArrayBuffer` resolve。
    *
-   * WebGPU 的 `mapAsync` 本身只 resolve 一个 `undefined`，因此这里在映射完成后立即
-   * 调用 `getMappedRange(offset, size)`，把上层真正想拿到的视图返回出去。
+   * WebGPU 的 `mapAsync` 本身只 resolve 一个 `undefined`，因此这里在映射完成后立即调用原生
+   * `getMappedRange()`，把它返回的**映射内存**交给上层 —— 那是视图而不是副本，写入会真正落到
+   * buffer 上（`unmap()` 时刷给 GPU）。
+   *
+   * 注意传给原生的偏移量是 **0**：规范的 `GPUBuffer.getMappedRange(offset, size)` 里 `offset`
+   * 相对**映射范围的起点**（也就是这里 `mapAsync(mode, offset, size)` 的 `offset`），不是相对
+   * buffer 起点。再传一次绝对偏移量会越界报错（旧实现就有这个问题），而 core 的契约
+   * （与 WebGL2 后端一致）同样是「`getMappedRange` 的偏移量相对映射起点」。
    */
   async mapAsync(mode: MapMode, offset = 0, size?: number): Promise<ArrayBuffer> {
     this.assertUsable('Buffer.mapAsync');
@@ -89,18 +99,39 @@ export class WebGPUBuffer implements Buffer {
     this.assertRange(offset, mapSize, 'Buffer.mapAsync');
     await this.native.mapAsync(toGPUMapMode(mode), offset, mapSize);
     this._mapped = true;
-    const data = this.native.getMappedRange(offset, mapSize);
+    const data = this.native.getMappedRange(0, mapSize);
     this.mappedRange = { offset, size: mapSize, data };
     return data;
   }
 
   /**
-   * 当前已映射的范围（偏移量相对于映射起点，与 WebGL2 后端一致）。
+   * 当前已映射的范围里的一段（`offset` 相对映射起点，与 WebGL2 后端一致）。
    *
-   * 不再直接问原生 `GPUBuffer`：同一个范围只能被取一次，重复取会报
-   * 「overlaps with previously returned range」。
+   * ## 返回的是视图，不是副本
+   *
+   * - 整段范围：直接返回 `mapAsync()` 给出去的那个 `ArrayBuffer`（原生映射内存本身）；
+   * - 部分范围：返回**建在同一块内存上的 `Uint8Array` 视图**（`new Uint8Array(data, offset, size)`）。
+   *
+   * 绝不使用 `slice()`：那是拷贝，写进去的数据在 `unmap()` 时不会被上传 —— 这正是本次修复
+   * 掉的缺陷（`mapAsync('write')` → `getMappedRange(offset, size)` → 写 → `unmap()` 静默失效）。
+   *
+   * ## 为什么不去问原生要子范围
+   *
+   * 原生 `getMappedRange()` 的每一段范围只能取一次，与已返回的范围重叠即报错；而 `mapAsync()`
+   * 已经取走了整段映射内存，再取任何子范围都与之重叠。所以子范围一律在已取到的那块内存上建视图：
+   * 由于 `data` 本身就是映射内存，这样做得到的是**同一块内存**上的别名，
+   * 重复调用同一段范围（`getMappedRange(4, 4)` 两次）也一定拿到 `view.buffer` 相同的视图，
+   * 而不是各拿一份副本。
+   *
+   * ## 生命周期（与原生一致）
+   *
+   * `unmap()` 会让原生映射内存 detach，之前取出的 `ArrayBuffer` 与建在它上面的视图一起失效：
+   * `byteLength` / `length` 变成 0，读元素得到 `undefined`，写元素被**静默忽略**
+   * （越界写按规范就是空操作），只有真正触碰底层内存的调用（`slice()` 等）会抛 `TypeError`。
+   * 因此调用方必须在 `unmap()` **之前**把要留下的数据拷出来（`range.slice()`）；
+   * `unmap()` 之后再访问这些视图是未定义行为，本库不保证任何结果。
    */
-  getMappedRange(offset = 0, size?: number): ArrayBuffer {
+  getMappedRange(offset = 0, size?: number): MappedRange {
     this.assertUsable('Buffer.getMappedRange');
     const mapped = this.mappedRange;
     if (!this._mapped || !mapped) {
@@ -111,11 +142,14 @@ export class WebGPUBuffer implements Buffer {
     const mapSize = size ?? mapped.size - offset;
     this.assertRange(offset, mapSize, 'Buffer.getMappedRange', mapped.size);
     if (offset === 0 && mapSize === mapped.size) return mapped.data;
-    return mapped.data.slice(offset, offset + mapSize);
+    return new Uint8Array(mapped.data, offset, mapSize);
   }
 
   /**
    * 结束映射：`'write'` 映射会在此把 CPU 侧的改动刷给 GPU，`'read'` 映射在此释放映射内存。
+   *
+   * 原生 `unmap()` 同时会 detach 掉之前 `getMappedRange()` 返回的映射内存，所以本类交出去的
+   * `ArrayBuffer` 与它上面的视图在调用之后就失效了（见 {@link WebGPUBuffer.getMappedRange}）。
    *
    * 未映射时是空操作（WebGPU 的 `unmap()` 对未映射 buffer 同样是合法的空操作），
    * 这样清理路径里可以放心地无条件调用。

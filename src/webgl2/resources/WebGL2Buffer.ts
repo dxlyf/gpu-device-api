@@ -26,6 +26,12 @@
  * - `read`：立即用 `getBufferSubData` 读回一段内存；
  * - `write`：先分配一段内存，`unmap()` 时用 `bufferSubData` 上传。
  *
+ * 影子内存与 WebGPU 的映射内存语义要对齐（否则「同一份代码两个后端」会出现静默差异）：
+ * - `getMappedRange()` 返回的是影子 `ArrayBuffer` 上的**视图**（部分范围是 `Uint8Array` 视图，
+ *   不是 `slice()` 出来的副本），写进视图就等于写进影子内存，`unmap()` 上传时自然带上；
+ * - `unmap()` 之后影子内存会被 detach（见 {@link detachShadow}），与 WebGPU 的
+ *   `GPUBuffer.unmap()` 一样让之前取出的视图失效。
+ *
  * 因此 `unmap()` 在 WebGL2 上是**同步生效**的，而 WebGPU 是队列时序。这个差异只影响
  * 「同一帧里改同一块 buffer 再重复读回」这种极端用法，正常的上传/读回流程两者一致。
  */
@@ -34,7 +40,7 @@ import { ValidationError } from '../../core/errors/ValidationError.js';
 import { BufferUsage } from '../../core/enums/BufferUsage.js';
 import { assertNonNegativeInteger, assertPositiveInteger } from '../../utils/assert.js';
 import { nextId } from '../../utils/id.js';
-import type { Buffer, BufferDescriptor, MapMode } from '../../core/resources/Buffer.js';
+import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 
 /** WebGL2 无法表达的 usage 位，创建时直接拦下。 */
@@ -56,13 +62,41 @@ const UNSUPPORTED_USAGE: readonly { flag: number; name: string; reason: string }
   },
 ];
 
-interface MappedRange {
+/**
+ * 一次映射的内部记录（影子内存实现）。
+ *
+ * 名字刻意不叫 `MappedRange`：core 里的 {@link MappedRange} 是 `getMappedRange()` 的**返回值**
+ * （映射内存上的视图），这里是映射本身的状态，两者不是一回事。
+ */
+interface Mapping {
   mode: MapMode;
   offset: number;
   size: number;
   data: ArrayBuffer;
   /** `write` 模式在 `unmap` 时据此决定上传范围。 */
   dirty: boolean;
+}
+
+/**
+ * 把影子内存置为 detached，让之前取出的视图与 WebGPU 的 `unmap()` 一样失效。
+ *
+ * 原生 `GPUBuffer.unmap()` 会 detach 掉映射内存，因此 WebGPU 后端的视图在 `unmap()` 之后
+ * 长度归零、写入被静默忽略、`slice()` 抛 `TypeError`；WebGL2 的影子内存是普通 `ArrayBuffer`，
+ * 只有 `ArrayBuffer.prototype.transfer()`（ES2024，Chrome 114+ / Node 22+）能在不拷贝的前提下
+ * 把它 detach 掉，所以这里按能力检测使用。
+ *
+ * 旧引擎上没有 `transfer()` 时只能保留影子内存：那时 `unmap()` 之后视图仍可读写（读到的是
+ * 已经上传过的旧影子内容）。这个差异**不影响正确用法** —— 调用方本来就该在 `unmap()` 之前
+ * 把数据拷走 —— 属于 core 契约里写明的「未定义行为」，不保证任何结果。
+ */
+function detachShadow(view: ArrayBuffer): void {
+  const transfer = (view as ArrayBuffer & { transfer?: (newByteLength?: number) => ArrayBuffer }).transfer;
+  if (typeof transfer !== 'function') return;
+  try {
+    transfer.call(view, 0);
+  } catch {
+    // 已经被 detach（或引擎拒绝对这块内存做 transfer）不是错误：目的只是尽力让它失效。
+  }
 }
 
 export class WebGL2Buffer implements Buffer {
@@ -87,7 +121,7 @@ export class WebGL2Buffer implements Buffer {
   private readonly onDestroy: (buffer: WebGL2Buffer) => void;
   /** 以 buffer 引用的形式登记 usage，便于调试时追踪（GL 本身不关心）。 */
   private readonly usages: BufferUsage;
-  private mapping: MappedRange | null = null;
+  private mapping: Mapping | null = null;
   private _disposed = false;
 
   constructor(
@@ -178,23 +212,47 @@ export class WebGL2Buffer implements Buffer {
     return this.mapping.data;
   }
 
-  getMappedRange(offset = 0, size?: number): ArrayBuffer {
+  /**
+   * 当前已映射范围里的一段（`offset` 相对映射起点，与 WebGPU 后端一致）。
+   *
+   * ## 返回的是影子内存上的视图，不是副本
+   *
+   * - 整段范围：直接返回 `mapAsync()` 给出去的那个影子 `ArrayBuffer`；
+   * - 部分范围：返回**建在同一块影子内存上的 `Uint8Array` 视图**（等价于
+   *   `new Uint8Array(mapping.data).subarray(offset, offset + length)`）。
+   *
+   * 之前这里用 `slice()` 返回副本，于是 `mapAsync('write')` → `getMappedRange(offset, size)` →
+   * 写 → `unmap()` 的数据**上传的是零**（写进了临时副本），与 WebGPU 后端一致地错，
+   * 任何后端对比都发现不了。现在两端都是视图语义。
+   *
+   * ## 生命周期
+   *
+   * `unmap()` 之后影子内存被 detach，视图随之失效（长度归零、读得到 `undefined`、写入被静默忽略，
+   * `slice()` 之类的调用抛 `TypeError`），与 WebGPU 的 `unmap()` 一致。要在 `unmap()` **之前**
+   * 把数据拷走（`range.slice()`）；之后再访问属于未定义行为。
+   */
+  getMappedRange(offset = 0, size?: number): MappedRange {
     const mapping = this.mapping;
     if (!mapping) {
       throw new ValidationError(
         `[gpu-device-api] buffer「${this.label}」尚未映射，请先 await mapAsync()。`,
       );
     }
-    if (offset === 0 && size === undefined) return mapping.data;
     const length = size ?? mapping.size - offset;
     if (offset < 0 || length <= 0 || offset + length > mapping.size) {
       throw new ValidationError(
         `[gpu-device-api] getMappedRange(${offset}, ${length}) 超出已映射范围 ${mapping.size}。`,
       );
     }
-    return mapping.data.slice(offset, offset + length);
+    if (offset === 0 && length === mapping.size) return mapping.data;
+    return new Uint8Array(mapping.data, offset, length);
   }
 
+  /**
+   * 结束映射：`write` 映射在此把影子内存上传到 GL buffer，然后让映射视图失效。
+   *
+   * 上传必须在 detach **之前**做（detach 之后影子内存就不可读了）；未映射时是空操作。
+   */
   unmap(): void {
     const mapping = this.mapping;
     if (!mapping) return;
@@ -202,6 +260,7 @@ export class WebGL2Buffer implements Buffer {
     if (mapping.mode === 'write' && mapping.dirty) {
       this.upload(mapping.offset, new Uint8Array(mapping.data));
     }
+    detachShadow(mapping.data);
   }
 
   /**

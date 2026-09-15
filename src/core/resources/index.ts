@@ -2,6 +2,7 @@ export {
   type Buffer,
   type BufferDescriptor,
   type MapMode,
+  type MappedRange,
 } from './Buffer.js';
 export {
   TextureDimension,

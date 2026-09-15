@@ -270,15 +270,38 @@ export class WebGPUCommandEncoder implements CommandEncoder {
    *
    * 如果有 pass 还开着，会先隐式 `end()` —— 与 WebGPU 原生的 `finish()` 行为一致
    * （否则留在录制中的 pass 会被静默丢弃）。
+   *
+   * ## 为什么在 finish() 里就 untrack
+   *
+   * 之前只有 `dispose()` 才把 encoder 从设备的资源追踪集合里摘掉，而 core 的 `CommandEncoder`
+   * 接口**没有** `dispose()`（见 `core/render/CommandEncoder.ts`），于是「每帧建一个 encoder、
+   * `finish()` 之后丢掉」这种最标准的用法会让 `WebGPUDevice.resources` 无上限增长：
+   * 每个包装对象连同它的原生 `GPUCommandEncoder` 一直被强引用到 `device.dispose()`。
+   * command encoder 是每帧都建的东西，这是一次实打实的每帧泄漏。
+   *
+   * **语义安全性**：`finish()` 之后本对象上的**每一个**方法都会先过 `assertRecording()` 抛错
+   * （`beginRenderPass` / `beginComputePass` / 全部 copy / `clearBuffer` / `resolveQuerySet` /
+   * `writeTimestamp` / 三个 debug marker 方法 / `finish` 自身），唯一还允许调用的是幂等的
+   * `dispose()`；`beginRenderPass` / `beginComputePass` 返回的 pass 也会在 finish 之前被
+   * `closeOpenPass()` 结束掉（pass 的 `end()` 之后同样不可再用）。也就是说 finish 之后这个
+   * encoder 不可能再产生任何设备侧工作，设备追踪集合存在的唯一目的
+   * （`device.dispose()` 时统一释放）对它已经没有意义，提前摘掉不会留下任何可用的悬空引用。
    */
   finish(): CommandBuffer {
     this.assertRecording('finish');
     this.closeOpenPass();
     this._finished = true;
+    // 录完即从设备追踪里摘掉：finish 之后它不可再用（见上面的论证），
+    // 继续留着就是每帧一份的泄漏。dispose() 之后仍可再调用（Set.delete 幂等）。
+    this.device.untrack(this);
     return new WebGPUCommandBuffer(this.label, this.native.finish());
   }
 
-  /** 释放本 encoder 的包装对象（不影响已经 finish 出来的 command buffer）。 */
+  /**
+   * 释放本 encoder 的包装对象（不影响已经 finish 出来的 command buffer）。
+   *
+   * 幂等：`finish()` 已经摘过一次追踪，这里再摘一次是空操作；重复调用也不会抛错。
+   */
   dispose(): void {
     this._disposed = true;
     this.device.untrack(this);
