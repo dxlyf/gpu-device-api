@@ -99,6 +99,24 @@ export interface Device {
     readonly native: GPUDevice | WebGL2RenderingContext;
     /** 设备丢失（或被销毁）后 resolve。永远不会 reject。 */
     readonly lost: Promise<DeviceLostInfo>;
+    /**
+     * 已丢失时的信息（原因 + 说明）；尚未丢失时为 `null`。
+     *
+     * 与 {@link Device.lost} 表达同一件事，区别是**可以同步查询**：`lost` 只能 `await`，
+     * 而帧循环里需要一个「现在还能不能提交」的判断。
+     */
+    readonly lostInfo: DeviceLostInfo | null;
+    /**
+     * 设备是否仍然可用：既没有 `dispose()`，也没有丢失。
+     *
+     * **两个后端的恢复能力不同，而且都不完整**（详见 `docs/backend-limits.md`）：
+     * - WebGPU：`GPUDevice` 一旦丢失就永久失效，本层只能检测与报错，恢复 = 重新 `requestDevice`
+     *   并通过 adapter 重建全部资源；
+     * - WebGL2：`webglcontextlost` 之后所有 GL 对象失效；`webglcontextrestored` 只让 canvas 上
+     *   的 context 重新可用，本层无法重建已有的包装对象，因此 `usable` 不会回到 true，
+     *   恢复同样 = 重新创建设备与资源。
+     */
+    readonly usable: boolean;
     /** 调用 {@link Device.dispose} 之后为 true。 */
     readonly disposed: boolean;
     createBuffer(descriptor: BufferDescriptor): Buffer;

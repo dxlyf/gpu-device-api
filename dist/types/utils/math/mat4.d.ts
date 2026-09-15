@@ -102,6 +102,33 @@ export declare function perspective(out: Mat4, fovy: number, aspect: number, nea
  * 参数含义同 {@link perspective}，只是深度映射区间不同。
  */
 export declare function perspectiveZO(out: Mat4, fovy: number, aspect: number, near: number, far: number): Mat4;
+/**
+ * 在**裁剪空间**把 Y 取反：`out = diag(1, -1, 1, 1) × a`。
+ *
+ * 传进来的 `a` 通常是**投影矩阵**或**投影视图矩阵**；结果就是把每个顶点变换出来的
+ * `gl_Position.y` / `out.position.y` 全部取反 —— 与在着色器里手写 `gl_Position.y *= -1`
+ * 逐位等价（本函数只改第 1、5、9、13 个分量，列主序下正好是各列的 Y 行）。
+ * 因为 Y 取反是「过 xz 平面的一次镜像」，它同时会**反转三角形的绕序**：
+ * 原本逆时针（`frontFace: 'ccw'`）的三角形会变成顺时针。所以调用方如果开了背面剔除，
+ * 必须把 `frontFace` 一起换过来（`'ccw'` ↔ `'cw'`），否则会把正面剔掉。
+ *
+ * ## 什么时候需要它
+ *
+ * 只在**渲染进纹理**（离屏目标）时需要，而且只在 WebGL2 上：
+ * GL 的窗口原点在左下，附着到 FBO 上的纹理自下而上存储，与 WebGPU 的
+ * 「纹素 (0, 0) 在左上」相反（见 `RenderTarget.rowOrder`）。把投影翻一次之后，渲染结果就落在
+ * WebGPU 那一套行序上，后面的采样与读回都不必再补偿。
+ *
+ * **画布默认帧缓冲不要翻**：浏览器合成到屏幕那一侧本来就是对的（真实合成截图可以证明
+ * 两个后端的画布原样一致率是 100%），翻了反而上下颠倒。
+ *
+ * ```ts
+ * const projection = mat4.create();
+ * if (target.rowOrder === 'bottomUp') mat4.flipClipY(projection, camera.projectionMatrix);
+ * else mat4.copy(projection, camera.projectionMatrix);
+ * ```
+ */
+export declare function flipClipY(out: Mat4, a: Mat4): Mat4;
 /** 正交投影，裁剪空间 z ∈ [-1, 1]（OpenGL / WebGL2）。 */
 export declare function ortho(out: Mat4, left: number, right: number, bottom: number, top: number, near: number, far: number): Mat4;
 /** 正交投影，裁剪空间 z ∈ [0, 1]（WebGPU / D3D / Vulkan）。 */

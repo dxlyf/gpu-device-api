@@ -12,6 +12,7 @@
  */
 import type { VertexBufferLayout } from '../../core/pipeline/VertexLayout.js';
 import type { RenderPipeline, RenderPipelineDescriptor, RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
+import type { CompilationInfo, PrewarmOptions, PrewarmResult } from '../../core/pipeline/CompilationInfo.js';
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
@@ -60,6 +61,11 @@ export interface WebGL2RenderPipelineOptions {
         maxVertexAttributes: number;
         maxVertexBufferArrayStride: number;
     };
+    /**
+     * 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+     * （见 `WebGL2Device.untrack`）。不传时为空操作，管线仍可独立使用。
+     */
+    onDispose?: (pipeline: WebGL2RenderPipeline) => void;
 }
 export declare class WebGL2RenderPipeline implements RenderPipeline {
     readonly label: string;
@@ -69,6 +75,7 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
     private readonly gl;
     private readonly state;
     private readonly limits;
+    private readonly onDispose;
     private readonly program;
     private readonly plan;
     private readonly topologyMode;
@@ -90,6 +97,30 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
     resolveVariant(variant?: Partial<RenderPipelineVariant>): ResolvedVariant;
     /** core 接口要求的 `resolve`；WebGL2 下它只做一次形态缓存查询。 */
     resolve(variant?: Partial<RenderPipelineVariant>): unknown;
+    /**
+     * 预热报告。
+     *
+     * WebGL2 的编译 + 链接发生在 `createRenderPipeline()` 里（`ProgramCache.acquire()`），
+     * 所以**管线对象存在时 program 一定已经链接完了**，这里没有东西可以再等 —— 能做的是
+     * 如实汇报它是怎么等出来的，以及带上诊断（真实行号）。
+     *
+     * | 情况 | `mode` | 说明 |
+     * | --- | --- | --- |
+     * | 事先调用过 `ProgramCache.compileAsync()`（`KHR_parallel_shader_compile` 可用） | `'async'` | 链接真异步完成，管线创建时零 GL 调用 |
+     * | 扩展缺失，`compileAsync()` 退化成同步 | `'sync'` | `reason` 说明缺扩展 |
+     * | 直接 `device.createRenderPipeline()`（没预热过） | `'sync'` | `reason` 提示先在创建管线前调 `compileAsync()` |
+     *
+     * **真想异步就调 `prewarmWebGL2RenderPipeline(device, descriptor)`**（`src/webgl2/pipeline/Prewarm.ts`）：
+     * 它在创建管线**之前**先把 program 链接好，之后 `createRenderPipeline()` 的 `acquire()` 直接命中缓存。
+     */
+    prewarm(_variant?: Partial<RenderPipelineVariant>, _options?: PrewarmOptions): Promise<PrewarmResult>;
+    /**
+     * 编译诊断：WebGL2 走的是 `getShaderInfoLog()` / `getProgramInfoLog()` 的原文，
+     * 在 program 编译/链接的那一刻就解析好并挂在 `CompiledProgram.compilationInfo` 上。
+     * `lineNum` 是真实的（从 GL 日志里解析出来的行号，指向**包好前言之后的最终源码**），
+     * `linePos` 恒为 `null`（GL 的日志只有行号，没有列号）。
+     */
+    getCompilationInfo(): Promise<CompilationInfo>;
     /** 把该管线的固定功能状态写入 GL 状态缓存。 */
     applyState(variant: ResolvedVariant, stencilReference?: number): void;
     /**

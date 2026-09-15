@@ -9,6 +9,8 @@
  * `layout(std140)`、`layout(location = N)` 都由使用者自己写（详见 `src/shaders`）。
  */
 import type { Disposable } from '../../utils/Disposable.js';
+import type { ShaderStage } from '../enums/ShaderStage.js';
+import type { CompilationInfo } from '../pipeline/CompilationInfo.js';
 export interface ShaderSource {
     /** GLSL ES 3.00 顶点着色器。 */
     vs?: string;
@@ -62,6 +64,19 @@ export interface ShaderModule extends Disposable {
     /** GLSL 自动包装开关；WebGPU 后端会保存它但不使用（WGSL 没有版本/精度前言）。 */
     readonly glsl: GlslWrapOptions;
     dispose(): void;
+    /**
+     * **可选**：取得这份源码的编译诊断。
+     *
+     * WebGPU 后端走 `GPUShaderModule.getCompilationInfo()`，每条 message 带
+     * `type`（error/warning/info）、`lineNum`、`linePos`、`message`；
+     * WebGL2 后端的编译单元是 program 而不是 module（两个 stage 链接在一起才知道结果），
+     * 所以那里**不实现**本方法，诊断请从 `RenderPipeline.getCompilationInfo()` 取
+     *（它给出的行号同样来自 `getShaderInfoLog()` 的原文）。
+     *
+     * @param stage 需要哪个阶段的模块。WGSL 是一份源码包含所有 entry point，
+     *   所以不传时用 vertex 触发一次编译即可，诊断内容与 stage 无关。
+     */
+    getCompilationInfo?(stage?: ShaderStage): Promise<CompilationInfo>;
 }
 /** 归一化 `code` 的两种写法：字符串按 WGSL 处理。 */
 export declare function resolveShaderSource(code: string | ShaderSource): ShaderSource;

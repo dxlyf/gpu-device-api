@@ -45,6 +45,13 @@ export interface DepthStencilState {
      * 传 `null` 表示这条管线**明确不要深度测试**（例如纯 2D 叠加）。
      */
     format?: TextureFormat | null;
+    /**
+     * 只在「这条管线使用深度」时有意义：`depthWriteEnabled` / `depthCompare` 省略时落到
+     * {@link DEFAULT_DEPTH_STATE}。
+     *
+     * ⚠️ `format` 为 `null`（或整个 `depthStencil` 都不声明）时，这两个字段**不生效** ——
+     * 那条管线不使用深度，既不做深度测试也不写深度。
+     */
     depthWriteEnabled?: boolean;
     depthCompare?: CompareFunction;
     depthBias?: number;
@@ -79,6 +86,19 @@ export interface RenderState {
     colorFormats?: readonly TextureFormat[];
 }
 export declare const DEFAULT_PRIMITIVE_STATE: Required<Pick<PrimitiveState, 'topology' | 'frontFace' | 'cullMode'>>;
+/**
+ * 「这条管线使用深度」而 `depthWriteEnabled` / `depthCompare` 没写时的缺省值。
+ *
+ * ⚠️ 它**只**适用于「`depthStencil` 已声明且 `format` 不为 `null`」的情形。
+ * `depthStencil` 完全不声明、或写成 `{ format: null }`，含义都是「这条管线不使用深度/模板」：
+ * 两个后端都必须如实关掉深度测试、并且绝不写深度，**绝不能**回落到这里的
+ * `depthWriteEnabled: true`。
+ *
+ * 曾经的缺陷正是这里的回落造成的：一条声明 `{ format: null }` 的管线（画天空的全屏三角形，
+ * `gl_Position` 的深度是 0）在 WebGPU 上照样拿到了「写深度 + `less`」，于是把整个深度缓冲写成 0，
+ * 其后所有几何体的 `less` 判定全部失败、画面上只剩它自己，而且没有任何报错。
+ * WebGL2 侧一直把这种情况解释为「关掉深度测试」，所以症状只在 WebGPU 上出现。
+ */
 export declare const DEFAULT_DEPTH_STATE: {
     depthWriteEnabled: boolean;
     depthCompare: CompareFunction;

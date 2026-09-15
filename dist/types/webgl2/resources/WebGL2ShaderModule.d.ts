@@ -15,8 +15,13 @@ export declare class WebGL2ShaderModule implements ShaderModule {
     readonly source: ShaderSource;
     readonly defines: Record<string, string | number | boolean>;
     readonly glsl: GlslWrapOptions;
+    private readonly onDispose;
     private _disposed;
-    constructor(descriptor: ShaderModuleDescriptor);
+    /**
+     * @param onDispose 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+     *   （见 `WebGL2Device.untrack`）。不传时为空操作，模块仍可独立使用。
+     */
+    constructor(descriptor: ShaderModuleDescriptor, onDispose?: () => void);
     get disposed(): boolean;
     /**
      * 释放 module。
@@ -24,6 +29,8 @@ export declare class WebGL2ShaderModule implements ShaderModule {
      * GL 的 shader 对象归属于已经链接出来的 program（链接成功后 shader 对象就可以删除，
      * 不会影响 program），所以这里没有需要立即释放的 GL 资源；已编译的 program 由
      * `ProgramCache` 统一管理生命周期。
+     *
+     * 幂等：重复调用不会重复通知设备。
      */
     dispose(): void;
 }

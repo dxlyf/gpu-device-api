@@ -30,9 +30,11 @@ export { UNIFORM_PLACEHOLDER, ATTRIBUTE_PLACEHOLDER, TEXTURE_PLACEHOLDER, Materi
 export { ATTRIBUTE_PLACEHOLDER as MATERIAL_ATTRIBUTE_PLACEHOLDER, TEXTURE_PLACEHOLDER as MATERIAL_TEXTURE_PLACEHOLDER, UNIFORM_PLACEHOLDER as MATERIAL_UNIFORM_PLACEHOLDER, } from './Material.js';
 export { UniformLayout, UniformValues, UNIFORM_FIELD_TYPES, createUniforms, defineUniforms, type UniformArrayType, type UniformElementType, type UniformFieldAccessor, type UniformFieldLayout, type UniformFieldType, type UniformFieldValue, type UniformFieldValues, type UniformInput, type UniformInputValues, type UniformLayoutDesc, type UniformMatrixType, type UniformOptions, type UniformScalarType, type Uniforms, type UniformVectorType, } from './Uniforms.js';
 export { UniformArena, UniformArenaPool, type UniformArenaOptions } from './UniformArena.js';
-export { Geometry, STANDARD_ATTRIBUTE_FORMATS, createGeometry, type GeometryAttribute, type GeometryAttributeInput, type GeometryDesc, } from './Geometry.js';
-export { GfxTexture, buildMipChain, isImageSource, type ImageSource, type TextureDesc, } from './Texture.js';
-export { Renderer, type Camera, type ColorInput, type DrawOptions, type FrameOptions, type RendererOptions, type RendererStats, } from './Renderer.js';
+export { Geometry, STANDARD_ATTRIBUTE_FORMATS, createGeometry, type BoundingSphere, type GeometryAttribute, type GeometryAttributeInput, type GeometryDesc, } from './Geometry.js';
+export { FrustumCuller } from './Culling.js';
+export { compareOpaque, compareTransparent, sortDraws, type DrawSortMode, type SortableDraw, } from './DrawSort.js';
+export { GFX_UPLOAD_FORMATS, GfxTexture, buildMipChain, isImageSource, type AsyncTextureDesc, type DecodedPixels, type ImageSource, type TextureDesc, } from './Texture.js';
+export { Renderer, type Camera, type ColorInput, type DrawOptions, type FrameOptions, type MaterialPrewarmResult, type RendererOptions, type RendererPrewarmOptions, type RendererPrewarmResult, type RendererStats, type RowOrderMode, } from './Renderer.js';
 export { DEFAULT_GPU_TIMING_DELAY, DEFAULT_GPU_TIMING_FRAMES, GPU_TIMING_FEATURE, GpuTiming, describeGpuTimingFailure, type GpuTimingOptions, type GpuTimingStats, } from './GpuTiming.js';
 export { PerspectiveCamera, OrthographicCamera, type DepthRangeConvention, type PerspectiveCameraOptions, type OrthographicCameraOptions, } from './Camera.js';
 export { OrbitControls, type OrbitControlsOptions } from './OrbitControls.js';

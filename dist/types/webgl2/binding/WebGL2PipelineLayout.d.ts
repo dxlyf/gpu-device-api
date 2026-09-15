@@ -19,12 +19,21 @@ export declare class WebGL2PipelineLayout implements PipelineLayout {
     readonly bindGroupLayouts: readonly BindGroupLayout[];
     readonly isAuto: boolean;
     private readonly plan;
-    constructor(descriptor: PipelineLayoutDescriptor, isAuto: boolean, planSource: BindingPlanProvider | null);
+    private readonly onDispose;
+    private _disposed;
+    /**
+     * @param onDispose 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+     *   （见 `WebGL2Device.untrack`）。不传时为空操作。
+     */
+    constructor(descriptor: PipelineLayoutDescriptor, isAuto: boolean, planSource: BindingPlanProvider | null, onDispose?: () => void);
     get native(): WebGLBindingPlan | null;
     /** 该布局对应的绑定计划；没有 bind group 时为 `null`。 */
     get bindingPlan(): WebGLBindingPlan | null;
     get disposed(): boolean;
-    /** 布局本身不持有 GL 资源，释放由 program 缓存负责。 */
+    /**
+     * 布局本身不持有 GL 资源，释放只是标记不可用并通知设备（绑定计划由设备级缓存管理）。
+     * 幂等：重复调用不会重复通知设备。
+     */
     dispose(): void;
 }
 //# sourceMappingURL=WebGL2PipelineLayout.d.ts.map

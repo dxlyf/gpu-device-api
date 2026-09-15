@@ -11,12 +11,18 @@ export declare class WebGL2BindGroupLayout implements BindGroupLayout {
     readonly label: string;
     readonly entries: readonly BindGroupLayoutEntry[];
     readonly sortedEntries: readonly BindGroupLayoutEntry[];
+    private readonly onDispose;
     private _disposed;
-    constructor(descriptor: BindGroupLayoutDescriptor);
+    /**
+     * @param onDispose 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
+     *   （见 `WebGL2Device.untrack`）。不传时为空操作。
+     */
+    constructor(descriptor: BindGroupLayoutDescriptor, onDispose?: () => void);
     /** GL 没有布局对象，这里把条目列表本身作为「原生句柄」暴露出来。 */
     get native(): readonly BindGroupLayoutEntry[];
     get disposed(): boolean;
     entry(binding: number): BindGroupLayoutEntry | undefined;
+    /** 幂等：重复调用不会重复通知设备。 */
     dispose(): void;
 }
 /** 判断某个条目是否需要纹理（采样）资源，供 `auto` 布局推断复用。 */

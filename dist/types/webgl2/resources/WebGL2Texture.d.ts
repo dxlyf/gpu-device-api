@@ -7,6 +7,19 @@
  *
  * WebGL2 没有 texture view 对象，`createView()` 返回的是**记录子资源范围**的轻量包装，
  * 真正的 GL 纹理句柄还是同一个。
+ *
+ * **本后端的纹理行序（与 WebGPU 对齐的那一部分，以及没对齐的那一处）**
+ *
+ * - 上传：`gl.texSubImage2D` 把主机数据的第 0 行写进纹素第 0 行，**不翻**（本后端的
+ *   `writeTexture` 从不设置 `UNPACK_FLIP_Y_WEBGL`；只有 `copyExternalImageToTexture` 会按它的
+ *   `flipY` 参数设置它）。所以「数据第 0 行 = 纹素第 0 行 = `v = 0`」与 WebGPU 完全一致。
+ * - 图像来源：`copyExternalImageToTexture` 显式设置 `UNPACK_FLIP_Y_WEBGL`，语义与 WebGPU 的
+ *   `flipY` 选项一致（默认都关）。
+ * - **渲染目标（未对齐）**：GL 的窗口原点在左下角，附着到 FBO 上的纹理因此是**自下而上**存的 ——
+ *   纹素第 0 行是画面底端。WebGPU 的附件纹素 (0, 0) 在左上角。于是同一个渲染结果，
+ *   WebGL2 读回 / 采样出来的行序与 WebGPU 相反。
+ *   修法只能落在渲染路径（按目标类型把 Y 翻过来，例如给非默认帧缓冲注入 `gl_Position.y` 取反的
+ *   顶点着色器变体或等价手段 —— WebGL2 不允许负高度的 `gl.viewport`），纹理资源这一层无能为力。
  */
 import { TextureUsage } from '../../core/enums/TextureUsage.js';
 import { TextureDimension, type Texture, type TextureDescriptor } from '../../core/resources/Texture.js';
@@ -41,11 +54,24 @@ export declare class WebGL2Texture implements Texture {
     get target(): number;
     createView(descriptor?: TextureViewDescriptor): TextureView;
     /**
-     * 使用 GL 内置的 `generateMipmap` 生成 mip 链。
-     * 要求基础层已经填好内容，且纹理不是多重采样。
+     * 用 GL 内置的 `generateMipmap` 生成 mip 链（第 1 级到第 `mipLevelCount - 1` 级）。
      *
-     * 这里直接调用 `gl.bindTexture` 而不是走状态缓存 —— 因为不知道这张纹理此刻被绑在哪个单元上，
-     * 与其猜测，不如改完之后把缓存整体作废（生成 mip 发生在加载阶段，代价可以忽略）。
+     * 前提条件（不满足就抛 {@link ValidationError}，不做静默降级）：
+     * - 单采样（多重采样纹理没有 mip 链）；
+     * - `mipLevelCount > 1`（否则没有任何级别可生成）；
+     * - 格式必须是「color-renderable 且可过滤」的 unorm / 浮点格式：`generateMipmap` 内部
+     *   就是一次带滤波的降采样，整数格式（`*uint` / `*sint`）、snorm 与纯深度 / 模板格式在
+     *   GL 里都不满足这个条件，硬调用只会在 `getError()` 里留下一条很难定位的
+     *   `INVALID_OPERATION`。32 位浮点格式还需要 `EXT_color_buffer_float` 才是 color-renderable。
+     *
+     * **颜色空间（这里最容易写错）**：格式是 `rgba8unorm-srgb` 时，GL 会把纹素**先解码到线性
+     * 空间**、在线性空间做盒式滤波，再把结果编码回 sRGB 写进各级 mip。这是唯一正确的做法：
+     * 直接对 sRGB 编码字节求平均会系统性偏暗 —— 黑白棋盘的第 1 级，线性平均得到 sRGB 188，
+     * 而对编码字节求平均只有 128。实测对比见 `examples/core-texture-mipmap.ts`。
+     *
+     * 调用后会 `invalidate()` 整个状态缓存：为了生成 mip 必须把这张纹理绑到当前活动单元，
+     * 而状态缓存并不知道「当前活动单元」是哪一个，与其猜错不如整体作废。
+     * 这是加载期的一次性操作，代价可以接受。
      */
     generateMipmaps(): void;
     destroy(): void;

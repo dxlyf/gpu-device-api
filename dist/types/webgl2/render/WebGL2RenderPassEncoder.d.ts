@@ -46,6 +46,12 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     private readonly dynamicOffsets;
     private readonly vertexBuffers;
     private indexBuffer;
+    /**
+     * 本通道画进的离屏渲染目标（没有就是 canvas 默认帧缓冲或临时拼的 FBO）。
+     *
+     * 它有两个用途：多重采样目标要在 `end()` 时做 resolve；以及决定 `variantShape.sampleCount`。
+     */
+    private renderTarget;
     private stencilReference;
     private _ended;
     /**
@@ -101,6 +107,28 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
     popDebugGroup(): void;
     insertDebugMarker(label: string): void;
     end(): void;
+    /**
+     * 判断这组原始附件是否**整体**来自同一个多重采样渲染目标。
+     *
+     * 为什么需要它：上层（`Renderer`）走的是 WebGPU 风格的写法 —— `target.createPassDescriptor()`
+     * 拿到附件列表再交给 `beginRenderPass`，而不是把 `target` 直接传下来。没有这一步，
+     * 多重采样目标会落到「按附件临时拼一个单采样 FBO」的分支，MSAA 被静默忽略。
+     *
+     * 返回值：
+     * - `null`：不是多重采样目标（或者只是单采样目标的附件，此时行为与从前完全一致）；
+     * - 目标：所有附件都属于同一个多重采样目标；
+     * - 抛错：把一个多重采样目标的附件与别的目标的附件混在一起用 —— 这种组合本层无法正确
+     *   表达（renderbuffer 与纹理不能挂在同一个 FBO 上），所以明确报错而不是画错。
+     */
+    private multisampleTargetOf;
+    /**
+     * 用渲染目标自己的 framebuffer 开始通道（多重采样路径）。
+     *
+     * 清屏参数从附件列表归并而来：GL 的 `clearBuffer*` 对同一帧的所有颜色附件用同一个颜色
+     * （见 `WebGL2RenderTarget.bind`），所以这里要求各附件的 `loadOp` / `clearValue` 一致，
+     * 不一致就明确报错，而不是悄悄只按第一个附件清屏。
+     */
+    private beginMultisampleTargetPass;
     /**
      * 处理 `RenderPassDescriptor.timestampWrites` 与 `occlusionQuerySet`。
      *

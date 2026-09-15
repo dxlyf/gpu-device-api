@@ -20,6 +20,7 @@
 import type { RenderPipeline, RenderPipelineDescriptor, RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
 import type { VertexBufferLayout } from '../../core/pipeline/VertexLayout.js';
+import type { CompilationInfo, PrewarmOptions, PrewarmResult } from '../../core/pipeline/CompilationInfo.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 /** vertex / fragment 入口点缺省名，与 core 的文档一致。 */
 export declare const DEFAULT_VERTEX_ENTRY_POINT = "vsMain";
@@ -66,6 +67,30 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
     resolve(variant?: Partial<RenderPipelineVariant>): GPURenderPipeline;
     /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
     get compiledVariants(): readonly string[];
+    /**
+     * 异步预热一个 variant：优先 `createRenderPipelineAsync()`。
+     *
+     * 为什么这不只是「再调用一次 resolve()」：`createRenderPipeline` 是**同步**返回的，
+     * 驱动在后台编译，第一次真正使用这条管线的那一帧要为编译付掉卡顿；
+     * `createRenderPipelineAsync` 会等到编译完成才 resolve，于是这段等待落在预热调用里
+     *（可以在加载界面、下一帧之前、甚至 `requestIdleCallback` 里做），而不是落在渲染循环里。
+     *
+     * 预热出来的原生管线会**写进与 `resolve()` 相同的 variant 缓存**，所以首次使用该 variant 时
+     * `resolve()` 直接命中、不再产生任何 GPU 编译调用。
+     *
+     * 实现缺失 `createRenderPipelineAsync` 时退化成同步创建，`mode` 为 `'sync'` 且 `reason`
+     * 说明原因 —— 不会假装异步。编译失败同样不抛错（除非 `throwOnError`），诊断在 `info` 里。
+     */
+    prewarm(variant?: Partial<RenderPipelineVariant>, options?: PrewarmOptions): Promise<PrewarmResult>;
+    /**
+     * 编译诊断：把 vertex / fragment 两个 `GPUShaderModule` 的 `getCompilationInfo()` 合起来。
+     *
+     * WGSL 一份源码包含所有 entry point，诊断内容与 variant 无关，所以这里不需要 variant 参数
+     *（保留它只是为了与 `resolve()` / `prewarm()` 的签名对齐）。
+     */
+    getCompilationInfo(_variant?: Partial<RenderPipelineVariant>): Promise<CompilationInfo>;
+    /** 取两个阶段的诊断并合并；`failure` 是 `createRenderPipelineAsync` 抛出的原文。 */
+    private collectCompilationInfo;
     /** 释放缓存（`GPURenderPipeline` 没有 destroy）。 */
     dispose(): void;
     private resolveVariant;

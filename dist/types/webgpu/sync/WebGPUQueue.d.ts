@@ -50,7 +50,13 @@ export declare class WebGPUQueue implements Queue {
     copyBufferToBuffer(source: Buffer, sourceOffset: number, destination: Buffer, destinationOffset: number, size: number): void;
     /** buffer → texture 的拷贝；同样通过临时 command encoder 实现。 */
     copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void;
-    /** 提交 command buffer；提交后这些 buffer 不可再次使用。 */
+    /**
+     * 提交 command buffer；提交后这些 buffer 不可再次使用。
+     *
+     * **设备丢失后会抛 `DeviceLostError`**：WebGPU 规定丢失设备上的提交被静默丢弃，
+     * 不检查的话就是「每帧都在提交、画面永远不动、一行错误都没有」。这是本层唯一能
+     * 把这件事变成明确错误的地方。
+     */
     submit(commandBuffers: readonly CommandBuffer[]): void;
     /** 先前提交的全部工作都在 GPU 上完成后 resolve。 */
     onSubmittedWorkDone(): Promise<void>;

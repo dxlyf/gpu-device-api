@@ -7,6 +7,7 @@
  */
 import type { ComputePipeline, ComputePipelineDescriptor } from '../../core/pipeline/ComputePipeline.js';
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
+import type { CompilationInfo, PrewarmOptions, PrewarmResult } from '../../core/pipeline/CompilationInfo.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 /** compute 入口点缺省名，与 core 的文档一致。 */
 export declare const DEFAULT_COMPUTE_ENTRY_POINT = "csMain";
@@ -27,6 +28,19 @@ export declare class WebGPUComputePipeline implements ComputePipeline {
     resolve(): GPUComputePipeline;
     /** GPUComputePipeline 没有 destroy；释放只是清掉缓存并标记不可用。 */
     dispose(): void;
+    /**
+     * 异步预热：优先 `createComputePipelineAsync()`。
+     *
+     * 预热结果写进与 `resolve()` 相同的 `_native` 字段，所以之后第一次真正使用这条 compute
+     * 管线时不再触发 GPU 编译。实现缺失 `createComputePipelineAsync` 时退化成同步创建，
+     * `mode` 为 `'sync'`、`reason` 说明原因。失败不抛错（除非 `throwOnError`），诊断在 `info` 里。
+     */
+    prewarm(options?: PrewarmOptions): Promise<PrewarmResult>;
+    /** 编译诊断：转发 `GPUShaderModule.getCompilationInfo()`。 */
+    getCompilationInfo(): Promise<CompilationInfo>;
+    /** 组装 `GPUComputePipelineDescriptor`（预热与 `resolve()` 走同一份，避免两处漂移）。 */
+    private toGPUComputePipelineDescriptor;
+    private collectCompilationInfo;
 }
 /** 该对象是否为 WebGPU 后端的 compute pipeline。 */
 export declare function isWebGPUComputePipeline(value: unknown): value is WebGPUComputePipeline;

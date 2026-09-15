@@ -14,6 +14,7 @@
  */
 import type { GlslWrapOptions, ShaderModule, ShaderModuleDescriptor, ShaderSource } from '../../core/resources/ShaderModule.js';
 import type { ShaderStage } from '../../core/enums/ShaderStage.js';
+import type { CompilationInfo } from '../../core/pipeline/CompilationInfo.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 export declare class WebGPUShaderModule implements ShaderModule {
     readonly label: string;
@@ -23,6 +24,8 @@ export declare class WebGPUShaderModule implements ShaderModule {
     readonly glsl: GlslWrapOptions;
     private readonly device;
     private readonly modulesByStage;
+    /** 原生模块 → 诊断。`getCompilationInfo()` 一次就够，编译结果不变，缓存下来避免重复查询。 */
+    private readonly compilationInfos;
     private _disposed;
     constructor(device: WebGPUDevice, descriptor: ShaderModuleDescriptor);
     get disposed(): boolean;
@@ -46,6 +49,17 @@ export declare class WebGPUShaderModule implements ShaderModule {
     compile(stage: ShaderStage): GPUShaderModule;
     /** GPUShaderModule 没有 destroy；释放只是把本包装对象标记为不可用。 */
     dispose(): void;
+    /**
+     * 编译诊断：直接转发 `GPUShaderModule.getCompilationInfo()`，并把 `GPUCompilationMessage`
+     * 归一成后端无关的 {@link CompilationInfo}。
+     *
+     * 两条「如实说明」的规则：
+     * 1. `GPUCompilationMessage.lineNum` / `linePos` 用 **0 表示未知**，这里归一成 `null`，
+     *    免得和「第 0 行」混淆；
+     * 2. 实现没有暴露 `getCompilationInfo()` 时返回一条 `info` 级 message 说明原因，
+     *    而不是返回「0 条诊断」让人误以为编译干净。
+     */
+    getCompilationInfo(stage?: ShaderStage): Promise<CompilationInfo>;
 }
 /** 该对象是否为 WebGPU 后端的 shader module。 */
 export declare function isWebGPUShaderModule(value: unknown): value is WebGPUShaderModule;

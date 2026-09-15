@@ -13,12 +13,26 @@
  */
 import { type IndexFormat } from '../core/enums/IndexFormat.js';
 import { type VertexFormat } from '../core/enums/VertexFormat.js';
+import { type Vec3 } from '../utils/math/index.js';
 import type { VertexStepMode } from '../core/enums/VertexStepMode.js';
 import type { PrimitiveTopology } from '../core/enums/PrimitiveTopology.js';
 import type { Buffer } from '../core/resources/Buffer.js';
 import type { Device } from '../core/Device.js';
 /** 已知属性名的默认格式。自定义属性必须显式给 `format`。 */
 export declare const STANDARD_ATTRIBUTE_FORMATS: Readonly<Record<string, VertexFormat>>;
+/**
+ * 包围球（局部空间）：视锥剔除与「按深度排序」都用它。
+ *
+ * 它由几何体创建时**算一次**（遍历顶点求 AABB 的中心，再取到中心最远的顶点距离），
+ * 之后只读 —— 每帧重算包围体是纯粹的浪费，这里刻意不提供「每帧刷新」的接口：
+ * 顶点数据在创建后就不变了（`Geometry` 是只读的）。
+ */
+export interface BoundingSphere {
+    /** 球心（局部空间，3 个分量）。 */
+    readonly center: Vec3;
+    /** 半径。 */
+    readonly radius: number;
+}
 /** 单个属性的输入。 */
 export interface GeometryAttributeInput {
     data: ArrayBufferView;
@@ -41,6 +55,20 @@ export interface GeometryDesc {
     topology?: PrimitiveTopology;
     /** 显式指定顶点数；省略时按属性数据长度推断。 */
     vertexCount?: number;
+    /**
+     * 显式提供包围球，覆盖「按 `position` 顶点算出来的那个」。
+     *
+     * 两个场合非给不可：
+     * - **position 不是 `float32x3`**（例如量化过的 `unorm16x4`）：这时无法从数据推断，自动计算会被跳过；
+     * - **顶点着色器会位移顶点**（水面波动、草地摇摆…）：按原始顶点算出来的球可能盖不住实际的绘制范围，
+     *   那种情况下必须由调用方给一个足够大的球（或者直接关掉剔除）。
+     *
+     * `center` 省略时按原点处理。
+     */
+    boundingSphere?: {
+        center?: ArrayLike<number>;
+        radius: number;
+    };
     label?: string;
 }
 export interface GeometryAttribute {
@@ -69,6 +97,21 @@ export declare class Geometry {
      * 一个盒子的 36 个顶点 + 1000 份实例数据），所以两者分开推断、也分开校验。
      */
     readonly instanceCount: number | null;
+    /**
+     * 局部空间的包围球；推断不出来时为 `null`（例如 `position` 不是 `float32x3` 且调用方也没给）。
+     * 创建时算一次，之后不再变。
+     */
+    readonly boundingSphere: BoundingSphere | null;
+    /**
+     * 这个几何体是否适合做视锥剔除。
+     *
+     * 有两种情况返回 `false`，都是为了让剔除**不会**画错：
+     * - 没有包围球（见 {@link boundingSphere}）；
+     * - 带按实例步进的属性、且包围球是**按基础顶点**算出来的：实例化绘制里每个实例的位置由
+     *   实例属性决定，基础顶点的包围球完全盖不住它们（拿它剔除会把可见的实例整批丢掉）。
+     *   显式传了 `boundingSphere` 时调用方已经对实例分布负责，这时仍然可剔除。
+     */
+    readonly cullable: boolean;
     private _disposed;
     /**
      * 已经校验过的「材质属性声明」集合，键是 `Material.attributes` 这个数组对象本身。

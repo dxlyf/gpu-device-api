@@ -8,10 +8,17 @@
  *   back buffer 的帧纹理）包起来。这类 texture 由 canvas 拥有，`destroy()` 不会销毁它。
  *
  * view 的创建与缓存也在本类：同一个 subresource 组合只建一次 view，并随 texture 一起释放。
+ *
+ * **行序（本后端就是「基准」那一侧）**：WebGPU 规定纹素 (0, 0) 在左上角，纹理坐标 `v = 0`
+ * 指向纹素第 0 行。`queue.writeTexture` 不翻数据（数据第 0 行 → 纹素第 0 行），
+ * `copyExternalImageToTexture` 的 `flipY` 显式控制是否把来源的上下翻过来，
+ * `copyTextureToBuffer` 的缓冲区第 0 行 = 纹素行 `origin.y`。本库的整体约定以这套语义为准
+ * （见 `core/resources/Texture.ts` 的说明），WebGL2 后端在上传与读回上已经对齐，
+ * 只有「渲染进纹理」还差一处（GL 的渲染目标自下而上存储）。
  */
 import type { Texture, TextureDescriptor, TextureDimension } from '../../core/resources/Texture.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
-import type { TextureUsage } from '../../core/enums/TextureUsage.js';
+import { TextureUsage } from '../../core/enums/TextureUsage.js';
 import type { TextureView, TextureViewDescriptor } from '../../core/resources/TextureView.js';
 import type { Extent3D } from '../../types/internal.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
@@ -73,6 +80,47 @@ export declare class WebGPUTexture implements Texture {
     createView(descriptor?: TextureViewDescriptor): WebGPUTextureView;
     /** 目前已创建的 view；随 texture 一同释放。 */
     get views(): readonly TextureView[];
+    /**
+     * 用 render pass 逐级降采样生成 mip 链（第 1 级到第 `mipLevelCount - 1` 级）。
+     *
+     * WebGPU **没有** `generateMipmap`（`GPUQueue` 和 `GPUTexture` 都没有这个方法），所以这里
+     * 自己实现：对 `level = 1 .. mipLevelCount - 1` 各开一个 render pass，把上一级当作纹理采样、
+     * 把本级当作颜色附件。目标级别的每个像素用自己的中心去采样上一级，配一个 `linear` 采样器：
+     * 当上一级正好是本级的两倍时，像素中心恰好落在源 2x2 纹素的正中，一次双线性采样就是标准的
+     * 2x2 盒式平均。
+     *
+     * **非 2:1 的级别（非 2 的幂纹理降到最后几级）**：此时一次双线性采样是「以目标像素中心为
+     * 中心的 tent 滤波」，不是严格的面积加权平均 —— 它会覆盖整个源范围，但权重不是均等的。
+     * 这是 WebGPU 社区通行的 `generateMipmaps` 做法，实测结果与 WebGL2 的 `gl.generateMipmap`
+     * 几乎一致（`examples/core-texture-mipmap.ts` 里 60x36 的第 5 级：本实现 66,189,131，
+     * WebGL2 是 66,190,131，而 JS 盒式路径是 119,134,127）。要做到严格等权的面积平均需要
+     * 逐级用 compute shader 按覆盖率加权，代价远大于收益；确实需要时可以先把纹理缩放成 2 的幂，
+     * 或者离线生成 mip 链再用 `writeTexture` 逐级上传。
+     *
+     * **为什么用 render pass 而不是 compute shader**：
+     * - 两者都能实现，但 render pass 版本**不需要 `StorageBinding`**（不必为此扩大纹理 usage），
+     *   而且直接复用硬件的光栅化与纹理滤波，代码量与出错面都小得多；
+     * - compute 版本要自己处理纹理存储格式的读写，每种格式（r8 / rg8 / bgra / srgb）都要单独
+     *   写通道与色彩空间转换；更要命的是 `rgba8unorm-srgb` 在 storage texture 里**没有对应变体**，
+     *   线性空间降采样根本写不对 —— 那不是「多写点代码」，而是做不出正确结果；
+     * - render pass 写 `-srgb` 目标时由硬件负责「线性 → sRGB 编码」，颜色空间语义天然正确，
+     *   与 WebGL2 的 `generateMipmap` 完全一致。
+     *
+     * 代价是逐级各一次 render pass（相邻级别有数据依赖，必须串行），对 2048x2048 就是 11 次
+     * 很小的 draw —— 实测耗时见 `examples/core-texture-mipmap.ts`。
+     *
+     * 前置条件（不满足就抛 {@link ValidationError}，不做静默降级）：
+     * - 单采样、`mipLevelCount > 1`、`dimension: '2d'` 且只有一层（1d / 3d / 2d-array 尚未实现）；
+     * - usage 必须带 `TextureUsage.RenderAttachment`，因为本方法要把它当颜色附件写；
+     * - 格式必须**可渲染且可过滤**：`rgba8snorm`、`rgb9e5ufloat` 这类不可渲染的格式，以及整数
+     *   格式（不能线性滤波）都走不了这条路径，需要改用 `rgba8unorm` 系列或自己上 compute。
+     *
+     * 这里刻意用**原生** WebGPU 对象（pipeline / bind group / encoder 都是临时的），
+     * 而不是 core 的工厂：core 的 `create*` 会把资源登记到 `device` 上一直追踪到设备释放，
+     * 为一次 mip 生成留下几个生命周期很长的包装对象并不划算。pipeline 按 (device, format)
+     * 缓存在模块级 WeakMap 里，同一个格式只建一次。
+     */
+    generateMipmaps(): void;
     /** 销毁 texture（`owned` 为 false 时只标记包装对象失效）。幂等。 */
     destroy(): void;
     /** `Disposable` 的别名。 */

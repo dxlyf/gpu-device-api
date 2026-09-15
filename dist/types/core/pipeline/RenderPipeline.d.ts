@@ -3,6 +3,7 @@ import type { Disposable } from '../../utils/Disposable.js';
 import type { PipelineLayout } from '../binding/PipelineLayout.js';
 import type { ShaderModule } from '../resources/ShaderModule.js';
 import type { TextureFormat } from '../enums/TextureFormat.js';
+import type { CompilationInfo, PrewarmOptions, PrewarmResult } from './CompilationInfo.js';
 import type { ColorTargetState, DepthStencilState, MultisampleState, PrimitiveState, RenderState } from './RenderState.js';
 import type { VertexBufferLayout } from './VertexLayout.js';
 export interface VertexState {
@@ -35,6 +36,19 @@ export interface RenderPipelineDescriptor {
     /** 仅含 depth 的 pipeline 可省略。 */
     fragment?: FragmentState;
     primitive?: PrimitiveState;
+    /**
+     * 深度/模板状态。**省略表示这条管线不使用深度/模板**（与 `{ format: null }` 同义）：
+     * 两个后端都不会做深度测试、也不会写深度。
+     *
+     * 想用深度时至少声明这个对象（`format` 省略则由当前 render target 提供深度格式，
+     * 于是同一条管线可以服务多个 target）：
+     *
+     * ```ts
+     * depthStencil: { depthWriteEnabled: true, depthCompare: 'less' } // 用 target 的深度格式
+     * depthStencil: { format: 'depth24plus', depthCompare: 'less' }   // 指定格式
+     * depthStencil: { format: null }                                  // 明确不要深度
+     * ```
+     */
     depthStencil?: DepthStencilState;
     multisample?: MultisampleState;
     /**
@@ -49,6 +63,13 @@ export interface RenderPipelineDescriptor {
 export interface RenderPipelineVariant {
     colorFormats: readonly TextureFormat[];
     sampleCount: number;
+    /**
+     * **当前 render target 的**深度附件格式，`null` 表示这次渲染通道没有深度附件。
+     *
+     * 它描述的是 target，不是「这条管线是否使用深度」：画布路径几乎总是带深度附件，
+     * 所以一条明确声明 `depthStencil: { format: null }` 的管线一样会拿到非 null 的 `depthFormat`。
+     * 是否使用深度只看 {@link RenderPipelineDescriptor.depthStencil}。
+     */
     depthFormat: TextureFormat | null;
     vertexLayouts: readonly VertexBufferLayout[];
 }
@@ -67,5 +88,32 @@ export interface RenderPipeline extends Disposable {
     readonly native: unknown;
     /** 解析（并缓存）某个 target/variant 对应的具体 pipeline。 */
     resolve(variant?: Partial<RenderPipelineVariant>): unknown;
+    /**
+     * **可选**：异步预热一个 variant 的管线，把编译/链接从「第一次用到它的那一帧」挪走。
+     *
+     * 语义与 `resolve(variant)` 完全一致（同一个 variant 只会编译一次，结果进同一份缓存），
+     * 区别只在于**等待方式**：
+     *
+     * - 后端有异步能力时（WebGPU 的 `createRenderPipelineAsync`、WebGL2 的
+     *   `KHR_parallel_shader_compile`）不会阻塞调用方；
+     * - 没有时退化成同步，并在 {@link PrewarmResult.reason} 里**如实说明**缺什么，
+     *   `mode` 会是 `'sync'` 而不是假装异步。
+     *
+     * 使用方式与 `resolve` 的关系：`prewarm({...variant})` 之后再 `resolve({...同一个 variant})`
+     * 应当直接命中缓存、不再产生任何 GL / GPU 编译调用。这是「预热有效」的判据。
+     *
+     * 预热失败（着色器编译错误、超时）**不会**抛错：诊断在 {@link PrewarmResult.info} 里，
+     * `ok` 为 false。想直接抛错请传 `{ throwOnError: true }`。
+     *
+     * 后端不支持该能力时这个成员不存在，调用方应当用 `pipeline.prewarm?.(...)` 的可选调用写法。
+     */
+    prewarm?(variant?: Partial<RenderPipelineVariant>, options?: PrewarmOptions): Promise<PrewarmResult>;
+    /**
+     * **可选**：取得该管线的编译诊断（每条 message 带 `type` / `lineNum` / `linePos`）。
+     *
+     * WebGPU 走 `GPUShaderModule.getCompilationInfo()`；WebGL2 走
+     * `getShaderInfoLog()` / `getProgramInfoLog()` 的原文解析。拿不到的字段是 `null`。
+     */
+    getCompilationInfo?(variant?: Partial<RenderPipelineVariant>): Promise<CompilationInfo>;
 }
 //# sourceMappingURL=RenderPipeline.d.ts.map
