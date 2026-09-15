@@ -345,6 +345,9 @@ export class WebGPURenderPipeline implements RenderPipeline {
       partial.depthFormat !== undefined
         ? partial.depthFormat
         : descriptor.depthStencil?.format ?? null;
+    // 是否使用深度只看**管线自己的声明**（而不是 variant 里的 target 深度格式）：
+    // 未声明 `depthStencil`、或 `format: null` 都表示「不使用深度」。
+    const depthState = descriptor.depthStencil ?? descriptor.render?.depthStencil;
     // `descriptor.vertex.buffers ?? []` 原先每 draw 都会新建一个空数组；空列表共享一个常量即可。
     const vertexLayouts = partial.vertexLayouts ?? this.vertexLayouts ?? EMPTY_VERTEX_LAYOUTS;
 
@@ -355,10 +358,13 @@ export class WebGPURenderPipeline implements RenderPipeline {
           'resolve({ colorFormats }) — the WebGPU backend cannot guess attachment formats.',
       );
     }
-    if (!descriptor.fragment && !descriptor.depthStencil?.format && depthFormat === null) {
+    if (!descriptor.fragment && (depthFormat === null || !WebGPURenderState.usesDepthStencil(depthState))) {
       throw new ValidationError(
-        `[gpu-device-api] RenderPipeline "${this.label}" has neither a fragment stage nor a depth format; ` +
-          'WebGPU cannot create a pipeline that writes to nothing.',
+        `[gpu-device-api] RenderPipeline "${this.label}" has neither a fragment stage nor a depthStencil ` +
+          'state, so WebGPU cannot create a pipeline that writes to nothing. Declare `depthStencil` ' +
+          '(for a depth-only pipeline, e.g. { depthWriteEnabled: true } — its format comes from the render ' +
+          'target) or add a fragment stage. Note that omitting `depthStencil` or passing ' +
+          '`{ format: null }` means "this pipeline does not use depth", it does not enable depth testing.',
       );
     }
     if (vertexLayouts.length === 0 && !this.warnedMissingVertexLayouts) {
@@ -458,7 +464,13 @@ export class WebGPURenderPipeline implements RenderPipeline {
     };
     if (fragment) nativeDescriptor.fragment = fragment;
     if (depthFormat !== null) {
+      // 这条管线不使用深度时（未声明 `depthStencil` 或 `format: null`），这里拿到的是
+      // 「恒通过 + 不写」的状态，而不是不挂 depthStencil —— WebGPU 的 attachment state 要求管线与
+      // pass 的深度附件格式一致，pass 有深度附件时「不挂」会直接校验失败、整条 command buffer 作废。
       nativeDescriptor.depthStencil = WebGPURenderState.toGPUDepthStencilState(depthFormat, depthState);
+      if (depthState && !WebGPURenderState.usesDepthStencil(depthState)) {
+        this.logger.debug('depthStencil declared without a format; emitting an always-pass, no-write state');
+      }
     } else if (depthState) {
       // depthFormat 为 null 表示当前 target 没有 depth attachment；此时不能写 depthStencil。
       this.logger.debug('depthStencil state declared but the variant has no depth format; ignoring it');

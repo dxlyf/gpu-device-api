@@ -26,6 +26,23 @@
  *
  * 清屏用 WebGL2 的 `clearBufferfv` / `clearBufferfi`，它们可以**按附件下标**清除，
  * 天然支持多颜色附件，不需要来回切 `drawBuffers`。
+ *
+ * ## 行序：与 WebGPU 尚未对齐的那一处（本文件是「正解」应该落地的地方）
+ *
+ * GL 的窗口原点在**左下**，所以附着到 FBO 上的纹理是**自下而上**存储的：纹理第 0 行是画面**底端**。
+ * WebGPU 的纹素原点在左上，同一个渲染结果的纹素行序在两个后端正好相反。
+ *
+ * 这不是 `copyTextureToBuffer` 的错：两个后端都忠实按「纹素行序」拷贝（缓冲第 0 行 = 纹素行
+ * `origin.y`，见 `src/core/resources/Texture.ts` 的行序约定）。实测（8x4 目标，上半红、下半蓝，
+ * 同一份读回调用）：
+ *
+ * - WebGPU：缓冲区四行 = `red,黑,黑,blue`（第 0 行是画面顶端）；
+ * - WebGL2：缓冲区四行 = `blue,黑,黑,red`（第 0 行是画面底端）。
+ *
+ * **本轮只做记录，没有改行为**：翻转必须连同「采样」与「读回」两条路径一起改，并且要同步删掉
+ * 调用方已经做的补偿（`examples/core-shared.ts` 的 `verifyOffscreen` 按后端翻行序、
+ * `examples/core-landscape.ts` 的 `rowsBottomUp`），否则会双重翻转、把现有像素基线全部打翻。
+ * 正解是在渲染进纹理的 pass 上翻转 Y（画布默认帧缓冲不要翻，它没有「纹素行序」这个概念）。
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';

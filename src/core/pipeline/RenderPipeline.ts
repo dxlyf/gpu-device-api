@@ -46,6 +46,19 @@ export interface RenderPipelineDescriptor {
   /** 仅含 depth 的 pipeline 可省略。 */
   fragment?: FragmentState;
   primitive?: PrimitiveState;
+  /**
+   * 深度/模板状态。**省略表示这条管线不使用深度/模板**（与 `{ format: null }` 同义）：
+   * 两个后端都不会做深度测试、也不会写深度。
+   *
+   * 想用深度时至少声明这个对象（`format` 省略则由当前 render target 提供深度格式，
+   * 于是同一条管线可以服务多个 target）：
+   *
+   * ```ts
+   * depthStencil: { depthWriteEnabled: true, depthCompare: 'less' } // 用 target 的深度格式
+   * depthStencil: { format: 'depth24plus', depthCompare: 'less' }   // 指定格式
+   * depthStencil: { format: null }                                  // 明确不要深度
+   * ```
+   */
   depthStencil?: DepthStencilState;
   multisample?: MultisampleState;
   /**
@@ -61,6 +74,13 @@ export interface RenderPipelineDescriptor {
 export interface RenderPipelineVariant {
   colorFormats: readonly TextureFormat[];
   sampleCount: number;
+  /**
+   * **当前 render target 的**深度附件格式，`null` 表示这次渲染通道没有深度附件。
+   *
+   * 它描述的是 target，不是「这条管线是否使用深度」：画布路径几乎总是带深度附件，
+   * 所以一条明确声明 `depthStencil: { format: null }` 的管线一样会拿到非 null 的 `depthFormat`。
+   * 是否使用深度只看 {@link RenderPipelineDescriptor.depthStencil}。
+   */
   depthFormat: TextureFormat | null;
   vertexLayouts: readonly VertexBufferLayout[];
 }

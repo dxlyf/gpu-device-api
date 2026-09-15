@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — depthStencil 语义一致性（format: null / 不声明）</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: #0b0e13;
+        color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #view { flex: 1 1 auto; width: 100%; display: block; min-height: 180px; }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .grow { flex: 1; }
+      a { color: #6fa8ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      #out {
+        margin: 0; padding: 6px 12px; max-height: 132px; overflow: auto;
+        background: #0f141b; border-top: 1px solid #1d2530; color: #9fb3c8; white-space: pre-wrap;
+      }
+      #out.pass { color: #7ddc9a; }
+      #out.fail { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="out">运行中…</pre>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span class="grow"></span>
+      <span><a href="./depth-null-format.html?backend=webgl2">WebGL2</a> · <a href="./depth-null-format.html?backend=webgpu">WebGPU</a> · <a href="./gallery.html">示例汇总</a></span>
+    </footer>
+    <script type="module" src="./depth-null-format.ts"></script>
+  </body>
+</html>

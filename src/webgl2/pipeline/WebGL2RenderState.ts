@@ -54,6 +54,9 @@ export function resolveRenderState(
   target: { depth: boolean; stencil: boolean },
 ): ResolvedRenderState {
   const depth = descriptor.depthStencil;
+  // 「这条管线是否使用深度/模板」唯一的判据：`depthStencil` **未声明**、或 `format` 为 `null`，
+  // 两者同义，都表示不使用深度 —— 与 WebGPU 侧的 `WebGPURenderState.usesDepthStencil()` 是
+  // 同一套语义（那边曾经把 `format: null` 回落成「写深度 + less」，只在 WebGPU 上露症状）。
   const depthRequested = depth !== undefined && depth.format !== null;
   const depthTest = depthRequested && target.depth;
 
@@ -79,7 +82,11 @@ export function resolveRenderState(
 
   return {
     depthTest,
-    depthWrite: depth?.depthWriteEnabled ?? true,
+    // 不使用深度时给 `false`，而不是 `depthWriteEnabled ?? true`：GL 在 `DEPTH_TEST` 关闭时本来
+    // 就不更新深度缓冲（关着测试写深度是无效操作），但把 `depthWrite` 留在 `true` 会让这份解析
+    // 结果读起来像「深度是开着的」，误导后续维护。`depthCompare` 同理会停在默认的 `less`，
+    // 它只在 `depthTest` 为 true 时才被 glStateCache 写入。
+    depthWrite: depthRequested && (depth?.depthWriteEnabled ?? true),
     depthCompare: GL_COMPARE_FUNCS[depth?.depthCompare ?? 'less'],
     depthBias: [depth?.depthBiasSlopeScale ?? 0, depth?.depthBias ?? 0, depth?.depthBiasClamp ?? 0],
     stencilEnabled: depthRequested && target.stencil,
