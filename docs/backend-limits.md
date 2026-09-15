@@ -56,6 +56,10 @@ device.onError((error) => {
 WebGL2 还可以用 `device.onContextRestored()` 知道「canvas 又能用了」这个时刻，
 但**不要**复用旧设备上的任何资源对象。
 
+真实浏览器里的验证见 `examples/device-lost.html`（`?backend=webgl2|webgpu`）：
+WebGL2 用 `WEBGL_lose_context` 真的丢一次上下文再恢复，WebGPU 用 `GPUDevice.destroy()`
+触发真实丢失，两边都会检查「检测 → 明确报错 → 重新创建设备后可用」这条完整链路。
+
 ## 二、离屏多重采样（MSAA）
 
 - **WebGPU**：`createRenderTarget({ sampleCount })` 走 WebGPU 原生路径 —— 每路颜色附件建一张

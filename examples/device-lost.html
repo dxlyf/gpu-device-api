@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>gpu-device-api device-lost 行为</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #141a26; }
+      canvas { display: block; width: 128px; height: 128px; border: 1px solid #2a3340; }
+      pre {
+        font-family: ui-monospace, monospace; color: #d7dde5; background: #141a26;
+        margin: 0; padding: 12px 16px; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+      }
+      .pass { color: #6ee7a8; }
+      .fail { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view" width="128" height="128"></canvas>
+    <pre id="out">running…</pre>
+    <script type="module" src="./device-lost.ts"></script>
+  </body>
+</html>
