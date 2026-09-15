@@ -12,7 +12,11 @@ export default defineConfig({
     watch: {
       // 用函数而不是 glob：临时目录名里带随机哈希，且可能出现在仓库根目录下（路径前缀为空），
       // glob 的 `**/` 前缀在这种情形下不保证匹配。函数式判断最稳。
-      ignored: (path: string) => path.includes('.tmpdir'),
+      //
+      // 除了编辑器生成的 `.tmpdir`，还要忽略本仓库自己约定的调试目录 `.tmp-*`
+      // （脚本与代理会在里面写截图、日志与对照数据）。这些文件在**被写入的同时**会被
+      // 监听器看到，Windows 上同样抛 EBUSY 直接搞崩 dev server —— 已经因此崩过一次。
+      ignored: (path: string) => path.includes('.tmpdir') || path.includes('.tmp-'),
     },
   },
   build: {
