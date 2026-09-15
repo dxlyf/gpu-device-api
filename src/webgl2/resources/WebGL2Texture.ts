@@ -26,6 +26,12 @@ import type { GlStateCache } from '../utils/glStateCache.js';
 import { WebGL2TextureView } from './WebGL2TextureView.js';
 import type { TextureView, TextureViewDescriptor } from '../../core/resources/TextureView.js';
 
+/**
+ * WebGL2 里「32 位浮点」纹理格式。它们是 color-renderable 的前提是上下文带
+ * `EXT_color_buffer_float` 扩展，而 `generateMipmap` 要求 base level 必须 color-renderable。
+ */
+const FLOAT32_FORMATS: ReadonlySet<string> = new Set(['r32float', 'rg32float', 'rgba32float']);
+
 /** core 的维度映射到 GL 的纹理目标。 */
 export function glTextureTarget(dimension: TextureDimension, depthOrArrayLayers: number): number {
   if (dimension === '1d') {
@@ -176,15 +182,59 @@ export class WebGL2Texture implements Texture {
   }
 
   /**
-   * 使用 GL 内置的 `generateMipmap` 生成 mip 链。
-   * 要求基础层已经填好内容，且纹理不是多重采样。
+   * 用 GL 内置的 `generateMipmap` 生成 mip 链（第 1 级到第 `mipLevelCount - 1` 级）。
    *
-   * 这里直接调用 `gl.bindTexture` 而不是走状态缓存 —— 因为不知道这张纹理此刻被绑在哪个单元上，
-   * 与其猜测，不如改完之后把缓存整体作废（生成 mip 发生在加载阶段，代价可以忽略）。
+   * 前提条件（不满足就抛 {@link ValidationError}，不做静默降级）：
+   * - 单采样（多重采样纹理没有 mip 链）；
+   * - `mipLevelCount > 1`（否则没有任何级别可生成）；
+   * - 格式必须是「color-renderable 且可过滤」的 unorm / 浮点格式：`generateMipmap` 内部
+   *   就是一次带滤波的降采样，整数格式（`*uint` / `*sint`）、snorm 与纯深度 / 模板格式在
+   *   GL 里都不满足这个条件，硬调用只会在 `getError()` 里留下一条很难定位的
+   *   `INVALID_OPERATION`。32 位浮点格式还需要 `EXT_color_buffer_float` 才是 color-renderable。
+   *
+   * **颜色空间（这里最容易写错）**：格式是 `rgba8unorm-srgb` 时，GL 会把纹素**先解码到线性
+   * 空间**、在线性空间做盒式滤波，再把结果编码回 sRGB 写进各级 mip。这是唯一正确的做法：
+   * 直接对 sRGB 编码字节求平均会系统性偏暗 —— 黑白棋盘的第 1 级，线性平均得到 sRGB 188，
+   * 而对编码字节求平均只有 128。实测对比见 `examples/core-texture-mipmap.ts`。
+   *
+   * 调用后会 `invalidate()` 整个状态缓存：为了生成 mip 必须把这张纹理绑到当前活动单元，
+   * 而状态缓存并不知道「当前活动单元」是哪一个，与其猜错不如整体作废。
+   * 这是加载期的一次性操作，代价可以接受。
    */
   generateMipmaps(): void {
-    if (this.sampleCount > 1) return;
-    if (this.mipLevelCount <= 1) return;
+    if (this._disposed) {
+      throw new ValidationError(
+        `[gpu-device-api] Texture "${this.label}".generateMipmaps: the texture has been destroyed.`,
+      );
+    }
+    if (this.sampleCount > 1) {
+      throw new ValidationError(
+        `[gpu-device-api] Texture "${this.label}".generateMipmaps: a multisampled texture ` +
+          `(sampleCount=${this.sampleCount}) has no mip chain.`,
+      );
+    }
+    if (this.mipLevelCount <= 1) {
+      throw new ValidationError(
+        `[gpu-device-api] Texture "${this.label}".generateMipmaps: mipLevelCount is 1, so there is no ` +
+          'level to generate; allocate the texture with an explicit mipLevelCount (fullMipLevelCount(size)).',
+      );
+    }
+    const info = glFormat(this.format);
+    if (!info.attachment || info.sampleType !== 'float') {
+      throw new ValidationError(
+        `[gpu-device-api] Texture "${this.label}".generateMipmaps: format "${this.format}" cannot be used ` +
+          'with generateMipmap on WebGL2, which requires a color-renderable and filterable format ' +
+          '(integer, snorm and pure depth/stencil formats are none of those). Use rgba8unorm, ' +
+          'rgba8unorm-srgb, r8unorm or a float format instead.',
+      );
+    }
+    if (FLOAT32_FORMATS.has(this.format) && !this.gl.getExtension('EXT_color_buffer_float')) {
+      throw new ValidationError(
+        `[gpu-device-api] Texture "${this.label}".generateMipmaps: format "${this.format}" is only ` +
+          'color-renderable (and therefore a valid generateMipmap target) when the context exposes ' +
+          'EXT_color_buffer_float, which it does not.',
+      );
+    }
     this.gl.bindTexture(this.glTarget, this.native);
     this.gl.generateMipmap(this.glTarget);
     this.state.invalidate();

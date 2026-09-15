@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — core 层示例：纹理创建的异步 / 同步路径</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        display: flex; flex-direction: column;
+        background: #0b0e13; color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      #view { flex: 1 1 auto; width: 100%; display: block; min-height: 180px; }
+      #out {
+        margin: 0; padding: 8px 12px; max-height: 34vh; overflow: auto;
+        border-top: 1px solid #1d2530; background: #0f141b; color: #b8c6d6;
+        font-size: 12px; line-height: 1.45; white-space: pre;
+      }
+      footer {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+        padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b;
+      }
+      #status { color: #9fb3c8; }
+      .grow { flex: 1; }
+      #stats { color: #7f8fa4; }
+      a { color: #6fa8ff; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .error { color: #ff8b8b; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="out">正在启动…</pre>
+    <footer>
+      <span id="status">正在启动…</span>
+      <span class="grow"></span>
+      <span id="stats"></span>
+      <span><a href="./gallery.html">示例汇总</a> · <a href="./core-texture.html">贴图</a> · <a href="./core-texture-mipmap.html">mip 对比</a></span>
+    </footer>
+    <script type="module" src="./core-texture-async.ts"></script>
+  </body>
+</html>

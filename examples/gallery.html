@@ -78,6 +78,13 @@
           纹理/采样器/uniform 放在同一个 bind group；采样器名字要按 <code>&lt;纹理名&gt;_sampler</code> 配对。
         </div>
       </a>
+      <a class="card" href="./core-texture-mipmap.html">
+        <span class="title">mip 路径对比</span><span class="tag core">core</span>
+        <div class="desc">
+          JS 盒式 mip 链 vs 后端生成（WebGL2 的 <code>generateMipmap</code> / WebGPU 的 render pass 降采样）：
+          逐级读回真实字节比对，并给出 sRGB 与 2048² 耗时数据。
+        </div>
+      </a>
       <a class="card" href="./core-instancing.html?count=4096">
         <span class="title">实例化</span><span class="tag core">core</span>
         <div class="desc">
@@ -90,6 +97,14 @@
         <div class="desc">
           N 个物体各一次 draw call、共用一条管线；每个物体用自己的 <strong>动态偏移</strong> 读 uniform
           （<code>hasDynamicOffset: true</code> + <code>setBindGroup(1, bg, [offset])</code>）。
+        </div>
+      </a>
+      <a class="card" href="./core-landscape.html">
+        <span class="title">风景</span><span class="tag core">core</span>
+        <div class="desc">
+          天空渐变 + 太阳 + 两层山脊 + 实例化树林（520 棵、2 次 draw call）+ 一条清澈的河：
+          先画河床、再画半透明水面，<code>fresnel</code> 让垂直看更透明、掠射角更反射天空。
+          6 条管线 / 9 次 draw call，<code>?only=sky|ridge|terrain|bed|tree|water</code> 可逐层排查。
         </div>
       </a>
       <a class="card" href="./benchmark.html">

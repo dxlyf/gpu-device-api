@@ -7,6 +7,7 @@ export {
   TextureDimension,
   defaultTextureUsage,
   fullMipLevelCount,
+  mipLevelExtent,
   resolveTextureSize,
   type Texture,
   type TextureDescriptor,
