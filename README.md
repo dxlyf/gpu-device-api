@@ -38,6 +38,7 @@ renderer.endFrame();
 - [core 层](#core-层)
 - [便捷层 gfx](#便捷层-gfx)
 - [GPU 计时](#gpu-计时)
+- [性能优化](#性能优化)
 - [示例与自检](#示例与自检)
 - [两个后端的硬约束（踩过的坑）](#两个后端的硬约束踩过的坑)
 - [能力边界（诚实清单）](#能力边界诚实清单)
@@ -68,7 +69,7 @@ renderer.endFrame();
 - **CPU 时间与 GPU 时间是两列**：`stats.frameTime` 是 CPU 提交耗时，`stats.gpuFrameTime`
   来自后端的 query 机制（WebGPU 的 `timestamp-query`、WebGL2 的 `EXT_disjoint_timer_query_webgl2`），
   延迟若干帧异步读回、不阻塞帧循环；拿不到时是 `null` 而不是 0。见
-  [GPU 计时](#gpu-计时) 与 [性能基准](#性能基准benchmarkhtml)。
+  [GPU 计时](#gpu-计时) 与 [性能基准（benchmark.html）](#性能基准benchmarkhtml)。
 - **可观测**：`device.onError()` 统一上报（WebGPU 的 `onuncapturederror`、WebGL2 的 `getError()`，
   以及本库内部校验失败）；`device.limits` / `device.features` 两个后端都能无差别读取。
 - **逃生口**：`device.native` 是原生的 `GPUDevice` 或 `WebGL2RenderingContext`；`examples/smoke.ts`
@@ -102,7 +103,7 @@ pnpm install
 
 pnpm dev          # 启动示例站（vite dev server），打开 /examples/gallery.html
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（9 个文件 / 208 条用例，node 环境）
+pnpm test         # vitest run（当前 26 个文件 / 396 条用例，node 环境；数字以 pnpm test 打印的为准）
 pnpm build        # 产出 dist/gpu-device-api.js（ESM）+ dist/types
 pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```
@@ -471,8 +472,10 @@ u.set('bones', boneMatrices);
 
 ### Camera / OrbitControls / Texture
 
-- `PerspectiveCamera` / `OrthographicCamera`：`update()` 同时算出 `projectionMatrixGL`（z ∈ [-1, 1]）
-  与 `projectionMatrixZO`（z ∈ [0, 1]），`depthRange` 决定 `projectionMatrix` 暴露哪一套；
+- `PerspectiveCamera` / `OrthographicCamera`：**只保留一份投影矩阵**，`update()` 按当前 `depthRange`
+  选 `mat4.perspective` / `mat4.perspectiveZO`（正交是 `mat4.ortho` / `mat4.orthoZO`，z ∈ [-1, 1] 或
+  z ∈ [0, 1]）算出来；改 `depthRange` 会让缓存失效，下一次 `update()`（或下一次读取
+  `projectionMatrix`）按新约定重算；
   `Renderer` 会按后端自动设置它（WebGPU 用 `'zo'`），所以同一个相机对象换后端不用重建。
 - `OrbitControls`：`new OrbitControls(camera, canvas)`，支持 `enableDamping`、`reset()`。
 - `GfxTexture`：`renderer.createTexture({ data, width, height, mipmaps, ... })`，`data` 可以是原始像素
@@ -584,17 +587,160 @@ CPU 侧的 draw 次数、uniform 写入量在这个实验里完全没变。
 - **读回本身有开销**：每 `delay` 帧多一次小 command buffer（WebGPU）或一次 GL 查询轮询（WebGL2），
   做严格 A/B 性能对比时请开着同一个设置对比，或干脆关掉计时。
 
+## 性能优化
+
+这一节只写**这一轮做完、并且量过**的优化：每一项都有独立的判据，量不出来的就不写进来。
+数字全部来自本机实测（WebGL2 是 SwiftShader 软件光栅化，不能当显卡性能看）。
+「GPU 计时」那一套是这些数字的测量工具，不在这里重复，见 [GPU 计时](#gpu-计时)。
+
+### 纹理上传与 mipmap（含一个已修的正确性 bug）
+
+**旧路径是错的，不是慢而已。** 之前的 mip 链由 JS 逐级做 2×2 盒式平均、再逐级 `writeTexture`；
+对 `-srgb` 纹理，这是在**编码字节**上求平均，而不是在线性空间求平均 —— 结果偏暗：
+实测第 4~6 级里最暗的那个纹素是 **61/255** 的偏差（`127` vs 正确的 `188`），肉眼可直接看出来。
+
+修法是把 mip 交给后端生成（`texture.generateMipmaps()`）：
+
+- **WebGL2**：`gl.generateMipmap()`；
+- **WebGPU**：后端用 **render pass 逐级降采样**（第 1 级到第 `mipLevelCount - 1` 级各一个 pass，
+  把上一级当纹理采样）。**不用 compute** 的硬理由是 `rgba8unorm-srgb` 在 storage texture 里
+  **没有 srgb 变体**，compute 路径无法把线性空间的降采样结果正确编码回 sRGB；render pass 写
+  `-srgb` 目标时由硬件负责这一步，颜色空间语义天然正确。
+
+2048² 纹理「上传 + 生成 mip」的实测耗时（新旧两条路径各自完整测量）：
+
+| 后端 | 旧路径（JS 盒式 + 逐级上传） | 新路径（后端生成） |
+| --- | --- | --- |
+| WebGL2 | 52.7 ms | **10.6 ms** |
+| WebGPU | 47.1 ms | **17.0 ms** |
+
+同时补了两件事：
+
+- **异步创建入口**（`GfxTexture.fromImage()`，内部用 `createImageBitmap` 解码）：四条创建路径
+  （`blob` / `url` / `bitmap-sync` / `canvas-sync`）读回纹理第 0 级后与标准答案**逐字节一致**
+  （`maxDiff = 0`）；
+- **上传不再锁死 `rgba8unorm`**：gfx 层支持 6 种格式 —— `rgba8unorm` / `rgba8unorm-srgb` /
+  `bgra8unorm` / `bgra8unorm-srgb` / `r8unorm` / `rg8unorm`（`GFX_UPLOAD_FORMATS`）。
+  其中 `bgra8unorm` / `bgra8unorm-srgb` 在 WebGL2 上**没有对应格式**（BGRA 只是默认帧缓冲的隐式
+  布局，不是纹理内部格式），gfx 层会明确抛错而不是传错通道。
+
+证据页：`examples/core-texture-mipmap.html`（逐级逐字节对比新旧两条链）、
+`examples/core-texture-async.html`（四条异步创建路径）。
+
+### 视锥剔除
+
+`Renderer` 的视锥剔除**默认开**（`culling` 默认为 `true`）。20000 个物体、`spread=60`（散布范围是
+默认档的 6 倍，物体大量落在视锥外）的配对测量：draw calls **20000 → 10617**（剔掉 9383 个），
+**CPU 提交耗时**（`examples/gfx-benchmark.html?ab=cull` 量的是这一项）WebGPU **−24.7% / −26.6%**、
+WebGL2 **−45.7% / −55.6%**（斜杠两侧是配对 A/B 的两次测量口径）。
+
+- 判据来自几何体的**包围球**，在 `Geometry` 创建时算一次（`Geometry.boundingSphere`），
+  每帧只做球与 6 个视锥平面的相交测试；被剔除的绘制**不进命令缓冲**。
+- 带 `perInstance` 属性的几何体**默认不参与剔除** —— 实例位置由实例属性决定，基础顶点的包围球
+  盖不住它们（除非显式给 `GeometryDesc.boundingSphere`）。这部分会计入 `stats.cullSkipped`。
+- 关掉：`Renderer.create({ culling: false })`，或运行中改 `renderer.culling`（`frustum` 与
+  `raycaster` 那套数学从 `utils/math` 单独可用）。
+- 顶点着色器自己位移顶点（水面波动之类）时包围球会失真，请显式给 `boundingSphere` 或关掉剔除。
+
+### draw 排序（默认关）
+
+`Renderer.create({ sort: 'opaque' | 'all' })`：
+
+- `sort: 'none'`（默认）：立刻提交，`stats.drawCalls` 当帧就是最终值；
+- `'opaque'`：只在**不透明物的连续段内**排序，**半透明物是不可跨越的段边界**（顺序逐字不变）；
+- `'all'`：把半透明物按深度从远到近排在后面。
+
+**如实说明：在当前基准场景里没测出收益。** 那个场景是单材质、单 bind group，本来就只有 1 次管线
+切换，排序既省不下状态切换、又要额外排队；目前只有单测（`test/gfx-culling.test.ts`）覆盖它的排序
+行为。开启后 `stats.drawCalls` 要等 `endFrame()` 才完整，而且 `CPU 提交` 里会包含「排队 + 排序」的
+开销 —— 这是个**需要调用方自己确认的语义变化**，所以默认关闭。
+
+### 异步管线预热与编译诊断
+
+```ts
+const report = await renderer.prewarm({ materials: [lambert, phong] });  // 两个后端同一段代码
+renderer.compilationInfo(lambert);   // CompilationInfo：type / lineNum / linePos / message
+```
+
+底层是 core 的 `RenderPipeline.prewarm?()`、`ShaderModule.getCompilationInfo?()`，以及
+`prewarmWebGL2RenderPipeline` / `prewarmWebGPURenderPipeline` 两个设备级入口。
+
+首帧实测（一段刻意很重的片元着色器：预热前 = 建管线 + 首帧用上它；预热后 = 先 `await prewarm()`，
+再量同一段）：
+
+| 后端 | 预热前 | 预热后 | 机制 |
+| --- | --- | --- | --- |
+| WebGPU | 首帧 469.9 ms | **7.4 ms** | `createRenderPipelineAsync()`，`mode: 'async'`，**真异步** |
+| WebGL2 | `createRenderPipeline()` 347.7 ms | **0.20 ms** | 本机 headless **缺 `KHR_parallel_shader_compile`**，`mode: 'sync'` |
+
+⚠️ **WebGL2 那一行不是真异步**：缺扩展时 `compileAsync()` 退化成同步 —— 它只是把**同一段同步工作
+提前**到调用 `prewarm()` 的时候，**总时间不会变少**（价值在于把编译挪出加载完成后的第一帧，
+用户不会看到卡顿）。要判断到底是哪一种，读 `prewarm()` 结果里的 `mode` 与 `reason`，别假设。
+
+诊断给的是**真实行号**：实测 WebGL2（GL 日志）与 WebGPU（`getCompilationInfo`）都能精确命中
+着色器里出错的那一行（WebGL2 无列号，`linePos` 恒为 `null`）。
+
+证据页：`examples/core-prewarm.html`（core 层）、`examples/gfx-prewarm.html`（gfx 层，顺带验证
+「已建过管线的材质再 `prewarm()` 会被 `skipped`」）。
+
+### 离屏 MSAA
+
+WebGL2 的多重采样**只能渲染到 renderbuffer**，所以后端建两个 framebuffer：draw FBO 的附件是
+`renderbufferStorageMultisample` 分配的 renderbuffer，resolve FBO 的附件是普通纹理；渲染通道
+`end()` 时用 `blitFramebuffer`（`NEAREST`）把前者解析到后者 —— 这是 WebGL2 里唯一的多重采样
+resolve 途径。（一个常见误解是「WebGL2 做不到，所以只能放弃离屏 MSAA」，`blitFramebuffer` 就是
+为这件事存在的。）
+
+抗锯齿的量化判据来自**真实合成截图**（不是页内读回）：512×512、18 条全是斜边的长条、全屏 1:1
+最近邻贴图。`samples=1` 时**中间色像素 0 个**，`samples=4` 时 **3203 个**，且中间色恰好是
+`sampleCount - 1 = 3` 种、数值正对应 25% / 50% / 75% 覆盖率：
+
+| 覆盖率 | WebGL2 | WebGPU |
+| --- | --- | --- |
+| 25% | 79,84,93 | 79,83,92 |
+| 50% | 138,141,147 | 137,140,146 |
+| 75% | 197,198,201 | 196,198,201 |
+
+两条完全不同的实现路径（renderbuffer + blit 与多重采样纹理 + `resolveTarget`）给出同一件事，
+说明的是「画面真的被抗锯齿了」，而不是「确实调用了某个 API」。采样数不被支持时（不是正整数、
+超过 `MAX_SAMPLES`、不在该格式报告的可用集合里）**明确报错、绝不静默降级成 1**。
+
+证据页：`examples/msaa-offscreen.html?backend=webgl2|webgpu&samples=1|2|4|8` +
+`scripts/capture-screenshot.mjs` + `scripts/analyze-screenshot.mjs`。
+
+### 资源生命周期：`untrack`
+
+`WebGL2Device.untrack()` 这一轮才补齐：此前追踪集合只增不减，**逐帧 create/destroy** 的用法
+（临时 buffer / 纹理 / bind group / render target / query set）会让登记表一直强引用已经释放的包装
+对象与原生句柄，直到 `device.dispose()` —— 那是实打实的泄漏。现在资源在自己的 `destroy()` 里把
+自己摘掉，并新增诊断计数 `device.trackedResourceCount`（不属于 core 的 `Device` 接口，仅供诊断与
+测试）；测试断言 500 轮创建/销毁之后计数**回到基线**
+（`test/webgl2-resource-tracking.test.ts` / `test/webgpu-resource-tracking.test.ts`）。
+
+### 一个 dev server 的坑（已修）
+
+仓库根的 `.tmp-*` 调试目录现在在 `vite.config.ts` 的 `server.watch.ignored` 里被忽略。此前脚本
+往 `.tmp-*` 里**边写边被文件监听器看到**，Windows 上直接抛 `EBUSY` 把 dev server 搞崩（本轮真的
+崩过一次）。看见 `.tmp-*` 目录不要以为是忘了删的产物 —— 它们是 gitignore 掉的调试工作区。
+
+### 试过但**回退**了：scene / per-draw uniform 拆分
+
+把 uniform 拆成「每帧只写一次的场景块 + 每 draw 独立块」在机制上是成立的：每 draw 上传字节从
+**208 降到 128**、场景块每帧只写一次。但在 20000 draw 档 CPU 提交**反而稳定慢约 5%** ——
+多出来的是**一条额外的动态偏移 binding**。所以它已经回退，**不是现有特性**，这里只作为「测过、
+不划算」的记录留着。
+
 ## 示例与自检
 
 | 页面 | 内容 |
 | --- | --- |
-| `examples/gallery.html` | **示例汇总**：所有示例的分类索引（core 层 / gfx 层），含每个页面的说明与查询参数 |
+| `examples/gallery.html` | **示例汇总**：示例的索引页（目前 13 张卡片：从 `core-triangle` 到 `depth`，含 `benchmark` / `index` / `smoke`）。下面这些新页**还没有卡片**（`core-texture-async` / `core-prewarm` / `gfx-prewarm` / `depth-null-format` / `rtt-orientation` / `device-lost` / `compute` / `msaa-offscreen`），直接开 URL 即可 |
 | `examples/index.html` | gfx 层的完整 demo：lil-gui 调参、切换后端、几何体/材质/光照切换 |
 | `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
 | `examples/benchmark.html` | **性能基准（core 层）**：box + 光照着色器的**动态**场景，2000 / 5000 / 10000 / 20000 / 40000 个图形每帧移动并重传矩阵；含静态对照与「含同步 / 不同步」两轮 |
 | `examples/gfx-benchmark.html` | **性能基准（gfx 层）**：同样的档位测 `renderer.draw()` 的每 draw 固定开销（相机 uniform、model、法线矩阵、uniform arena + 动态偏移、逐属性顶点绑定），并给出 **CPU 提交时间与 GPU 执行时间两列**（`data-bench-cpu-ms` / `data-bench-gpu-ms`） |
-| `examples/smoke.html` | core 层的浏览器内冒烟测试：17 项检查，含像素级断言（canvas 中央、离屏目标角落）与 GLSL 包装开关 |
+| `examples/smoke.html` | core 层的浏览器内冒烟测试：17 项检查，含像素级断言（canvas 中央、离屏目标角落）与 GLSL 包装开关。**只跑 WebGL2**，结论同时写进 `data-smoke-backend="webgl2"` |
 | `examples/depth.html` | **画布深度测试回归**：近红先画、远绿后画，中心像素必须是红 —— 两个后端各自一遍，读回的也是 canvas 本身 |
 
 **core 层示例**（同样只用 `src/index.ts`，**不经过 gfx 便捷层**，用来对照「便捷层到底替你做了什么」）：
@@ -606,10 +752,36 @@ CPU 侧的 draw 次数、uniform 写入量在这个实验里完全没变。
 | `examples/core-texture.html` | `createTexture` + `queue.writeTexture` + `createSampler`；sampler 按 `<纹理名>_sampler` 配对 |
 | `examples/core-instancing.html` | 每实例属性（`stepMode: 'instance'`）：1 次 draw call 画 N 个实例，`?count=` 调数量。画面是**绕竖直轴匀速转动的立体格点云**（每实例一个立方体：盒边长正比于到相机的距离，投影后大小恒定，所以再斜的角度也不露清屏色），`?spin=0` 冻结转动、`?angle=<弧度>` 定在某个角度（截图比对用） |
 | `examples/core-batch.html` | N 次 draw call + **动态偏移** uniform（`hasDynamicOffset` + `setBindGroup(1, bg, [offset])`） |
+| `examples/core-landscape.html` | **风景**：天空 / 太阳 / 两层山脊 / 实例化树林（默认 520 棵）/ 透明河；8 次 draw call、45265 三角形，两个后端都 `landscapeResult=ok` |
+| `examples/core-texture-mipmap.html` | **mip 路径取证**：旧「JS 盒式降采样」与新「后端生成」逐级逐字节对比，另带 sRGB 线性空间的参考链与 2048² 耗时 |
+| `examples/core-texture-async.html` | **纹理的四条创建路径**（`blob` / `url` / `bitmap-sync` / `canvas-sync`）读回逐字节对照，`maxDiff=0` |
+| `examples/core-prewarm.html` | **异步管线预热 + 编译诊断**（core 层）：预热前后首帧耗时、`mode`（async / sync）、出错着色器的真实行号 |
+| `examples/gfx-prewarm.html` | 同一件事在 gfx 层：`renderer.prewarm()` / `renderer.compilationInfo()`，并验证「已建过管线的材质会被 `skipped`」 |
+| `examples/depth-null-format.html` | **`depthStencil: { format: null }` 语义回归**：含反向对照（显式写深度的管线必须挡住后画的绿方块） |
+| `examples/rtt-orientation.html` | **渲染到纹理的行序对照**：四象限 + 单侧白色标记，报出纹素第 0 行 / 最后一行的颜色与 `rttRowOrderOk` |
+| `examples/device-lost.html` | **真的把设备弄丢**（WebGL2 用 `WEBGL_lose_context`、WebGPU 用 `GPUDevice.destroy()`），验证检测 → 明确报错 → 重新建一个设备能用 |
+| `examples/compute.html` | WebGPU 上跑 compute kernel（4096 个值逐元素严格相等）；WebGL2 上把两条「不支持」错误原文抓出来 |
+| `examples/msaa-offscreen.html` | **离屏 MSAA**：`?samples=1|4` 渲染到离屏目标再 1:1 上屏，中间色像素数由截图统计给出 |
 
-这五个页面共用 `examples/core-shared.ts`（设备创建、离屏像素自检、帧循环、uniform 绑定等样板），
+`core-landscape.html` 的自检有 8 条判据（`sky-blue` / `sky-not-clear` / `sun-bright` /
+`sun-aligned` / `ridge-darker` / `river-blue` / `river-bed` / `water-animates`），全部写在
+`data-landscape-checks` 里。它的探针设计值得抄：清屏色取 `0.72, 0.10, 0.62`（一个在任何场景色里都
+不会出现的品红），于是「哪里没画」有了一个**可量化**的表现 —— 真实合成截图里统计接近清屏色的
+像素占比就能判断天空有没有铺满（`scripts/analyze-screenshot.mjs --clear 0.72,0.10,0.62`）。
+`water-animates` 则要求「只动时间、不动相机」时河面像素有变化，而天空像素几乎不变
+（`data-landscape-time-diff*` 是这几个量的原文）。
+
+`depth.html` / `instancing.html` / `device-lost.html` / `compute.html` 是 **WebGPU 的 core 层覆盖**
+（同一个页面用 `?backend=webgpu` 跑，结论写在同一套 `data-*` 上）。
+
+这些 core 层示例共用 `examples/core-shared.ts`（设备创建、离屏像素自检、帧循环、uniform 绑定等样板），
 每个页面的 `.ts` 顶部注释都写明了它要演示什么、以及对应的 core API 调用点。
 它们也会把结论写进 `data-<名字>-lit / -pixel / -distinct / -error`。
+
+**`examples/smoke.html` 只跑 WebGL2，而且是刻意的**：它用的是 GLSL 着色器 + `gl.readPixels` 读回，
+另有三条 WebGL2 专有的错误断言，所以它把 `data-smoke-backend="webgl2"` 也写进 `<html>`，免得抓取
+脚本把它的结论误读成「两个后端都过了」。**WebGPU 的 core 层覆盖不在这一页**，而在
+`depth.html` / `instancing.html` / `device-lost.html` / `compute.html`（都带 `?backend=webgpu`）。
 
 视觉回归用 `scripts/` 下的两个小工具（页面内的 `drawImage` 读回不可信：示例都带
 `preserveDrawingBuffer: false`，合成之后读回画布是**一整块黑**，会把「黑」误算成「画面被物体盖满」）：
@@ -704,6 +876,15 @@ WebGPU 用 `queue.onSubmittedWorkDone()`；WebGL2 用一次 1×1 的 `readPixels
 `renderer.draw()` 的固定开销（相机 uniform、每 draw 的 model、法线矩阵、uniform arena + 动态偏移、
 逐属性绑定顶点缓冲）。它当初就是靠 40000 档把 `UniformArena` 的一个真实缺陷（扩容时在录制中途销毁旧 buffer，
 WebGPU 会在 submit 时报 `used in submit while destroyed`）逼出来的。
+
+**`?ab=cull` 配对测量的一个已知显示怪癖**：这个模式下 `data-bench-ab` 里的
+`drawCalls` / `culled` 是**最后那一轮配置**的 `renderer.stats`，而每一轮的内部顺序是**交替**的。
+轮次**从 0 开始计数**：偶数轮先「关剔除」后「开剔除」，奇数轮反过来。所以最后一轮以哪种配置收尾，
+只取决于**总轮数的奇偶** —— 页面的默认 `rounds=3`（以及 `&rounds=5` 这类奇数）最后停在
+**「开剔除」**，能同时看到耗时与 `10617/9383`（20000 个物体、`spread=60`）；而 `&rounds=4`、
+`&rounds=8` 这类**偶数轮**最后停在「关剔除」，打印出来的就是 `culled=0`，看起来像剔除失效。
+这是**显示口径**问题，不是功能错误。
+要稳定看到剔除的效果，也可以直接用 `?culling=1` 单跑一遍（那才是这一页的常规口径）。
 
 ⚠️ 跑这个页面**不要加 `--virtual-time-budget`**：虚拟时间会让 `performance.now()` 跟着跳，
 测出来的数字没有意义（无头环境请用真实时间等它跑完，页面会把进度写进 `data-*` 与 `#progress`；
@@ -808,10 +989,79 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 | 间接绘制 `drawIndirect` / `drawIndexedIndirect` | 请把参数读回 CPU 再提交 |
 | `firstInstance` / `baseVertex` | 缺少对应的 GL 入口；请把数据前移或把偏移加进索引 |
 | 绑定时的 mip 子范围视图 | mip 范围是纹理对象自身的状态，请为需要的 mip 单独建纹理 |
-| 多重采样的离屏渲染目标 | GL 的多重采样只能渲染到 renderbuffer，无法 resolve 成纹理 |
 | 1D 纹理 | 请改用高度为 1 的 2D 纹理 |
 | 只有深度、没有片元着色器的管线 | GL 的 program 必须同时链接两个阶段 |
 | `rgb9e5ufloat` 等格式 | 给出替代格式 |
+
+上表里**不再有「多重采样的离屏渲染目标」**：WebGL2 的离屏 MSAA 这一轮做完了 —— 渲染到
+`renderbufferStorageMultisample` 分配的 renderbuffer，通道 `end()` 时用 `blitFramebuffer` 解析到
+普通纹理（这是规范里唯一的 resolve 途径，早期版本按「做不到」直接抛错是错的）。实测数字见
+[性能优化](#性能优化) 里的「离屏 MSAA」一小节，页面是 `examples/msaa-offscreen.html`。
+另外 `bgra8unorm` / `bgra8unorm-srgb` 在 WebGL2 上**不能从主机内存上传**（BGRA 只是默认帧缓冲的
+隐式布局，不是纹理内部格式），gfx 的纹理层会明确抛错并让你改用 `rgba8unorm` / `rgba8unorm-srgb`。
+
+**device-lost 无法在抽象层内自动恢复（两个后端都只能「检测 + 明确报错」）**
+
+- **WebGPU**：`GPUDevice` 丢失后**永久失效**，没有任何原生手段能救回来；`GPUDevice` 上也拿不到回到
+  `GPUAdapter` 的引用，本层无法替你重新 `requestDevice()`。所以丢失之后所有 `create*()`、`submit()`、
+  `writeBuffer()` 一律抛带 `[gpu-device-api] ` 前缀的 `DeviceLostError`（规范原本是**静默丢弃命令** ——
+  「每帧都在提交、画面永远不动、一行错误都没有」，必须由本库拦下来）。
+- **WebGL2**：`webglcontextrestored` 只让 canvas 上的 context 重新可用，**旧资源的句柄已经全部作废**，
+  而且本层没有可重放的 descriptor（纹理的原始上传数据早就被 GC 掉了），所以 `usable` 在 restored
+  之后**仍然是 `false`**。
+- **唯一可行的恢复是：`dispose()` 掉旧设备 → 新建一个 → 重建全部资源。** 完整口径（含可运行的验证页
+  `examples/device-lost.html`）见 `docs/backend-limits.md`。
+
+**WebGL2 没有 compute，而且绝不假装成功**
+
+`device.createComputePipeline()` 与 `encoder.beginComputePass()` 两条入口都会抛**带
+`[gpu-device-api] ` 前缀**的错误，消息里给出替代方案：切 WebGPU 后端，或者在 WebGL2 上用
+「全屏三角形 + 浮点纹理」做 GPGPU（把数据编码进纹理、用片元着色器当 kernel、结果渲染到另一张纹理
+再读回）。WebGPU 侧的 compute 有**逐元素严格相等**的证据（4096/4096，校验和一致），见
+`examples/compute.html`。
+
+**WebGL2 的异步管线预热可能降级成同步**
+
+只有拿到 `KHR_parallel_shader_compile` 时才是真异步；缺扩展时会降级成 `mode: 'sync'`，
+`prewarm()` 的结果里会如实写明原因 —— **这时它只是把同一段同步工作提前做，总时间不会变少**。
+详见 [异步管线预热与编译诊断](#异步管线预热与编译诊断)。
+
+**纹理坐标约定（最容易踩的一条）**
+
+本库站在 **WebGPU 那一边**：**纹素 (0, 0) 在左上角，纹理坐标 `v = 0` 是图像顶部**。
+
+- 上传（`queue.writeTexture` / `queue.copyBufferToTexture`）**两个后端都不翻转**；
+- `copyExternalImageToTexture` 的 `flipY` 在两个后端**语义相同**（WebGL2 用 `UNPACK_FLIP_Y_WEBGL`，
+  WebGPU 用原生 `flipY`）；gfx 便捷层默认「图像来源翻转、裸像素不翻转」；
+- `copyTextureToBuffer` 读回来的**缓冲区第 0 行 = 纹素行 `origin.y`**（不做任何翻转）。
+
+⚠️ **「渲染到纹理」是唯一不遵循这条约定的地方**（GL 的窗口原点在左下角，附着到 FBO 上的纹理
+自下而上存储，而 WebGPU 的附件纹素 (0, 0) 在左上角）。分成两层处理：
+
+- **core 层显式**：`RenderTarget.rowOrder` 如实给出目标的后端原生行序（WebGL2 = `'bottomUp'`、
+  WebGPU = `'topLeft'`），core **不做任何自动翻转**；想统一就自己调公开 helper
+  `mat4.flipClipY(projection, projection)`（等价于 `gl_Position.y *= -1`，**会反转三角绕序**，
+  开背面剔除时要把 `frontFace` 一起换），或者读回后按 `rowOrder` 反一次行序；
+- **gfx 层自动**：`Renderer` 默认（`rowOrder: 'unified'`）只在**附件是纹理**的通道上翻相机投影、
+  并自动把同一通道的 `frontFace` 换过来，切回画布通道时恢复 —— **画布默认帧缓冲永远不翻**
+  （浏览器合成本来就是对的）。**这条自动翻转只对使用库提供的投影 uniform（`projection` /
+  `projectionView`）的材质有效**：顶点着色器把位置写死（全屏四边形 / blit 之类）的材质不受影响，
+  要自己在着色器里对位置做同样的 Y 取反（gfx 自己生成的全部材质都是走 `u.projectionView` 的，
+  所以按文档写法画东西不会踩到这条）。
+
+对照页是 `examples/rtt-orientation.html`：`?layer=core` 走「core 显式 + helper」并给出**不翻**的
+对照目标，`?layer=gfx` 走「gfx 自动、页面零翻转代码」，两条路径两个后端都必须是
+`rttResult=pass` / `rttRowOrderOk=true`。完整口径（含限制的来龙去脉）见
+`src/core/resources/Texture.ts` 与 `docs/backend-limits.md` 第五节。
+
+**`depthStencil: { format: null }` 与「不声明 `depthStencil`」都表示「这条管线不使用深度」**
+
+两个后端语义一致：WebGPU 侧翻译成「**恒通过 + 不写**」（`depthCompare: 'always'` +
+`depthWriteEnabled: false`），与 GL 关掉 `DEPTH_TEST` 等价。**不能简单不挂 `depthStencil`** ——
+pass 带深度附件时管线必须声明同格式，否则整条 command buffer 作废（画面全黑）。
+此前 WebGPU 会错误地回落到「写深度 + `less`」，导致用全屏三角形画天空这类写法把整个深度缓冲写成 0、
+其后所有几何体被错误遮挡，**而且没有任何报错** —— 已修，回归页是 `examples/depth-null-format.html`
+（含反向对照）。
 
 **还没做**
 
@@ -842,26 +1092,48 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 
 ### 测试构成
 
-`test/` 下 9 个文件、208 条用例，全部跑在 **node** 环境（不需要浏览器）：
+`test/` 下 **26 个文件、396 条用例**，全部跑在 **node** 环境（不需要浏览器），实测全绿。
+这两个数字以 `pnpm test` / `pnpm exec vitest run` 打印的当前值为准 —— 这一轮为了给「渲染到纹理的
+行序」「mip 生成」「预热」「MSAA」等改动补证据，测试文件增长得很快，写死在文档里必然过期
+（本节上一次写的是「9 个文件、208 条用例」）。
 
 | 文件 | 覆盖 |
 | --- | --- |
 | `test/gfx.test.ts` | uniform 布局与代码生成、`Material` 声明注入、`Geometry` 数据打包与校验、实例化属性 |
+| `test/gfx-texture.test.ts` | gfx 纹理：上传格式表、`mipLevelCount` 与后端 mip 生成、原始像素路径、`GfxTexture.fromImage()`（`createImageBitmap` 异步路径）、`buildMipChain`（CPU 基线） |
+| `test/gfx-culling.test.ts` | `FrustumCuller`（视锥剔除）与 draw 排序（`'opaque'` 的段边界、`'all'` 的半透明物顺序） |
+| `test/gfx-prewarm.test.ts` | `Renderer.prewarm()` 在两个后端的**分派**、跳过与失败路径 |
 | `test/shaders.test.ts` | 源码注册表、按后端选语言、GLSL 包装开关（`#version`/精度前言）、GLSL/WGSL 反射 |
 | `test/math.test.ts` | 向量 / 矩阵 / 四元数 / Euler / Plane / Ray / Box3 / Frustum / Color / Raycaster（含退化输入） |
-| `test/enums.test.ts` | 枚举取值与位标志 |
-| `test/utils.test.ts` | 断言、TypedArray、位标志、logger |
-| `test/factories.test.ts` | 后端探测、回退与错误路径 |
-| `test/webgl2-glstate.test.ts` | `GlStateCache.invalidateTextureUnits()` 的失效范围（哪些缓存必须保留） |
-| `test/webgpu-resource-tracking.test.ts` | WebGPU 资源追踪：`destroy()` 后从设备的追踪集合里摘掉（每帧 create/destroy 不堆积） |
+| `test/enums.test.ts` | 枚举取值与位标志、格式与拓扑辅助函数 |
+| `test/utils.test.ts` | 断言、TypedArray、位标志、id、释放、logger、WebGL2 调试标记（`EXT_debug_marker`） |
+| `test/factories.test.ts` | 后端探测（不能占用调用方的 canvas）、回退与错误路径 |
+| `test/core-texture.test.ts` | 纹理尺寸/级数/mipLevelExtent 的尺寸推导 |
 | `test/gpu-timing.test.ts` | timestamp 刻度→毫秒换算、`timestampWrites` 校验、拿不到 GPU 计时时的报错/降级、WebGPU 读回链路（mock 原生 device）、WebGL2 轮询与 disjoint、gfx 环形 + 延迟读回的槽位记账 |
+| `test/pipeline-prewarm.test.ts` | `ProgramCache.compileAsync`（WebGL2 异步链接）、`prewarmWebGL2RenderPipeline`、`prewarmWebGPURenderPipeline`（`createRenderPipelineAsync`） |
+| `test/depth-null-format.test.ts` | `depthStencil: { format: null }` / 不声明时的「不使用深度」语义，两个后端各一遍 |
+| `test/device-lost.test.ts` | 设备/上下文丢失：检测、`lostInfo`、后续提交明确报错、WebGL2 的 `webglcontextrestored` 如实上报但 `usable` 不回到 true |
+| `test/compute-backend.test.ts` | WebGL2 的 compute 两条入口：明确报错 + 替代方案（不假装成功） |
+| `test/webgl2-msaa.test.ts` | `sampleCount > 1` 的 renderbuffer + `blitFramebuffer` 机制，以及采样数不支持时的明确报错 |
+| `test/webgl2-mipmap.test.ts` / `test/webgpu-mipmap.test.ts` | 两个后端各自的 `generateMipmaps()`（WebGPU 是 render pass 逐级降采样） |
+| `test/texture-row-convention.test.ts` | 纹理行序契约：同一份数据在 WebGL2 与 WebGPU 落到同一个纹素行 |
+| `test/rtt-row-order.test.ts` | 「渲染到纹理」的行序：两个后端的 `RenderTarget.rowOrder`、`mat4.flipClipY` 的数学与「会反转绕序」、gfx 在纹理附件上翻 / 画布不翻 / `rowOrder: 'backend'` / 切通道恢复 / 预热与绘制同一条管线 |
+| `test/gfx-camera-projection.test.ts` | 相机只算**一份**投影矩阵（按 `depthRange` 选 `perspective`/`perspectiveZO`、`ortho`/`orthoZO`）、切约定后缓存失效、改 `fov`/`size` 后 `update()` 一定重算、公开面收窄 |
+| `test/webgl2-glstate.test.ts` | `GlStateCache.invalidateTextureUnits()` 的失效范围（哪些缓存必须保留） |
+| `test/webgl2-sampler-mapping.test.ts` | `WebGL2Sampler` 的 mip 过滤映射 |
+| `test/webgl2-copy-bytesperrow.test.ts` | `copyTextureToBuffer` 的 `bytesPerRow` 校验 |
+| `test/webgl2-resource-tracking.test.ts` | `WebGL2Device` 资源追踪：`destroy()` 后从追踪集合里摘掉（500 轮 create/destroy 回到基线） |
+| `test/webgpu-resource-tracking.test.ts` | 同上，WebGPU 侧 |
 
-**像素级**的验证放在浏览器里，入口是 `examples/gallery.html`（汇总页，列出下面全部示例）：
-`examples/smoke.html`（core 层 17 项）、`examples/index.html?verify=1`（gfx 层）、
-`examples/depth.html?backend=webgl2|webgpu`（gfx 画布路径的深度测试：近红远绿 → 中心必须是红）、
-`examples/instancing.html?verify=1` / `examples/batch.html?verify=1`（实例化与批量各自的像素自检），
-以及 `core-*.html` 五个 core 层示例（`?verify=1` 会打印像素结论）。
-改动渲染路径后请都跑一遍，两个后端都要看（`node scripts/verify-headless.mjs` 能把结论抓成退出码）。
+**像素级**的验证放在浏览器里，入口是 `examples/gallery.html` 与
+[示例与自检](#示例与自检)那一节列出的全部页面：`examples/smoke.html`（core 层 17 项，**只跑 WebGL2**）、
+`examples/index.html?verify=1`（gfx 层）、`examples/depth.html?backend=webgl2|webgpu`（gfx 画布路径的
+深度测试：近红远绿 → 中心必须是红）、`examples/instancing.html?verify=1` / `examples/batch.html?verify=1`
+（实例化与批量各自的像素自检），以及各个 `core-*.html` 示例（`?verify=1` 会打印像素结论，
+`core-texture-mipmap` / `core-texture-async` / `rtt-orientation` / `depth-null-format` 等页面把逐字节
+或逐纹素的结论写进 `data-*`）。
+改动渲染路径后请把两个后端都跑一遍（`node scripts/verify-headless.mjs` 能把结论抓成退出码；
+`scripts/verify-texture-parity.mjs` / `scripts/compare-screenshots.mjs` 用来跨后端比对像素）。
 
 ### 代码约定
 
@@ -883,3 +1155,7 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 - `createDevice({ debug: true })` 会打开开销较大的额外校验（WebGL2 侧会轮询 `getError()`）。
 - `setGlobalLogLevel()` / `createLogger(name)` 控制日志级别；默认是 `warn`，也就是只输出警告与错误，
   需要细节时把级别调到 `debug`（`device.native` 上的一切仍按原生后端自己的规则输出）。
+- 已经在做的事：视锥剔除（默认开）、mip 由后端生成、异步管线预热与编译诊断、离屏 MSAA、
+  gfx 的纹理上传与异步创建 —— 每一项的实测数字写在 [性能优化](#性能优化) 一节。
+- 量性能前先想清楚要哪个数：`stats.frameTime` 是 CPU 提交、`stats.gpuFrameTime` 是 GPU 执行
+  （默认 `null`），两者不可互相替代。见 [GPU 计时](#gpu-计时)。
