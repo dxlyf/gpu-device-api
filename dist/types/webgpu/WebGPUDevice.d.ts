@@ -24,7 +24,7 @@
  * 另外本类额外暴露了 `defaultSampleCount`：core 的 `DeviceDescriptor` 有这个字段，
  * 但 `Device` 接口没有把它读出来，而 `CanvasConfig.sampleCount` 的默认值又要求读设备默认值。
  */
-import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo } from '../core/Device.js';
+import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo, DeviceTimingSupport } from '../core/Device.js';
 import type { BackendKind, AdapterInfo } from '../core/Adapter.js';
 import type { CanvasConfig } from '../core/CanvasContext.js';
 import type { BindGroupDescriptor } from '../core/binding/BindGroup.js';
@@ -86,6 +86,13 @@ export declare class WebGPUDevice implements Device {
     readonly enabledFeatureSet: ReadonlySet<string>;
     /** 创建本设备的 adapter 信息，便于日志与调试。 */
     readonly adapterInfo: AdapterInfo;
+    /**
+     * GPU 计时能力的真实探测结果（见 {@link DeviceTimingSupport}）。
+     *
+     * 刻意在**创建设备时**算一次并缓存：能力判定必须落到真实的 API 表面（方法在不在），
+     * 而不是 `features` 里的名字。探测结论在一台设备上不会变，所以不必每次问。
+     */
+    readonly timing: DeviceTimingSupport;
     /** `requiredLimits` 经校验后的完整 limits；`limits` 则来自实际创建出来的 device。 */
     readonly requestedLimits: DeviceLimits;
     /** `DeviceDescriptor.defaultSampleCount` 的规范化结果（1 或 4）。 */

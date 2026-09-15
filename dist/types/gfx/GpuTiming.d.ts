@@ -32,6 +32,30 @@ import type { BackendKind } from '../core/Adapter.js';
 import type { PassTimestampWrites, QuerySet } from '../core/resources/QuerySet.js';
 /** GPU 计时需要的 feature 名（WebGPU 的 device feature；WebGL2 侧由扩展探测成同名 feature）。 */
 export declare const GPU_TIMING_FEATURE = "timestamp-query";
+/**
+ * gfx 帧计时实际走的写入路径（与 {@link GpuTiming.slotStride} 一一对应）。
+ *
+ * - `'encoder'`：WebGPU 的 encoder 级时间戳（帧开始 / 帧结束各写一个）；
+ * - `'pass'`：pass 级区间计时（WebGL2 的 `beginQuery` → `endQuery`）；
+ * - `'none'`：这台设备上两条路都不可用。
+ */
+export type GpuTimingPath = 'encoder' | 'pass' | 'none';
+/**
+ * 这台设备上 gfx 帧计时该走哪条路；`'none'` 表示做不到。
+ *
+ * ## 为什么不能只看 `features.has('timestamp-query')`
+ *
+ * feature 名只说明「这个后端声称支持时间戳查询」，**不保证调用面真的存在**。实测的 Chrome 就是
+ * 反例：设备启用了 `timestamp-query`（`device.createQuerySet()` 正常返回），但原生
+ * `GPUCommandEncoder` 上没有 `writeTimestamp` 方法。只看 feature 会把这种设备判成「可用」，
+ * 于是计时被打开，直到**真正写时间戳的那一刻**才抛错 —— 而那一刻在帧循环里，一个**可选**的
+ * 性能分析能力把整页渲染（`examples/gfx-benchmark.html`）搞成了 fail。
+ *
+ * 所以这里读后端探测出来的**真实 API 表面**（{@link Device.timing}）：方法在不在、扩展拿没拿到。
+ * 后端没上报（第三方 `Device` 实现、测试桩）一律按「不可用」处理 —— 拿不准就别开，
+ * 这正是本次修复的原则。
+ */
+export declare function gpuTimingPath(device: Device): GpuTimingPath;
 /** 环形 query set 的默认槽数。 */
 export declare const DEFAULT_GPU_TIMING_FRAMES = 32;
 /** 默认延迟多少帧读回（见文件头「为什么不能每帧阻塞读回」）。 */
@@ -47,7 +71,12 @@ export interface GpuTimingOptions {
 /** GPU 计时的对外状态。关闭或不可用时 `enabled` 为 false，`gpuFrameTimeMs` 为 null。 */
 export interface GpuTimingStats {
     readonly enabled: boolean;
-    /** 后端 + 设备是否具备 GPU 计时能力（WebGPU：`timestamp-query`；WebGL2：时间查询扩展）。 */
+    /**
+     * 后端 + 设备是否具备 GPU 计时能力。
+     *
+     * 判据是后端对**真实 API 表面**的探测结果（`Device.timing`），不是 `features` 里的名字 ——
+     * 「启用了 `timestamp-query` 却没有 `writeTimestamp` 方法」正是只看名字会误判的那种设备。
+     */
     readonly available: boolean;
     /** 环形槽数；未启用时为 0。 */
     readonly frames: number;
@@ -70,6 +99,8 @@ export interface GpuTimingStats {
 export declare class GpuTiming {
     /** 每个环形槽占用几个 query 下标：WebGPU 需要「开始 + 结束」，WebGL2 只需要一个区间结果。 */
     readonly slotStride: number;
+    /** 本设备实际走的写入路径（见 {@link gpuTimingPath}）。构造成功后不可能是 `'none'`。 */
+    readonly path: GpuTimingPath;
     readonly frames: number;
     readonly delay: number;
     readonly backend: BackendKind;
@@ -92,10 +123,8 @@ export declare class GpuTiming {
     /**
      * 该设备是否具备 GPU 计时能力。
      *
-     * WebGL2 后端把「拿到 `EXT_disjoint_timer_query_webgl2`」映射成同名 feature（见
-     * `glCapabilities.queryGlFeatures`），所以两个后端可以同一句话判断。
-     * WebGPU 上它只表示 adapter 支持 —— 设备是否真的启用了该 feature 由 `createQuerySet()` 决定，
-     * 那正是 {@link GpuTiming} 构造函数会立刻失败并给出精确原因的地方。
+     * 读的是后端在创建设备时对**真实 API 表面**的探测结果（`Device.timing`），不是
+     * `features.has('timestamp-query')` —— 两者的差别以及为什么必须这样，见 {@link gpuTimingPath}。
      */
     static isAvailable(device: Device): boolean;
     constructor(device: Device, options?: GpuTimingOptions);
@@ -141,6 +170,13 @@ export declare class GpuTiming {
      */
     private selectSlot;
 }
+/**
+ * 「这台设备为什么做不了 GPU 计时」的一句话（英文，带 `[gpu-device-api] ` 前缀）。
+ *
+ * 优先用后端上报的原因（缺哪个 feature、缺哪个方法、缺哪个扩展只有后端知道），
+ * 后端没有上报能力时如实说「问不出来」—— 不假装它可用，也不编造具体缺什么。
+ */
+export declare function describeGpuTimingUnavailable(device: Device): string;
 /** 把任意错误整理成带 `[gpu-device-api] ` 前缀的一句话，供 Renderer 报告打开失败的原因。 */
 export declare function describeGpuTimingFailure(error: unknown): string;
 //# sourceMappingURL=GpuTiming.d.ts.map

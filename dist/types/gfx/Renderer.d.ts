@@ -422,8 +422,10 @@ export declare class Renderer {
     /**
      * 打开 GPU 计时。
      *
-     * 显式调用时**失败就抛错**（带 `[gpu-device-api] ` 前缀的英文消息，说明缺哪个 feature/扩展）——
-     * 例如 WebGL2 上没有 `EXT_disjoint_timer_query_webgl2`、或 WebGPU 设备没启用 `timestamp-query`。
+     * 显式调用时**失败就抛错**，而且**在启用时就抛**（带 `[gpu-device-api] ` 前缀的英文消息，
+     * 说明缺哪个 feature / 缺哪个方法 / 缺哪个扩展）—— 这正是本次修复的一个要点：以前的判定只看
+     * 特性标志，会把「启用了 `timestamp-query` 但实现没暴露 `GPUCommandEncoder.writeTimestamp()`」
+     * 的设备判成可用，于是异常拖到第一次记时间戳时才炸（那一炸在帧循环里，整页渲染跟着挂）。
      * 想让失败静默降级请用 `Renderer.create({ gpuTiming: true })`（它会把原因写进 `gpuTiming.error`）。
      *
      * 实现方式是环形 query set + 延迟若干帧的异步读回，**不会每帧阻塞等待 GPU**；
@@ -432,6 +434,18 @@ export declare class Renderer {
     enableGpuTiming(options?: GpuTimingOptions): void;
     /** 关闭 GPU 计时并释放 query set。 */
     disableGpuTiming(): void;
+    /**
+     * 跑一步 GPU 计时调用；失败就**自动关掉计时、记下原因、渲染继续**。
+     *
+     * 为什么必须这样包：GPU 计时是**可选**的性能分析能力，它的任何失败都不该让渲染/页面失败。
+     * 实测的事故正好相反 —— 设备启用了 `timestamp-query` 却没暴露 `writeTimestamp`，写时间戳抛出的
+     * 异常逃进帧循环，`examples/gfx-benchmark.html` 整页 fail（连带 CPU 那几列也一起没了）。
+     * 所以这里把失败降级成：`enabled: false` + `error`（可读）+ `stats.gpuFrameTime = null`，
+     * 同时释放 query set；本帧与后续帧照常渲染，只是不再有 GPU 数据。
+     */
+    private runGpuTimingStep;
+    /** 运行中失败后的降级收尾（见 {@link Renderer.runGpuTimingStep}）；绝不抛。 */
+    private disableGpuTimingAfterFailure;
     /**
      * 预编译一批材质的管线变体，把编译/链接开销挪出渲染循环。
      *
@@ -505,7 +519,12 @@ export declare class Renderer {
      * 必须在 `beginFrame()` 之后调用。
      */
     beginPass(options?: FrameOptions): void;
-    /** 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。 */
+    /**
+     * 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。
+     *
+     * 取写入点这一步失败同样降级（见 {@link Renderer.runGpuTimingStep}），**通道照常开**：
+     * 只是这一帧不带时间戳，绝不能让「拿不到计时」变成「这一帧画不出来」。
+     */
     private timestampWritesForPass;
     /**
      * 「画到离屏 target」与「画到 canvas」走同一段代码，只是附件来源不同。

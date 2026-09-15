@@ -24,7 +24,7 @@
 import { BufferUsage } from '../core/enums/BufferUsage.js';
 import { GpuError } from '../core/errors/GpuError.js';
 import { type Logger } from '../utils/logger.js';
-import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo } from '../core/Device.js';
+import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo, DeviceTimingSupport } from '../core/Device.js';
 import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasConfig, CanvasContext } from '../core/CanvasContext.js';
 import type { Buffer, BufferDescriptor } from '../core/resources/Buffer.js';
@@ -64,6 +64,14 @@ export declare class WebGL2Device implements Device {
     readonly queue: WebGL2Queue;
     readonly debug: boolean;
     readonly native: WebGL2RenderingContext;
+    /**
+     * GPU 计时能力的真实探测结果（见 {@link DeviceTimingSupport}）。
+     *
+     * WebGL2 只有一条路：pass 级区间计时（`gl.beginQuery(TIME_ELAPSED_EXT)` → `endQuery`），
+     * 而它依赖 `EXT_disjoint_timer_query_webgl2` 扩展 —— 这里在创建设备时**真的去问一次**
+     * `gl.getExtension()`，而不是相信 adapter 阶段记下来的 feature 名。
+     */
+    readonly timing: DeviceTimingSupport;
     /** 状态缓存；canvas context 等在外部改动 GL 状态后会调用 {@link WebGL2Device.invalidateState}。 */
     readonly state: GlStateCache;
     readonly planCache: BindingPlanCache;

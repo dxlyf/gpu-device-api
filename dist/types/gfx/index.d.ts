@@ -35,7 +35,7 @@ export { FrustumCuller } from './Culling.js';
 export { compareOpaque, compareTransparent, sortDraws, type DrawSortMode, type SortableDraw, } from './DrawSort.js';
 export { GFX_UPLOAD_FORMATS, GfxTexture, buildMipChain, isImageSource, type AsyncTextureDesc, type DecodedPixels, type ImageSource, type TextureDesc, } from './Texture.js';
 export { Renderer, type Camera, type ColorInput, type DrawOptions, type FrameOptions, type MaterialPrewarmResult, type RendererOptions, type RendererPrewarmOptions, type RendererPrewarmResult, type RendererStats, type RowOrderMode, } from './Renderer.js';
-export { DEFAULT_GPU_TIMING_DELAY, DEFAULT_GPU_TIMING_FRAMES, GPU_TIMING_FEATURE, GpuTiming, describeGpuTimingFailure, type GpuTimingOptions, type GpuTimingStats, } from './GpuTiming.js';
+export { DEFAULT_GPU_TIMING_DELAY, DEFAULT_GPU_TIMING_FRAMES, GPU_TIMING_FEATURE, GpuTiming, describeGpuTimingFailure, describeGpuTimingUnavailable, gpuTimingPath, type GpuTimingOptions, type GpuTimingPath, type GpuTimingStats, } from './GpuTiming.js';
 export { PerspectiveCamera, OrthographicCamera, type DepthRangeConvention, type PerspectiveCameraOptions, type OrthographicCameraOptions, } from './Camera.js';
 export { OrbitControls, type OrbitControlsOptions } from './OrbitControls.js';
 /**
