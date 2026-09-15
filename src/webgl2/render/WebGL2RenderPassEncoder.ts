@@ -804,10 +804,12 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
 
     const depthStencil = descriptor.depthStencilAttachment;
     if (depthStencil && depthStencil.depthLoadOp !== 'load') {
-      gl.depthMask(true);
+      const hasStencil = depthStencil.view.texture.format.includes('stencil');
+      // 打开深度与模板的写掩码再清：GL 的清屏受写掩码限制，上一条管线把
+      // `stencilWriteMask` 设成 0 时清模板会被静默跳过（模板值跨通道残留）。
+      this.state.prepareClear(hasStencil);
       const depth = depthStencil.depthClearValue ?? 1;
       const stencilValue = depthStencil.stencilClearValue ?? 0;
-      const hasStencil = depthStencil.view.texture.format.includes('stencil');
       if (hasStencil) {
         gl.clearBufferfi(gl.DEPTH_STENCIL, 0, depth, stencilValue);
       } else {

@@ -334,8 +334,9 @@ export class WebGL2RenderTarget implements RenderTarget {
       }
       if (this.depthTexture && clear.depthLoadOp !== 'load') {
         const format = glFormat(this.depthFormat!);
-        // `depthMask` 必须临时打开，否则清深度会被静默忽略。
-        gl.depthMask(true);
+        // 深度与模板的写掩码必须临时打开，否则清屏会被静默忽略（GL 的清屏受写掩码限制）：
+        // 上一条管线的 `stencilWriteMask` 为 0 时，清模板那一半是空操作。
+        this.state.prepareClear(format.stencil);
         if (format.stencil) {
           gl.clearBufferfi(gl.DEPTH_STENCIL, 0, clear.clearDepth ?? 1, clear.clearStencil ?? 0);
         } else {

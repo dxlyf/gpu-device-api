@@ -228,4 +228,60 @@ core 层用 `mat4.flipClipY` 是同一件事的矩阵写法（`examples/msaa-off
   `scripts/compare-screenshots.mjs`（它会给出原样 / 上下翻转 / 左右镜像 / 通道颠倒各自的一致率，
   翻转一致率异常高就是行序反了的决定性证据）。
 
+## 六、模板（stencil）语义：两个后端都是完整的
+
+`DepthStencilState` 里与模板有关的字段在**两个后端上都是真语义**，没有降级、也没有近似：
+
+| core 字段 | WebGPU | WebGL2 |
+| --- | --- | --- |
+| `stencilFront` / `stencilBack` 的 `compare` | `GPUDepthStencilState.stencilFront/Back.compare` | `gl.stencilFuncSeparate(FRONT/BACK, func, ref, readMask)` |
+| 同上的 `failOp` / `depthFailOp` / `passOp` | `…failOp` / `…depthFailOp` / `…passOp` | `gl.stencilOpSeparate(FRONT/BACK, sfail, dpfail, dppass)` |
+| `stencilReadMask` | `stencilReadMask` | `stencilFuncSeparate` 的 `mask` 参数 |
+| `stencilWriteMask` | `stencilWriteMask` | `gl.stencilMaskSeparate(FRONT/BACK, mask)` |
+| `setStencilReference(v)` | `GPURenderPassEncoder.setStencilReference(v)` | 同一个引用值进 `stencilFuncSeparate` |
+
+**GLES 3.0 支持双面模板**，这一点值得单独写出来，因为一个常见的误解是「GLES 3.0 只有单面模板，
+所以 WebGL2 只能取 `stencilFront`」。事实是 `stencilFuncSeparate` / `stencilOpSeparate` /
+`stencilMaskSeparate` 本来就是核心功能（GLES 2.0 才有 `EXT_stencil_two_side` 那段历史），
+所以两个面可以各自独立地下发 —— WebGL2 侧原来丢掉的只有「实现」。
+
+### 曾经的缺陷（静默）
+
+WebGL2 侧曾把模板状态整段丢掉：`ResolvedRenderState` 只带 `stencilEnabled`，下发时写死一句
+`gl.stencilFunc(gl.ALWAYS, ref, 0xff)`，从不调用 `stencilOpSeparate` / `stencilMaskSeparate`
+（`GL_STENCIL_OPS` 定义了却没有调用方）。于是 `{ compare: 'equal', passOp: 'replace' }` 这类配置
+退化成「恒通过、不写」，**不报任何错**，画面就是错的。修复后的量化对照（同一页
+`examples/stencil.html`、同一份模板配置，`scripts/analyze-screenshot.mjs` 统计合成 screenshot）：
+
+| 场景 | 区域 | 修复前 WebGL2 | 修复前 WebGPU | 修复后 WebGL2 | 修复后 WebGPU |
+| --- | --- | --- | --- | --- | --- |
+| 基准（写模板 + `compare: 'equal'`） | 模板区外 | 100% 绿（32768 像素） | 0% 前景 | **0% 前景** | **0% 前景** |
+| 同上 | 模板区内 | 100% 绿 | 100% 绿 | 100% 绿 | 100% 绿 |
+
+（像素断言：模板区内 `0,255,0`、区外 `11,14,19`；修复前 WebGL2 的区外读回是 `0,255,0`，
+与 WebGPU 明显不同。逐字段的参数断言见 `test/webgl2-stencil.test.ts`。）
+
+### 两处容易踩的细节（都在实现里处理了）
+
+1. **清屏受写掩码限制**。GL 的 `clearBufferfi` 清模板的部分会被 `STENCIL_WRITEMASK` 逐位过滤：
+   上一条管线的 `stencilWriteMask` 是 0 时，下一次清模板**静默失效**，模板值跨渲染通道残留。
+   实现里清深度/模板之前会把两个写掩码临时置成全 1（`GlStateCache.prepareClear()`），
+   清完之后缓存作废、下一次下发真实掩码。清深度那一半（`DEPTH_WRITEMASK`）同理。
+2. **状态缓存的去重键必须覆盖全部字段**。模板状态有 12 个字段（两个面各 4 个 + 引用值 +
+   两个掩码 + 开关），漏掉任何一个都会让缓存误判「状态没变」而漏下发 —— 症状是
+   「换条管线之后画面偶尔不对」，同样没有任何报错。`test/webgl2-stencil.test.ts` 对每个字段
+   各写了一条「变了就必须重新下发」的用例。
+
+### 唯一可表达的差异：掩码与参考值的位宽
+
+WebGPU 的 `stencilReadMask` / `stencilWriteMask` / `setStencilReference()` 是 32 位整数
+（缺省掩码是 `0xffffffff`），而 GLES 3.0 的模板缓冲在 `depth24plus-stencil8` 上只有 8 位：
+GL 自己会把掩码与 `2^s - 1` 相与，所以传 `0xffffffff` 与传 `0xff` 在 GL 上是同一件事
+（参考值同理）。这是**可表达**的差异（由 GL 负责截断），本库如实原样传递、不报错、也不改写
+调用方的值；只是要知道「WebGPU 上第 8 位以上的掩码位在 WebGL2 上没有意义」。
+
+除这一点之外，模板没有「无法表达」的子特性：两个后端的模型逐字段同构
+（两个面各自独立、引用值单值、掩码单值）。仍然只能表达不了的只有深度侧的
+`depthBiasClamp`（见 `glStateCache.setDepthTest()` 的注释）。
+
 

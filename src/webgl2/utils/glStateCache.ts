@@ -15,6 +15,42 @@ export interface UniformBufferBinding {
   size: number;
 }
 
+/**
+ * GL 枚举表示的单面模板状态：比较函数 + 三种操作。
+ *
+ * 正面与背面各有一份 —— GLES 3.0 的 `stencilFuncSeparate` / `stencilOpSeparate` 本来就支持
+ * 两个面各自独立，与 WebGPU 的 `stencilFront` / `stencilBack` 一一对应。
+ */
+export interface GlStencilFaceState {
+  /** `GL_COMPARE_FUNCS` 里的比较函数。 */
+  readonly compare: number;
+  /** 模板测试失败时执行的操作（`GL_STENCIL_OPS`）→ `stencilOpSeparate` 的第一个操作。 */
+  readonly failOp: number;
+  /** 模板通过、深度测试失败时执行的操作 → `stencilOpSeparate` 的第二个操作。 */
+  readonly depthFailOp: number;
+  /** 模板与深度都通过时执行的操作 → `stencilOpSeparate` 的第三个操作。 */
+  readonly passOp: number;
+}
+
+/**
+ * 一次完整的模板状态：开关 + 参考值 + 两个面各自的比较/操作 + 读写掩码。
+ *
+ * 参考值与两个掩码都是**单值**（两个面共用），这与 WebGPU 的 `setStencilReference()` /
+ * `stencilReadMask` / `stencilWriteMask` 语义一致；GLES 3.0 同样是「比较函数与掩码按面传给
+ * `stencilFuncSeparate`，而引用值全局只有一个」。
+ */
+export interface GlStencilState {
+  enabled: boolean;
+  /** `setStencilReference()` 给出的参考值。 */
+  reference: number;
+  front: GlStencilFaceState;
+  back: GlStencilFaceState;
+  /** 读掩码：与参考值和模板缓冲值相与之后再做比较。 */
+  readMask: number;
+  /** 写掩码：`stencilMaskSeparate` 的参数。 */
+  writeMask: number;
+}
+
 export class GlStateCache {
   private readonly gl: WebGL2RenderingContext;
 
@@ -38,8 +74,7 @@ export class GlStateCache {
   private depthFunc: number | null = null;
   private depthBias: [number, number, number] | null = null;
 
-  private stencilEnabled: boolean | null = null;
-  private stencilReference: number | null = null;
+  private stencil: GlStencilState | null = null;
 
   private cullEnabled: boolean | null = null;
   private cullFace: number | null = null;
@@ -96,8 +131,7 @@ export class GlStateCache {
     this.depthWrite = null;
     this.depthFunc = null;
     this.depthBias = null;
-    this.stencilEnabled = null;
-    this.stencilReference = null;
+    this.stencil = null;
     this.cullEnabled = null;
     this.cullFace = null;
     this.frontFace = null;
@@ -342,17 +376,104 @@ export class GlStateCache {
     }
   }
 
-  setStencilTest(enabled: boolean, reference: number): void {
+  /**
+   * 清深度/模板附件之前调用：把两个写掩码临时置成「全写」。
+   *
+   * 为什么必须做：**GL 的清屏受写掩码限制** —— `clearBufferfi` 清模板的部分会被
+   * `STENCIL_WRITEMASK` 逐位过滤，写掩码为 0 的位上根本清不掉；深度那边同理
+   *（`DEPTH_WRITEMASK` 关着时清深度是空操作，这一条代码里本来就处理了）。
+   * 而缓存记的是「上一次下发的掩码」：上一条管线的 `stencilWriteMask` 是 0 时，
+   * 下一次清模板就会**静默失效**，模板值跨通道残留（像素级复现见 `examples/stencil.html`
+   * 的 `nowrite` 场景：写掩码 0 的那一趟之后，下一个通道本该是 0 的模板位还是上一帧的 1）。
+   *
+   * 清屏本来就绕过了状态缓存，所以这里顺手把相关记录标成未知，下一次
+   * `setDepthTest()` / `setStencilTest()` 会重新下发真实值。
+   *
+   * @param hasStencil 当前附件是否带模板位。没有模板位时不碰模板掩码（少两次无效调用）。
+   */
+  prepareClear(hasStencil: boolean): void {
     const gl = this.gl;
-    if (this.stencilEnabled !== enabled) {
-      if (enabled) gl.enable(gl.STENCIL_TEST);
+    gl.depthMask(true);
+    if (hasStencil) {
+      // 全 1：GL 会把掩码与 `2^s - 1` 相与，所以在 8 位模板缓冲上等价于 0xff。
+      gl.stencilMaskSeparate(gl.FRONT, 0xffff_ffff);
+      gl.stencilMaskSeparate(gl.BACK, 0xffff_ffff);
+      this.stencil = null;
+    }
+    this.depthWrite = null;
+  }
+
+  /**
+   * 设置**完整**的模板状态：正/背面各自的比较函数与三种操作、读写掩码、参考值。
+   *
+   * 为什么必须用 `*Separate` 这一组入口：GLES 3.0 **支持双面模板**，
+   * 而 `stencilFunc` / `stencilOp` / `stencilMask` 这组单面入口只能表达「两个面完全相同」。
+   * WebGPU 的 `DepthStencilState` 里 `stencilFront` / `stencilBack` 是各自独立的，
+   * 所以单面入口根本无法如实下发 —— 这正是这条路径原先的缺陷：整个模板状态被丢掉，
+   * 只留下一句硬编码的 `stencilFunc(ALWAYS, ref, 0xff)`，于是 `{ compare: 'equal',
+   * passOp: 'replace' }` 这类配置退化成「恒通过、不写」，不报任何错。
+   *
+   * 去重（这里最容易出错）：整份状态完全相同时一次 GL 调用都不发；只有真的变了的**部分**才重下发。
+   * 判据覆盖每一个字段 —— 两个面各自的 `compare` / `failOp` / `depthFailOp` / `passOp`，
+   * 加上 `reference` / `readMask` / `writeMask` / `enabled`。少一个字段就会误判「状态没变」而
+   * 漏下发，症状是「换条管线之后画面偶尔不对」，没有异常也没有日志。
+   *
+   * 关掉 `STENCIL_TEST` 时只下发 `disable`，但**状态照旧记下来**：GL 在测试关闭期间不会重置
+   * 这些参数，所以之后用同一份状态重新打开时只需要再 `enable` 一次。
+   */
+  setStencilTest(state: GlStencilState): void {
+    const gl = this.gl;
+    const previous = this.stencil;
+    if (previous !== null && sameStencilState(previous, state)) return;
+
+    if (previous === null || previous.enabled !== state.enabled) {
+      if (state.enabled) gl.enable(gl.STENCIL_TEST);
       else gl.disable(gl.STENCIL_TEST);
-      this.stencilEnabled = enabled;
     }
-    if (enabled && this.stencilReference !== reference) {
-      gl.stencilFunc(gl.ALWAYS, reference, 0xff);
-      this.stencilReference = reference;
+
+    if (state.enabled) {
+      // 引用值与读掩码是**两个面共用**的（`stencilFuncSeparate` 每次都要把三者一起传），
+      // 所以它们一变，两个面的 func 都得重下发；而 `compare` 只影响它自己那个面。
+      const funcSharedChanged = previous?.reference !== state.reference || previous?.readMask !== state.readMask;
+      const front = state.front;
+      const back = state.back;
+      if (funcSharedChanged || previous?.front.compare !== front.compare) {
+        gl.stencilFuncSeparate(gl.FRONT, front.compare, state.reference, state.readMask);
+      }
+      if (funcSharedChanged || previous?.back.compare !== back.compare) {
+        gl.stencilFuncSeparate(gl.BACK, back.compare, state.reference, state.readMask);
+      }
+      if (
+        previous === null ||
+        previous.front.failOp !== front.failOp ||
+        previous.front.depthFailOp !== front.depthFailOp ||
+        previous.front.passOp !== front.passOp
+      ) {
+        gl.stencilOpSeparate(gl.FRONT, front.failOp, front.depthFailOp, front.passOp);
+      }
+      if (
+        previous === null ||
+        previous.back.failOp !== back.failOp ||
+        previous.back.depthFailOp !== back.depthFailOp ||
+        previous.back.passOp !== back.passOp
+      ) {
+        gl.stencilOpSeparate(gl.BACK, back.failOp, back.depthFailOp, back.passOp);
+      }
+      if (previous?.writeMask !== state.writeMask) {
+        gl.stencilMaskSeparate(gl.FRONT, state.writeMask);
+        gl.stencilMaskSeparate(gl.BACK, state.writeMask);
+      }
     }
+
+    // 存一份快照：调用方（管线变体的解析结果）持有的是共享对象，不能被这里的引用绑住。
+    this.stencil = {
+      enabled: state.enabled,
+      reference: state.reference,
+      front: { ...state.front },
+      back: { ...state.back },
+      readMask: state.readMask,
+      writeMask: state.writeMask,
+    };
   }
 
   setCull(enabled: boolean, face: number, frontFace: number): void {
@@ -419,4 +540,26 @@ function same4(
 function same3(a: readonly [number, number, number] | null, b: readonly [number, number, number]): boolean {
   if (!a) return false;
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+}
+
+/** 两个模板面是否逐字段相同。 */
+function sameStencilFace(a: GlStencilFaceState, b: GlStencilFaceState): boolean {
+  return a.compare === b.compare && a.failOp === b.failOp && a.depthFailOp === b.depthFailOp && a.passOp === b.passOp;
+}
+
+/**
+ * 两份模板状态是否逐字段相同（去重键）。
+ *
+ * 刻意不拼签名字符串：这里的字段都是小整数，逐个比较既没有分配，也不可能「漏掉某个字段还编译通过」
+ * —— 漏字段正是这类缓存最典型的缺陷（状态没变 → 漏下发 → 随机画面错误）。
+ */
+function sameStencilState(a: GlStencilState, b: GlStencilState): boolean {
+  return (
+    a.enabled === b.enabled &&
+    a.reference === b.reference &&
+    a.readMask === b.readMask &&
+    a.writeMask === b.writeMask &&
+    sameStencilFace(a.front, b.front) &&
+    sameStencilFace(a.back, b.back)
+  );
 }
