@@ -5,8 +5,19 @@
  * 这个页面在真实浏览器里跑完整链路：shader 编译链接 → 顶点布局 / VAO → 渲染通道 → 清屏 → draw
  * → 像素回读，另外验证几条错误路径确实会报错。
  *
- * 无头自动化的判据：结果会写到 `<html data-smoke-result="pass|fail">`，
- * 配合 `chrome --headless --dump-dom` 直接抓取即可。
+ * **这个页面只跑 WebGL2，而且是刻意如此 —— 不要把它当成「两个后端的冒烟测试」。** 它有三处
+ * 无法做到后端无关：① 着色器源码是 GLSL（WebGPU 需要 WGSL）；② canvas 读回直接用了
+ * `gl.readPixels` 这条 escape hatch；③ 有三条断言检查的是 **WebGL2 专有**的错误路径
+ * （WebGL2 上 compute pipeline 必须报错、关闭自动包装后缺 `#version`、`#version 100`）。
+ * 因此给它加一个 `backend` 查询参数并不会让它在 WebGPU 上通过，只会得到一堆无关的失败。
+ *
+ * WebGPU 的 core 层覆盖在别处，且都带像素断言：`depth.html`（两后端 `depthPixel` 均为
+ * `255,0,0,255`）、`instancing.html`（两后端 `instancingPixel` 均为 `68,30,39`）、
+ * `device-lost.html`（WebGPU 6/6）、`compute.html`（WebGPU 逐元素严格相等）。
+ *
+ * 无头自动化的判据：结果会写到 `<html data-smoke-result="pass|fail">`，后端名会写到
+ * `<html data-smoke-backend="webgl2">`（这个属性的作用就是防止抓取脚本把结果误读成
+ * 「两个后端都跑过了」），配合 `chrome --headless --dump-dom` 直接抓取即可。
  */
 
 import { createDeviceWithAdapter } from '../src/factories/index.js';
@@ -24,6 +35,8 @@ function report(): void {
   out.textContent = lines.join('\n');
   out.className = failures === 0 ? 'pass' : 'fail';
   document.documentElement.dataset.smokeResult = failures === 0 ? 'pass' : 'fail';
+  // 明确写出后端名：本页只跑 WebGL2，抓取脚本不该把它当成「两个后端都通过」。
+  document.documentElement.dataset.smokeBackend = 'webgl2';
 }
 
 function expectValidationError(name: string, action: () => void): void {
