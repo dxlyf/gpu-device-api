@@ -76,8 +76,11 @@
         <b>GPU 执行</b>来自后端的 query 机制（WebGPU：<code>timestamp-query</code> +
         <code>encoder.writeTimestamp</code>；WebGL2：<code>EXT_disjoint_timer_query_webgl2</code>），
         是环形 query set + 延迟若干帧的异步读回，<b>不会每帧阻塞等 GPU</b>。
-        两列不是同一个量：调用 <code>renderer.enableGpuTiming()</code> 之前 GPU 那列是 <code>—</code>（不是 0）。
-        拿不到 GPU 计时的原因（缺 feature / 缺扩展 / disjoint）写在 <code>data-bench-gpu-error</code> 里。
+        两列不是同一个量：没有打开 GPU 计时时 GPU 那列是 <code>n/a</code>（不是 0）。
+        <b>GPU 计时是可选能力</b>：拿不到（后端缺 feature / 缺扩展、或实现没暴露写时间戳的方法）时，
+        这一列显示 <code>n/a</code> 并带上原因，页面其余部分照常跑到 <code>ok</code> ——
+        可选能力缺失不是页面失败。完整的原文原因写在 <code>data-bench-gpu-error</code>，
+        后端探测到的真实能力写在 <code>data-bench-gpu-available</code>。
       </p>
       <p class="hint">
         <b>配对 A/B（推荐用这个看收益）</b>：<code>ab=cull</code> 会在**同一个页面里

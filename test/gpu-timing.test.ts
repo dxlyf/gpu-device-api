@@ -370,17 +370,35 @@ describe('WebGL2：缺扩展时的明确报错', () => {
     expect(fake.deleted).toHaveLength(2);
   });
 
-  it('gfx 的 GpuTiming 会把后端错误原样抛给调用方（这就是「拿不到就报错」的那条路径）', () => {
+  it('gfx 的 GpuTiming 在能力不可用时**在启用处**就抛，并把后端给的原因原样转述', () => {
     const fake = createFakeGl(false);
+    const reason =
+      '[gpu-device-api] this WebGL2 context does not expose the "EXT_disjoint_timer_query_webgl2" extension, ' +
+      'so GL timer queries are unavailable.';
     const device = {
       backend: 'webgl2',
       // WebGL2 后端在缺扩展时不会把 'timestamp-query' 放进 features 里。
       features: { has: () => false, names: [] },
+      // 能力探测的结果由后端上报（真实后端是当场问一次 gl.getExtension，见 WebGL2Device）。
+      timing: { encoderTimestamps: false, passTimestamps: false, unavailableReason: reason },
       createQuerySet: (descriptor: QuerySetDescriptor) => new WebGL2QuerySet(fake.gl, descriptor),
     } as unknown as Device;
 
     expect(GpuTiming.isAvailable(device)).toBe(false);
-    expect(() => new GpuTiming(device)).toThrow(/\[gpu-device-api\] QuerySet .*EXT_disjoint_timer_query_webgl2/);
+    // 抛出点前移到了构造 / 启用处，抛的是探测出来的原因（不再拖到 createQuerySet 才报）。
+    expect(() => new GpuTiming(device)).toThrow(reason);
+  });
+
+  it('后端没上报 timing（第三方 Device / 测试桩）时按不可用处理，不假设它能用', () => {
+    const fake = createFakeGl(true);
+    const device = {
+      backend: 'webgl2',
+      features: { has: () => true, names: ['timestamp-query'] },
+      createQuerySet: (descriptor: QuerySetDescriptor) => new WebGL2QuerySet(fake.gl, descriptor),
+    } as unknown as Device;
+
+    expect(GpuTiming.isAvailable(device)).toBe(false);
+    expect(() => new GpuTiming(device)).toThrow(/does not report a usable GPU timing path/);
   });
 });
 
@@ -496,6 +514,11 @@ function createRecordingDevice(backend: 'webgpu' | 'webgl2'): RecordingDevice {
   const device = {
     backend,
     features: { has: () => true, names: ['timestamp-query'] },
+    // 能力探测结果：WebGPU 走 encoder 级时间戳，WebGL2 走 pass 级区间计时。
+    timing:
+      backend === 'webgl2'
+        ? { encoderTimestamps: false, passTimestamps: true, unavailableReason: null }
+        : { encoderTimestamps: true, passTimestamps: false, unavailableReason: null },
     createQuerySet: (descriptor: QuerySetDescriptor): QuerySet => ({
       label: descriptor.label ?? 'fake',
       type: descriptor.type,
@@ -685,6 +708,7 @@ describe('gfx GpuTiming：环形 query set + 延迟读回', () => {
     const failing = {
       backend: 'webgl2',
       features: { has: () => true, names: ['timestamp-query'] },
+      timing: { encoderTimestamps: false, passTimestamps: true, unavailableReason: null },
       createQuerySet: (descriptor: QuerySetDescriptor) =>
         ({
           label: descriptor.label,

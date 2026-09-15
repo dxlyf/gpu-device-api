@@ -71,6 +71,46 @@ export interface DeviceFeatures {
   readonly names: readonly string[];
 }
 
+/**
+ * 本设备上 GPU 计时（timestamp 查询）**真实可用**的写入通道。
+ *
+ * ## 为什么不能只看 `Device.features`
+ *
+ * feature 名只说明「这个后端声称支持这个特性」，**不保证调用面真的存在**。实测的 Chrome 就是
+ * 反例：设备启用了 `timestamp-query`（`device.createQuerySet()` 正常返回），但原生
+ * `GPUCommandEncoder` 上根本没有 `writeTimestamp` 方法（那个版本只有实验名的
+ * pass 内时间戳）。只看 feature 会把这种设备判成「可以使用 GPU 计时」，
+ * 直到真正写时间戳的那一刻才抛错 —— 而那一刻在帧循环里，于是一个**可选**的性能分析能力
+ * 把整页渲染搞挂了。
+ *
+ * 所以能力判定必须落到**真实的 API 表面**：方法在不在、扩展拿没拿到。这份结果由后端在
+ * 创建设备时探测并上报（`WebGPUDevice` / `WebGL2Device` 各有一份实现）。
+ */
+export interface DeviceTimingSupport {
+  /**
+   * `CommandEncoder.writeTimestamp()` 这条路是否可用。
+   *
+   * WebGPU：设备启用了 `timestamp-query`，**而且**原生 `GPUCommandEncoder` 上确实有
+   * `writeTimestamp` 方法；WebGL2：恒为 false —— GL 的时间查询只能测区间
+   *（`beginQuery` → `endQuery`），没有「单个时刻」的表达方式。
+   */
+  readonly encoderTimestamps: boolean;
+  /**
+   * pass 级 `timestampWrites`（区间计时）这条路是否可用。
+   *
+   * WebGPU：还需要 `timestamp-query-inside-passes`（或 Chrome 的实验名）；
+   * WebGL2：需要 `EXT_disjoint_timer_query_webgl2` 扩展。
+   */
+  readonly passTimestamps: boolean;
+  /**
+   * 两条路都不可用时，说明**缺什么**的原因（英文，以 `[gpu-device-api] ` 开头）；有任意一条可用时为 null。
+   *
+   * 放在这里而不是让上层自己拼：缺的是 feature、是方法、还是扩展，只有后端知道。
+   * 上层（gfx 的 GPU 计时）只负责把这句话转述给调用方。
+   */
+  readonly unavailableReason: string | null;
+}
+
 export interface DeviceLostInfo {
   readonly reason: DeviceLostReason;
   readonly message: string;
@@ -99,6 +139,18 @@ export interface Device {
   readonly queue: Queue;
   /** 请求了 `debug` 时为 true；在此期间后端会加入额外检查。 */
   readonly debug: boolean;
+
+  /**
+   * GPU 计时能力的**真实探测结果**（可选成员）。
+   *
+   * `features` 回答的是「支持哪些名字」，这里回答「现在这台设备上真的能用哪条路」——
+   * 两者的差别正是「启用 `timestamp-query` 却没有 `writeTimestamp` 方法」那类事故的根源，
+   * 详见 {@link DeviceTimingSupport}。
+   *
+   * 没有这个成员时（第三方 `Device` 实现、测试桩）一律按「两条路都不可用」处理：
+   * 拿不准就不要开计时 —— 宁可少一列性能数据，也不让可选的分析能力把渲染搞挂。
+   */
+  readonly timing?: DeviceTimingSupport;
 
   /**
    * 通往原生对象的 escape hatch：WebGPU 上是 `GPUDevice`，WebGL2 上是

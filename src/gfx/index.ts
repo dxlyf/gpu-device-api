@@ -120,7 +120,10 @@ export {
   GPU_TIMING_FEATURE,
   GpuTiming,
   describeGpuTimingFailure,
+  describeGpuTimingUnavailable,
+  gpuTimingPath,
   type GpuTimingOptions,
+  type GpuTimingPath,
   type GpuTimingStats,
 } from './GpuTiming.js';
 

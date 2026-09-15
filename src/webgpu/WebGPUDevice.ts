@@ -31,6 +31,7 @@ import type {
   DeviceFeatures,
   DeviceLimits,
   DeviceLostInfo,
+  DeviceTimingSupport,
 } from '../core/Device.js';
 import type { BackendKind, AdapterInfo } from '../core/Adapter.js';
 import type { CanvasConfig } from '../core/CanvasContext.js';
@@ -68,7 +69,7 @@ import { WebGPUBuffer } from './resources/WebGPUBuffer.js';
 import { WebGPUTexture } from './resources/WebGPUTexture.js';
 import { WebGPUSampler } from './resources/WebGPUSampler.js';
 import { WebGPUShaderModule } from './resources/WebGPUShaderModule.js';
-import { WebGPUQuerySet, asGPUQuerySet } from './resources/WebGPUQuerySet.js';
+import { WebGPUQuerySet, asGPUQuerySet, TIMESTAMP_INSIDE_PASSES_FEATURES, TIMESTAMP_QUERY_FEATURE } from './resources/WebGPUQuerySet.js';
 import { WebGPUQueryResult } from './sync/WebGPUQueryResult.js';
 import { WebGPUBindGroup } from './binding/WebGPUBindGroup.js';
 import { WebGPUBindGroupLayout } from './binding/WebGPUBindGroupLayout.js';
@@ -111,6 +112,13 @@ export class WebGPUDevice implements Device {
   readonly enabledFeatureSet: ReadonlySet<string>;
   /** 创建本设备的 adapter 信息，便于日志与调试。 */
   readonly adapterInfo: AdapterInfo;
+  /**
+   * GPU 计时能力的真实探测结果（见 {@link DeviceTimingSupport}）。
+   *
+   * 刻意在**创建设备时**算一次并缓存：能力判定必须落到真实的 API 表面（方法在不在），
+   * 而不是 `features` 里的名字。探测结论在一台设备上不会变，所以不必每次问。
+   */
+  readonly timing: DeviceTimingSupport;
   /** `requiredLimits` 经校验后的完整 limits；`limits` 则来自实际创建出来的 device。 */
   readonly requestedLimits: DeviceLimits;
   /** `DeviceDescriptor.defaultSampleCount` 的规范化结果（1 或 4）。 */
@@ -151,9 +159,12 @@ export class WebGPUDevice implements Device {
 
     this.queue = new WebGPUQueue(this);
 
+    // 能力探测放在这里而不是字段初始化处：它会建一个原生 encoder 探路。
+    // 先装好 `onuncapturederror`，探测期间万一出事也能走到正常的上报通道。
     native.onuncapturederror = (event) => {
       this.reportError(toGpuError(event.error));
     };
+    this.timing = readTimingSupport(native, this.enabledFeatureSet, init.adapterFeatures);
     void native.lost.then((info) => this.handleDeviceLost(info));
 
     this.logger.debug(
@@ -535,4 +546,83 @@ function readEnabledFeatures(native: GPUDevice, requested: readonly string[]): R
   const fromDevice = readSupportedFeatures((native as { features?: GPUSupportedFeatures }).features);
   if (fromDevice.size > 0) return fromDevice;
   return new Set(requested);
+}
+
+/**
+ * 读出本设备的 GPU 计时能力（见 {@link DeviceTimingSupport}）。
+ *
+ * 两条路都要求 `timestamp-query` **已经在本设备上启用**（adapter 支持不算，见类文档里的
+ * 「静默返回 0」那段），在此之上再各自探测真实调用面：
+ *
+ * - `encoderTimestamps`：原生 `GPUCommandEncoder` 上真的有 `writeTimestamp` 吗 —— 这就是
+ *   实测 Chrome 缺失的那一块，只看 feature 会误判；
+ * - `passTimestamps`：是否有 pass 内写时间戳的 feature（标准名或 Chrome 的实验名）。
+ */
+function readTimingSupport(
+  native: GPUDevice,
+  enabledFeatures: ReadonlySet<string>,
+  adapterFeatures: ReadonlySet<string>,
+): DeviceTimingSupport {
+  const timestampQueryEnabled = enabledFeatures.has(TIMESTAMP_QUERY_FEATURE);
+  const insidePasses = TIMESTAMP_INSIDE_PASSES_FEATURES.some((name) => enabledFeatures.has(name));
+  const encoderTimestamps = timestampQueryEnabled && probeEncoderTimestamps(native);
+  const passTimestamps = timestampQueryEnabled && insidePasses;
+  return {
+    encoderTimestamps,
+    passTimestamps,
+    unavailableReason:
+      encoderTimestamps || passTimestamps ? null : describeTimingGap(timestampQueryEnabled, adapterFeatures),
+  };
+}
+
+/**
+ * 两条路都不可用时，把「缺什么」写成一句带 `[gpu-device-api] ` 前缀的英文（供上层原样转述）。
+ *
+ * 三种情况分开说，因为它们要采取的行动完全不同：feature 没申请 → 改 `requiredFeatures`；
+ * 实现没暴露方法 → 换机制或放弃；adapter 压根不支持 → 换后端。
+ */
+function describeTimingGap(timestampQueryEnabled: boolean, adapterFeatures: ReadonlySet<string>): string {
+  if (!timestampQueryEnabled) {
+    return (
+      `[gpu-device-api] this WebGPU device does not have the "${TIMESTAMP_QUERY_FEATURE}" feature enabled, ` +
+      'so no GPU timestamp can be written. Request it in DeviceDescriptor.requiredFeatures (the adapter ' +
+      `supports it: ${adapterFeatures.has(TIMESTAMP_QUERY_FEATURE) ? 'yes' : 'no'}).`
+    );
+  }
+  return (
+    `[gpu-device-api] this WebGPU device enables "${TIMESTAMP_QUERY_FEATURE}", but this implementation does ` +
+    'not expose GPUCommandEncoder.writeTimestamp() and does not enable ' +
+    `"${TIMESTAMP_INSIDE_PASSES_FEATURES[0]}" (tried: ${TIMESTAMP_INSIDE_PASSES_FEATURES.join(', ')}), ` +
+    'so there is no way to write a GPU timestamp. Read GPU time from the backend\'s own profiler instead.'
+  );
+}
+
+/**
+ * 探测原生实现是否**真的**暴露 `GPUCommandEncoder.writeTimestamp()`。
+ *
+ * ## 为什么必须探测方法本身
+ *
+ * 启用 `timestamp-query` 只说明「时间戳查询这个概念可用」（`createQuerySet()` 能成功），
+ * **不保证** encoder 上有写时间戳的入口。实测的 Chrome 正处在这种状态：设备启用了
+ * `timestamp-query`，但 `GPUCommandEncoder` 上没有 `writeTimestamp`（那个版本只暴露实验名的
+ * pass 内时间戳）。只看 feature 会判成「可用」，于是要等到真正写时间戳时才抛错 ——
+ * 而那一抛在帧循环里，一个可选的分析能力把整页渲染搞挂（见 `DeviceTimingSupport`）。
+ *
+ * ## 探测方式
+ *
+ * 先建一个 encoder 看**实例**上有没有这个方法：这才是真实的调用面（比查原型更忠实，
+ * 因为有些实现可能把方法挂在实例上）。encoder 不提交、不分配 GPU 内存，成本可以忽略；
+ * 创建失败（假的 / 残缺的实现）就退回查原型。两条路都拿不到时一律返回 false ——
+ * **未知按不可用处理**，这正是本次修复的原则。
+ */
+function probeEncoderTimestamps(native: GPUDevice): boolean {
+  try {
+    const encoder = native.createCommandEncoder({ label: 'gpu-device-api:timestamp-probe' });
+    if (typeof (encoder as { writeTimestamp?: unknown }).writeTimestamp === 'function') return true;
+  } catch {
+    // 探测本身失败不能让设备创建失败：下面退回原型查询。
+  }
+  const ctor = (globalThis as { GPUCommandEncoder?: { prototype?: unknown } }).GPUCommandEncoder;
+  const prototype = ctor?.prototype as { writeTimestamp?: unknown } | undefined;
+  return typeof prototype?.writeTimestamp === 'function';
 }

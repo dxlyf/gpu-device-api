@@ -41,7 +41,9 @@
  * - GPU 那列随负载变化（2000 → 20000 会明显上升），而 CPU 那列按 draw 数线性上升；
  * - `gpu=` 与 `sync - frame`（整帧减去 CPU 提交）应当同量级 —— 后者是本页唯一另一个「包含
  *   GPU 执行时间」的量，用来交叉验证刻度的单位换算（`timestampPeriod`）没有搞错。
- * 拿不到 GPU 计时（后端缺 feature/扩展）时 `gpu=` 显示 `—`，原因写进 `data-bench-gpu-error`。
+ * 拿不到 GPU 计时（后端缺 feature/扩展，或实现没暴露写时间戳的方法）时 `gpu=` 显示 `n/a` 并带上原因，
+ * 页面**照常跑完**并把 CPU 那几列测出来 —— GPU 计时是可选能力，它不可用不是页面的失败
+ *（原因同时写进 `data-bench-gpu-error`，可用性写进 `data-bench-gpu-available`）。
  *
  * ## 本页自带结论
  *
@@ -57,10 +59,11 @@
  *   注意开启排序后本页的 `CPU 提交` 包含「排队 + 排序」的开销（本来就是为了看这个）。
  *
  * 无头抓取关心的是这几个 key：
- * `data-bench-cpu-ms`（每档 CPU 均值，`档:值;档:值`）、`data-bench-gpu-ms`（每档 GPU 均值）、
+ * `data-bench-cpu-ms`（每档 CPU 均值，`档:值;档:值`）、`data-bench-gpu-ms`（每档 GPU 均值，不可用为 `n/a`）、
  * `data-bench-draws`（每档真实 draw calls）、`data-bench-culled`（每档剔除数）、
  * `data-bench-gpu-source`（`webgpu-timestamp-query` / `webgl2-EXT_disjoint_timer_query_webgl2` /
- * `unavailable`）、`data-bench-gpu-error`（拿不到时的原文错误）。
+ * `unavailable`）、`data-bench-gpu-available`（后端探测到的真实能力）、
+ * `data-bench-gpu-error`（不可用时的原文原因）。
  *
  * ## 运行
  *
@@ -353,6 +356,53 @@ function gpuTimingSource(): string {
 }
 
 /**
+ * 把一段（可能很长的）原因压成一行、并截断到表格放得下的长度。
+ *
+ * 原文完整写进 `data-bench-gpu-error` 与单元格的 `title`，表格里只放结论级的摘要。
+ */
+function compactReason(reason: string, max = 72): string {
+  const single = reason.replace(/\s+/g, ' ').trim();
+  return single.length <= max ? single : `${single.slice(0, max - 1)}…`;
+}
+
+/**
+ * 「GPU 执行」列拿不到样本时的文案：**`n/a` + 原因**。
+ *
+ * 刻意写 `n/a` 而不是 `—` 或 `0`：这一列是**可选**能力（要额外的 feature / 扩展），
+ * 拿不到时必须说清楚「不可用 + 为什么」，页面其余部分（CPU 列、draw calls 自检）照常成立。
+ * 这不影响页面自身的结论 —— 它仍然是 `ok`。
+ */
+function gpuUnavailableCell(): { text: string; title: string } {
+  const stats = scene?.renderer.gpuTiming;
+  const reason = stats?.error ?? null;
+  if (reason === null) {
+    return {
+      text: stats?.available === false ? 'n/a（后端不支持 GPU 计时）' : 'n/a（未启用 GPU 计时）',
+      title: 'GPU 计时不可用：后端没有提供可用的时间戳写入通道。',
+    };
+  }
+  return { text: `n/a（${compactReason(reason)}）`, title: reason };
+}
+
+/**
+ * `#out` 里那行「GPU 计时：…」。
+ *
+ * 不可用时把原因一起写在正文里（表格单元格放不下），并明确说这是**可选能力缺失、不是页面失败**。
+ */
+function gpuTimingSummary(okTiers: readonly Measurement[]): string {
+  const source = gpuTimingSource();
+  if (source === 'unavailable') {
+    const reason = scene?.renderer.gpuTiming.error ?? null;
+    return (
+      '不可用（可选能力缺失，页面照常渲染，CPU 列不受影响' +
+      `${reason === null ? '' : `：${compactReason(reason, 120)}`}）`
+    );
+  }
+  const tiers = okTiers.filter((result) => result.gpuMsMean !== null).length;
+  return `${source}（${tiers}/${okTiers.length} 档拿到样本）`;
+}
+
+/**
  * 每档开始前重开一次 GPU 计时。
  *
  * 目的是**把档与档之间的样本彻底隔开**：上一档里那些「还没落地」的异步读回会随着 query set
@@ -573,9 +623,16 @@ function renderMeasurement(result: TierResult): void {
   row.cells[3]!.textContent = `${result.frameMsMean.toFixed(2)} ms`;
   row.cells[4]!.textContent = `${result.frameMsMin.toFixed(2)} ms`;
   row.cells[5]!.textContent = `${result.frameMsMax.toFixed(2)} ms`;
-  // GPU 那列拿不到时显示「—」而不是 0：0 会被误读成「GPU 不花时间」。
-  row.cells[6]!.textContent =
-    result.gpuMsMean === null ? '—' : `${result.gpuMsMean.toFixed(3)} ms (${result.gpuSamples})`;
+  // GPU 那列拿不到时显示 `n/a` + 原因，而不是 `—` 或 0：0 会被误读成「GPU 不花时间」，
+  // 而「不可用」必须带上为什么（可选能力缺失 ≠ 页面失败）。
+  if (result.gpuMsMean === null) {
+    const unavailable = gpuUnavailableCell();
+    row.cells[6]!.textContent = unavailable.text;
+    row.cells[6]!.title = unavailable.title;
+  } else {
+    row.cells[6]!.textContent = `${result.gpuMsMean.toFixed(3)} ms (${result.gpuSamples})`;
+    row.cells[6]!.title = '';
+  }
   row.cells[7]!.textContent = `${result.perDrawUs.toFixed(2)} µs`;
   row.cells[8]!.textContent = result.drawsPerSecond.toFixed(0);
   row.cells[9]!.textContent = String(result.pipelineSwitches);
@@ -633,8 +690,8 @@ function describeLine(result: TierResult): string {
   if ('skipped' in result) return `${result.count} 个物体：跳过 —— ${result.skipped}`;
   const gpu =
     result.gpuMsMean === null
-      ? `GPU 时间不可用（样本 0，跳过 ${result.gpuSkipped} 次读回` +
-        `${result.gpuError === null ? '' : `，错误：${result.gpuError}`}）`
+      ? `GPU 时间不可用（可选能力缺失，CPU 列不受影响；跳过 ${result.gpuSkipped} 次读回` +
+        `${result.gpuError === null ? '' : `，原因：${result.gpuError}`}）`
       : `GPU 执行 ${result.gpuMsMean.toFixed(3)} ms（${result.gpuSamples} 个样本，跳过 ${result.gpuSkipped} 次读回）`;
   return `${result.count} 个物体：CPU 提交 ${result.frameMsMean.toFixed(2)} ms（${result.perDrawUs.toFixed(2)} µs/draw，` +
     `${result.drawsPerSecond.toFixed(0)} draws/s），${gpu}，含等待后端 ${result.syncMsMean.toFixed(2)} ms，` +
@@ -671,6 +728,9 @@ async function runBenchmark(): Promise<void> {
   const gpuStats = active.renderer.gpuTiming;
   setData('benchGpuSource', gpuTimingSource());
   setData('benchGpuEnabled', String(gpuStats.enabled));
+  // 「后端真的具备这个能力吗」与「这次打开了吗」是两件事：前者来自真实 API 表面的探测，
+  // 后者可能因为运行中失败被主动关掉。两个都写出来，抓取方才能分清是哪种情况。
+  setData('benchGpuAvailable', String(gpuStats.available));
   if (gpuStats.error !== null) setData('benchGpuError', gpuStats.error.replace(/\s+/g, ' ').trim());
 
   const results: TierResult[] = [];
@@ -699,12 +759,12 @@ async function runBenchmark(): Promise<void> {
   setData('benchDraws', integerSeriesOf(results, (item) => item.drawCalls));
   setData('benchCulled', integerSeriesOf(results, (item) => item.culled));
   setData('benchGpuSource', gpuTimingSource());
-  const gpuTierCount = okTiers.filter((result) => result.gpuMsMean !== null).length;
+  setData('benchGpuAvailable', String(active.renderer.gpuTiming.available));
   outEl.textContent =
     `后端 ${active.renderer.backend}　画布 ${active.renderer.width}×${active.renderer.height}　` +
     `几何 ${active.geometry.label}（${TRIANGLES_PER_BOX} 三角形）　材质 ${active.material.name}\n` +
     `开关：视锥剔除 ${cullingEnabled ? '开' : '关'}　排序 ${sortMode}\n` +
-    `GPU 计时：${gpuTimingSource()}（${gpuTierCount}/${okTiers.length} 档拿到样本）\n` +
+    `GPU 计时：${gpuTimingSummary(okTiers)}\n` +
     results.map(describeLine).join('\n');
 
   progressEl.textContent = '完成';

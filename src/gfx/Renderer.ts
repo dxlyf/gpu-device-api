@@ -761,8 +761,10 @@ export class Renderer {
   /**
    * 打开 GPU 计时。
    *
-   * 显式调用时**失败就抛错**（带 `[gpu-device-api] ` 前缀的英文消息，说明缺哪个 feature/扩展）——
-   * 例如 WebGL2 上没有 `EXT_disjoint_timer_query_webgl2`、或 WebGPU 设备没启用 `timestamp-query`。
+   * 显式调用时**失败就抛错**，而且**在启用时就抛**（带 `[gpu-device-api] ` 前缀的英文消息，
+   * 说明缺哪个 feature / 缺哪个方法 / 缺哪个扩展）—— 这正是本次修复的一个要点：以前的判定只看
+   * 特性标志，会把「启用了 `timestamp-query` 但实现没暴露 `GPUCommandEncoder.writeTimestamp()`」
+   * 的设备判成可用，于是异常拖到第一次记时间戳时才炸（那一炸在帧循环里，整页渲染跟着挂）。
    * 想让失败静默降级请用 `Renderer.create({ gpuTiming: true })`（它会把原因写进 `gpuTiming.error`）。
    *
    * 实现方式是环形 query set + 延迟若干帧的异步读回，**不会每帧阻塞等待 GPU**；
@@ -777,9 +779,49 @@ export class Renderer {
 
   /** 关闭 GPU 计时并释放 query set。 */
   disableGpuTiming(): void {
-    this.gpuTimingValue?.destroy();
+    const timing = this.gpuTimingValue;
     this.gpuTimingValue = null;
     this.statsValue.gpuFrameTime = null;
+    if (!timing) return;
+    try {
+      timing.destroy();
+    } catch (error) {
+      // 释放失败不上抛：调用方要的是「关掉」，关掉这件事已经完成了。
+      this.logger.warn(`释放 GPU 计时资源失败：${describeGpuTimingFailure(error)}`);
+    }
+  }
+
+  /**
+   * 跑一步 GPU 计时调用；失败就**自动关掉计时、记下原因、渲染继续**。
+   *
+   * 为什么必须这样包：GPU 计时是**可选**的性能分析能力，它的任何失败都不该让渲染/页面失败。
+   * 实测的事故正好相反 —— 设备启用了 `timestamp-query` 却没暴露 `writeTimestamp`，写时间戳抛出的
+   * 异常逃进帧循环，`examples/gfx-benchmark.html` 整页 fail（连带 CPU 那几列也一起没了）。
+   * 所以这里把失败降级成：`enabled: false` + `error`（可读）+ `stats.gpuFrameTime = null`，
+   * 同时释放 query set；本帧与后续帧照常渲染，只是不再有 GPU 数据。
+   */
+  private runGpuTimingStep(step: (timing: GpuTiming) => void): void {
+    const timing = this.gpuTimingValue;
+    if (!timing) return;
+    try {
+      step(timing);
+    } catch (error) {
+      this.disableGpuTimingAfterFailure(timing, error);
+    }
+  }
+
+  /** 运行中失败后的降级收尾（见 {@link Renderer.runGpuTimingStep}）；绝不抛。 */
+  private disableGpuTimingAfterFailure(timing: GpuTiming, error: unknown): void {
+    this.gpuTimingValue = null;
+    this.gpuTimingError = describeGpuTimingFailure(error);
+    this.statsValue.gpuFrameTime = null;
+    try {
+      timing.destroy();
+    } catch (cleanupError) {
+      // 这时已经有失败原因了；清理再出错只记日志，绝不让它把帧循环搞挂。
+      this.logger.warn(`释放 GPU 计时资源时又失败了一次：${describeGpuTimingFailure(cleanupError)}`);
+    }
+    this.logger.warn(`GPU 计时在运行中失败，已自动关闭（渲染继续）：${this.gpuTimingError}`);
   }
 
   /* ------------------------------------------------------ 预热 / 编译诊断 ---------------------- */
@@ -994,7 +1036,8 @@ export class Renderer {
     // WebGPU 走 encoder 级时间戳：它只需要 `timestamp-query`，而 pass 内的 timestampWrites
     // 还需要 `timestamp-query-inside-passes`（Chrome 默认不开）。WebGL2 是空操作，
     // 它的计时由下面 pass 的 timestampWrites 包住整个通道。
-    this.gpuTimingValue?.beforeFrame(this.encoder);
+    // 写时间戳这一步即使在运行中失败也不会让本帧失败：见 runGpuTimingStep（失败即自动关闭计时）。
+    this.runGpuTimingStep((timing) => timing.beforeFrame(this.encoder!));
     const clearColor = options.color ?? this._clearColor;
     const descriptor = this.createPassDescriptor(options, clearColor);
 
@@ -1039,7 +1082,7 @@ export class Renderer {
     const encoder = this.encoder;
     if (encoder) {
       // WebGPU 的「帧结束」时间戳：必须在所有 pass 都 end() 之后、finish() 之前写。
-      if (this.gpuTimingValue) this.gpuTimingValue.afterFrameEncoding(encoder);
+      this.runGpuTimingStep((timing) => timing.afterFrameEncoding(encoder));
       this.commandBuffers.push(encoder.finish());
     }
     if (this.commandBuffers.length > 0) this.device.queue.submit(this.commandBuffers);
@@ -1049,8 +1092,9 @@ export class Renderer {
 
     // 提交之后才安排读回：队列顺序保证它看到的时间戳已经写入（见 GpuTiming）。
     if (this.gpuTimingValue) {
-      this.gpuTimingValue.onFrameSubmitted();
-      this.statsValue.gpuFrameTime = this.gpuTimingValue.stats.gpuFrameTimeMs;
+      this.runGpuTimingStep((timing) => timing.onFrameSubmitted());
+      // 上一步失败时计时已经被关掉、`gpuFrameTime` 已被清成 null，所以这里用 `?.` 收口。
+      this.statsValue.gpuFrameTime = this.gpuTimingValue?.stats.gpuFrameTimeMs ?? null;
     }
 
     this.pass = null;
@@ -1095,9 +1139,17 @@ export class Renderer {
     this.currentPipeline = null;
   }
 
-  /** 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。 */
+  /**
+   * 取出（必要时创建）本帧第一个 render pass 的 GPU 计时写入点。
+   *
+   * 取写入点这一步失败同样降级（见 {@link Renderer.runGpuTimingStep}），**通道照常开**：
+   * 只是这一帧不带时间戳，绝不能让「拿不到计时」变成「这一帧画不出来」。
+   */
   private timestampWritesForPass(): { timestampWrites?: PassTimestampWrites } {
-    const writes = this.gpuTimingValue?.passTimestampWrites();
+    let writes: PassTimestampWrites | undefined;
+    this.runGpuTimingStep((timing) => {
+      writes = timing.passTimestampWrites();
+    });
     return writes ? { timestampWrites: writes } : {};
   }
 

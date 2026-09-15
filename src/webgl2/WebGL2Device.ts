@@ -32,7 +32,7 @@ import { inferBindGroupLayoutEntries } from '../shaders/reflection/GLSLReflector
 import { createLogger, type Logger } from '../utils/logger.js';
 import { nextId } from '../utils/id.js';
 import { resolveLimits } from '../core/Device.js';
-import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo } from '../core/Device.js';
+import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo, DeviceTimingSupport } from '../core/Device.js';
 import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasConfig, CanvasContext } from '../core/CanvasContext.js';
 import type { Buffer, BufferDescriptor } from '../core/resources/Buffer.js';
@@ -56,7 +56,7 @@ import { WebGL2Buffer } from './resources/WebGL2Buffer.js';
 import { WebGL2Texture } from './resources/WebGL2Texture.js';
 import { WebGL2Sampler } from './resources/WebGL2Sampler.js';
 import { WebGL2ShaderModule } from './resources/WebGL2ShaderModule.js';
-import { WebGL2QuerySet, asWebGL2QuerySet } from './resources/WebGL2QuerySet.js';
+import { WebGL2QuerySet, asWebGL2QuerySet, TIMER_QUERY_EXTENSION } from './resources/WebGL2QuerySet.js';
 import { WebGL2BindGroupLayout } from './binding/WebGL2BindGroupLayout.js';
 import { WebGL2BindGroup } from './binding/WebGL2BindGroup.js';
 import { WebGL2PipelineLayout } from './binding/WebGL2PipelineLayout.js';
@@ -89,6 +89,14 @@ export class WebGL2Device implements Device {
   readonly queue: WebGL2Queue;
   readonly debug: boolean;
   readonly native: WebGL2RenderingContext;
+  /**
+   * GPU 计时能力的真实探测结果（见 {@link DeviceTimingSupport}）。
+   *
+   * WebGL2 只有一条路：pass 级区间计时（`gl.beginQuery(TIME_ELAPSED_EXT)` → `endQuery`），
+   * 而它依赖 `EXT_disjoint_timer_query_webgl2` 扩展 —— 这里在创建设备时**真的去问一次**
+   * `gl.getExtension()`，而不是相信 adapter 阶段记下来的 feature 名。
+   */
+  readonly timing: DeviceTimingSupport;
 
   /** 状态缓存；canvas context 等在外部改动 GL 状态后会调用 {@link WebGL2Device.invalidateState}。 */
   readonly state: GlStateCache;
@@ -146,6 +154,7 @@ export class WebGL2Device implements Device {
       has: (feature: string) => featureSet.has(feature),
       names: featureNames,
     };
+    this.timing = readTimingSupport(options.gl);
 
     this.state = new GlStateCache(options.gl);
     this.planCache = new BindingPlanCache({
@@ -679,5 +688,29 @@ export function describeGlAdapter(gl: WebGL2RenderingContext): {
     features: queryGlFeatures(gl),
     vendor: info.vendor,
     device: info.device,
+  };
+}
+
+/**
+ * 读出 WebGL2 设备的 GPU 计时能力（见 {@link DeviceTimingSupport}）。
+ *
+ * 只看一条路：`EXT_disjoint_timer_query_webgl2` 扩展在不在。这里**当场向 context 再问一次**
+ * `gl.getExtension()`（而不是复用 adapter 阶段记下的 feature 名）：判定依据必须是真实的 API 表面，
+ * 而 `getExtension` 就是 WebGL2 上唯一能回答「这个能力有没有」的方法。GL 没有「单个时刻」的时间戳，
+ * 所以 `encoderTimestamps` 恒为 false。
+ */
+function readTimingSupport(gl: WebGL2RenderingContext): DeviceTimingSupport {
+  // 假的 GL（测试桩）可能连 getExtension 都没有：拿不到扩展一律按「没有」处理。
+  const extension =
+    typeof gl.getExtension === 'function' ? gl.getExtension(TIMER_QUERY_EXTENSION) : null;
+  const passTimestamps = extension !== null && extension !== undefined;
+  return {
+    encoderTimestamps: false,
+    passTimestamps,
+    unavailableReason: passTimestamps
+      ? null
+      : `[gpu-device-api] this WebGL2 context does not expose the "${TIMER_QUERY_EXTENSION}" extension, ` +
+        'so GL timer queries are unavailable. Use the WebGPU backend (feature "timestamp-query") or a ' +
+        'driver/browser build that exposes the extension.',
   };
 }
