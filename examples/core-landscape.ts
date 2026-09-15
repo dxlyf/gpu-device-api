@@ -4,23 +4,33 @@
  * 这一页是 core 层目前最长的一个例子，因为它要证明的是「多通道 + 多管线 + 透明混合」
  * 这些在便捷层里被包起来的东西，用 core 的原始 API 一样写得清楚：
  *
- * - **天空**：一个覆盖裁剪空间的大三角形，`depthStencil.format: null`（不要深度状态），
+ * - **天空**：一个覆盖裁剪空间的大三角形（`gl_Position = vec4(位置, 1)`），
  *   在片元里按**视线方向**做地平线→天顶的渐变，所以整个视口必然被铺满 ——
- *   清屏色一像素都不会露出来（`CLEAR` 只是兜底，实际不可见）。
- * - **太阳**：`disc + 两层辉光` 在天空着色器里一起算（本体很亮，晕随角度快速衰减）。
- *   同一个 `sunDirection` 又被山脊 / 地形 / 树林的漫反射复用 —— 太阳就是主光源。
- * - **山**：两层「垂直幕布」网格（远山淡、近山深），高度来自哈希噪声 + 正弦叠加；
- *   顶点着色器用 `dFdx/dFdy` 求真实面法线（不用 `cross` 是为了同时兼容两个后端）。
- * - **树林**：树干与树冠各一个网格，每棵树的**模型矩阵 + 颜色走进实例缓冲**
+ *   清屏色（`CLEAR = 0.72, 0.10, 0.62`）一像素都不会露出来（它只是兜底，
+ *   同时也是一把「这里什么都没画」的标尺：`scripts/analyze-screenshot.mjs --clear`）。
+ * - **太阳**：亮盘 + 两层辉光都在天空着色器里算（`cos` 的幂次控制宽度）。
+ *   同一个 `sunDirection` 又被山脊 / 地形 / 树林 / 河面的漫反射与镜面高光复用 ——
+ *   太阳就是主光源；自检里「最亮的那一小块就在主光方向投影出来的位置上」这条判据
+ *   把这两件事绑在一起（`sun-aligned`）。
+ * - **山**：两层「屏幕空间幕布」网格。上下边界由**屏幕位置反解**出世界高度
+ *   （{@link screenRowHeight}），所以山脊稳定地占屏幕上该占的那一段：远山脊线 0.17、
+ *   近山 0.27（都在地平线 0.33 之上，是「比相机高的山」），地形远端的轮廓在 0.35 把下面接上。
+ * - **树林**：树干与树冠各一个网格，每棵树的**世界坐标 + 缩放 + 旋转走进实例缓冲**
  *   （`stepMode: 'instance'`），于是 500 多棵树只有 **2 次 draw call**。
- * - **河**：先画**河床**（单独的沙石色带网格 + 颗粒噪声），再画**水面**：
- *   `blend + depthWriteEnabled: false`，片元里用 fresnel 把「河床色」与「天空反射色」
- *   混合 —— 垂直看更透明（看得见河床），掠射角更反射天空，再叠一层随时间流动的波纹高光。
+ * - **河**：先画**河床**（走廊网格：河底 + 两侧沙滩），再画**水面**：
+ *   `blend + depthWriteEnabled:false`，片元里用 fresnel 把「水色 / 天空反射」混合 ——
+ *   垂直看更透明（看得见河床的砂砾），掠射角更反射天空，再叠一层随时间流动的波纹高光。
  *
- * 管线一共 6 条（天空 / 山脊 / 地形 / 河床 / 树木 / 水面），一帧 9 次 draw call。
+ * 管线一共 6 条（天空 / 山脊 / 地形 / 河床 / 树木 / 水面），一帧 8 次 draw call。
  *
  * 查询参数：
  * `?backend=webgl2|webgpu|auto&verify=1&gui=0&t=<秒>&sun=<仰角弧度>&water=<透明度 0..1>&wspin=0`
+ * 调试用：`?only=sky|ridge|terrain|bed|tree|water`（只画一层）、`?ridges=0|1|2`、`?fog=0`、`?wire=1`。
+ *
+ * **两个后端必须都过**：`?verify=1` 会往 `data-landscape*` 里写分区探针与 8 条判据，
+ * 其中 `landscapeChecks` 要列全、`landscapeFailed` 要为空。探针的分区不是手工估的百分比，
+ * 而是**由几何算出来的**（太阳用 `sunDirection` 投影，河面用河道中心线投影）——
+ * 这样探针才会跟着场景走，不会因为换了相机或画布宽高比就打在别的东西上。
  */
 
 import GUI from 'lil-gui';
@@ -66,20 +76,45 @@ const CLEAR: readonly [number, number, number, number] = [0.72, 0.1, 0.62, 1];
  * 但**第一个 mat4 之后的东西不能紧挨着放**（这正是上一版按 112 字节申请、`set()` 越界的坑）。
  */
 const UNIFORM_BYTES = 192;
-/** 离屏自检的分辨率（16:9，和画布的宽高比一致，探针的分区才可比）。 */
-const VERIFY_WIDTH = 480;
+/**
+ * 离屏自检的高度（像素）。宽度按**画布当前的宽高比**算（见 verify 段），
+ * 这样归一化坐标在离屏图与画布上指的是同一个位置 —— 探针才能用「太阳投影出来的屏幕位置」去定位。
+ */
 const VERIFY_HEIGHT = 270;
 
 /**
- * 相机：站在河岸上 9 单位高、视线下俯约 8.7°。
+ * 相机：**贴近水面高度的河岸视角**（世界尺度很小：河宽约 5 单位、树高约 1~2 单位）。
  *
- * 这个角度是量出来的。地平线在屏幕上的位置由俯角决定：
- * `y = 0.5 + tan(pitch) / (2 * tan(FOV/2))`，`pitch = atan(5.5 / 36) ≈ 8.7°` 时
- * 地平线落在 `y ≈ 0.21` —— 天空占上面两成，地面占下面八成，正好是「河边抬头看」的构图。
- * 相机的横向位置在河岸上（地形的高度函数在 `|x| > 河道半宽` 处才升高，见 {@link channelWeight}）。
+ * 相机高 8、目标点在 36 单位外低 4.5 个单位 → 俯角 `atan(4.5/36) ≈ 7.1°`，于是：
+ * - 地平线落在 `y = 0.5 - 7.1°/42° ≈ 0.33`，天空占上面三分之一；
+ * - 画面底边对应的地面深度是 `8 / tan(7.1° + 21°) ≈ 15` 单位，即「脚下最近的岸」；
+ * - 地形一直铺到 430 单位，它的远端轮廓落在 `y ≈ 0.35`（地平线稍下方）；
+ * - 两层山脊是**比相机更高的山**，所以脊线出现在地平线**上方**（`y = 0.17 / 0.27`），
+ *   正好补上「地形轮廓 → 地平线」之间那条细缝，天空与太阳依然露在最上面。
+ *
+ * 这几个数字是**量出来的**：相机太低（例如 y = 3）时河岸的抬升在屏幕上占掉的夹角太大，
+ * 天空会被整块盖住；只看不做屏幕位置反解的话，山脊又会一路铺到屏幕顶。
  */
-const CAMERA_EYE: readonly [number, number, number] = [0, 5, 8];
-const CAMERA_TARGET: readonly [number, number, number] = [0, 3.2, -30];
+const CAMERA_EYE: readonly [number, number, number] = [0, 8, 6];
+const CAMERA_TARGET: readonly [number, number, number] = [0, 3.5, -30];
+/**
+ * 河岸在远端的抬升高度。
+ *
+ * 0.4 是量出来的：相机高 8 时远端（430 单位）的岸高约 0.7~1.8，屏幕上落在 `y ≈ 0.35`，
+ * 正好接住地平线；地形于是占 `y = 0.35 ~ 1` 这一段。
+ */
+const TERRAIN_RISE = 0.4;
+/** 河岸的基础抬升（近端的岸高就是它 + 噪声）。 */
+const TERRAIN_BASE = 0.3;
+/**
+ * 河岸起伏噪声的**振幅**（世界单位）与频率。
+ *
+ * 振幅 2.6 是量出来的：地形是斜着看的，低于 1 的起伏在屏幕上只有几个像素，
+ * 整片会读成一块平板；2.6 让近处的岸有明确的起伏，同时最高处（0.3 + 2.6）仍远低于相机高 8，
+ * 不会挡住远处的视线。频率 0.018 对应约 55 单位的波长，画面里正好是「一坡接一坡」。
+ */
+const TERRAIN_NOISE_AMPLITUDE = 2.6;
+const TERRAIN_NOISE_FREQUENCY = 0.018;
 const FOV = (42 * Math.PI) / 180;
 const NEAR_PLANE = 0.1;
 const FAR_PLANE = 1200;
@@ -96,13 +131,28 @@ const TERRAIN_V_POWER = 0.72;
 /** 地形每行的横向列数（列在哪由 hash 决定，见 {@link buildTerrainMesh}）。 */
 const TERRAIN_COLS = 58;
 
-/** 山脊的一层：深度、幕布底高、高度倍率、高度偏移、相位、颜色、雾强度。 */
+/** 山脊的一层：深度、幕布底边/脊线的屏幕位置、起伏相位与频率、颜色、雾强度。 */
 interface RidgeSpec {
   readonly depth: number;
-  readonly base: number;
+  /**
+   * 幕布的**底边在屏幕上的位置**（0 顶 1 底）。
+   *
+   * 这里刻意不写「世界高度」：山脊的上下边界在屏幕上是什么位置，取决于相机高度与俯角，
+   * 用固定世界高度会让远山与近山互相错位（实测远山一路铺到屏幕顶、整屏一个颜色）。
+   * 用一个屏幕比例当输入，再由 {@link screenRowHeight} 反解出世界高度，山脊才会稳定地落在该在的位置。
+   */
+  readonly baseScreen: number;
+  /** 脊线（最高峰）的**屏幕位置**（同上，反解成世界高度）。 */
+  readonly peakScreen: number;
   readonly scale: number;
-  readonly offset: number;
   readonly phase: number;
+  /**
+   * 脊线起伏的空间频率（每世界单位多少弧度）。
+   *
+   * 必须与幕布的宽度匹配：频率太低（旧版的 0.0125）时整块幕布里只有半个波，
+   * 屏幕上就是「一条平顶的深色板子」。两层各自按可见半宽取值，画面里各有 6~9 个山头。
+   */
+  readonly frequency: number;
   readonly color: readonly [number, number, number];
   readonly haze: number;
 }
@@ -110,36 +160,157 @@ interface RidgeSpec {
 /**
  * 两层山脊。
  *
- * 高度是**按屏幕高度反推**出来的，不是随手填的：相机高 4.5、下俯 `atan(2 / 36) ≈ 17°` 时，
- * 世界高度 `H` 在深度 `d` 处投到屏幕上的纵向位置约为
- * `y = 0.5 + (H - 4.5) / (d * tan(17°)) * 0.5 / tan(21°)`（`tan(21°)` 来自 42° 的垂直 FOV）。
- * 取「远山最高到屏幕 0.24（地平线上约 12°）、近山到 0.375（约 7°）」这两个值，
- * 解出下面的 `scale + offset`：远山 118 + 40、近山 32 + 14。
+ * 输入是**屏幕位置**（`baseScreen` / `peakScreen`），世界高度由 {@link screenRowHeight} 反解：
+ * 屏幕上 `y` 处的视线俯角是 `pitch + (y - 0.5) × FOV`，该处的世界高度是
+ * `相机高 - 深度 × tan(俯角)`。
+ *
+ * - 远山：320 单位外，脊线 0.17（**在地平线 0.33 上方**，因为山比相机高得多）、
+ *   底边 0.42（已经埋进地形里，所以看不到生硬的底边），颜色偏冷、雾最重 → 淡蓝的远山。
+ * - 近山：120 单位外，脊线 0.27、底边 0.50，颜色深绿、雾很轻 → 深色的近处山体。
+ *
+ * 两层脊线都在地平线以上、在天空里，所以「山脊比天空暗」这条判据有东西可量；
+ * 而地形远端的轮廓在 0.35，正好补上近山脊线（0.27）以下的那一段，不会露出清屏色。
  */
 const RIDGES: readonly RidgeSpec[] = [
-  // 远山：更远、更高、更淡（雾更重），颜色偏冷。
-  { depth: 240, base: -60, scale: 118, offset: 40, phase: 0.0, color: [0.4, 0.47, 0.58], haze: 0.35 },
-  // 近山：更近、更矮、更深，能看清受光面。
-  { depth: 78, base: -20, scale: 32, offset: 14, phase: 2.3, color: [0.19, 0.28, 0.24], haze: 0.12 },
+  { depth: 320, baseScreen: 0.42, peakScreen: 0.17, scale: 46, phase: 0.0, frequency: 0.055, color: [0.46, 0.53, 0.64], haze: 1.0 },
+  { depth: 120, baseScreen: 0.5, peakScreen: 0.27, scale: 17, phase: 2.3, frequency: 0.15, color: [0.18, 0.27, 0.23], haze: 0.4 },
 ];
 
-/** 山脊幕布网格的规模（列 × 行）。 */
-const RIDGE_COLS = 150;
+/**
+ * 山脊幕布网格的规模（列 × 行）。列在**世界坐标**上怎么分布见 {@link buildRidgeMesh}。
+ */
+const RIDGE_COLS = 190;
 const RIDGE_ROWS = 5;
-/** 幕布横向覆盖（世界单位）：远山的可见半宽约 394，取 430 保证铺出画面。 */
-const RIDGE_HALF_WIDTH = 430;
 
-/** 河床 / 河面沿深度的采样点数与横向采样点数。 */
-const RIVER_ROWS = 40;
+/**
+ * 一层山脊的「幕布」在世界坐标里铺多宽（世界单位，沿 x 关于相机轴对称）。
+ *
+ * 这个数字是**按可见范围反解**的：深度 `d` 处画面左右边缘对应的世界半宽是
+ * `d × tan(FOV/2) × 宽高比`。宽高比会随窗口变（截图的画布是 2.18），取 1.25 倍的深度
+ * 对到 3.4 的宽高比都还有余量，幕布边缘一定落在画面之外 —— 否则幕布会在屏幕里“断掉”，
+ * 两端露出竖直的边（旧版用 0.677 倍深度，实测近山就是一个带竖直边的深色方块）。
+ */
+function ridgeHalfWidth(depth: number): number {
+  return Math.max(1.25 * depth, 12);
+}
+
+/**
+ * 河床 / 河面网格：**沿屏幕高度**铺 56 行、横向 22 列的带状网格（见 {@link riverDepthAtRow}）。
+ *
+ * 网格顶行取在 `y = 0.36`（地形远端轮廓 0.35 的稍下方）：再往上就没有地面了，
+ * 那些行会全部挤在同一个深度上。底行是画面底边 `y = 1`，对应的深度约 15 单位。
+ */
+const RIVER_ROWS = 56;
 const RIVER_COLS = 22;
+/** 河道网格的顶行（屏幕比例）：略低于地平线，保证每一行都真的落在地面上。 */
+const RIVER_TOP_SCREEN = 0.36;
+/**
+ * 河道在深度方向的截止（世界单位）。
+ *
+ * 河床 / 水面网格只铺到约 370 单位（`RIVER_TOP_SCREEN` 那一行），所以地形**必须在 360 单位
+ * 之后停止挖河道** —— 否则地形会在网格够不到的地方留下一个洞，清屏色（184,26,158）会直接
+ * 从洞里露出来。这一条是「按可见范围裁剪」的另一半：挖河道的范围与走廊网格的范围必须对齐。
+ */
+const RIVER_DEPTH_LIMIT = 360;
 
 /** 树林：目标棵数（`?trees=` 调，上限见 {@link MAX_TREES}）。 */
 const TREE_COUNT = 520;
 const MAX_TREES = 4000;
 
+/**
+ * 雾的三段式系数（**这一版专门修过一次**）。
+ *
+ * `params.fog`（`timeAndFog.y`）是「每单位距离的浓度」，数量级是 4e-4；而上一版把它整条丢在一边，
+ * 往 `fogMix` 里塞的是 `timeAndFog.z`（0.4 ~ 1.0）这种「混合比例」量级的数 —— 于是
+ * `1 - exp(-d × 0.4)` 在 10 个单位处就饱和，地形延伸到 430 单位，全屏被 `SKY_HORIZON`
+ * 一刀切成 158,173,178 一块平色，五个元素都认不出来。
+ *
+ * 现在的契约恢复成：**真实浓度 = `timeAndFog.y × timeAndFog.z × 每层系数`**，其中 `z` 只是
+ * 「这一层吃多少雾」的倍率，`fogDensity()`（GLSL / WGSL 各一份，见下面）统一负责乘法。
+ * 每层系数是量出来的观感值：地形 1.0、河床 0.75、树 0.7、水面 0.45（远处的水也要看得出是一条河）。
+ *
+ * **浓度的量级也是量出来的**：默认值 0.0016 让 430 单位处混入 `1 - exp(-0.69) ≈ 50%`
+ * 的地平线色（远处的地形淡出、和天空接上），而 100 单位以内只有 15%（近岸依然清晰）。
+ * 旧版的 4e-4 太淡：远山只吃到 9% 的雾，看起来和近山一样是硬邦邦的深色，
+ * 两层山脊在画面里分不出远近。
+ */
+const FOG_TERRAIN_SCALE = 1;
+/** 河床：比地形略淡，河床色要被水面透出来。 */
+const FOG_BED_SCALE = 0.75;
+/** 树林：比地形略淡，树的绿色是画面的主要色块。 */
+const FOG_TREE_SCALE = 0.7;
+/** 水面：雾最淡 —— 远处的水也要看得出「这是一条河」。 */
+const FOG_WATER_SCALE = 0.45;
+/** 默认雾浓度（每单位距离）：见上面量出来的 0.0016。 */
+const FOG_DEFAULT = 0.0016;
+
 /* ------------------------------------------------------------------------------------------------ */
 /* 共用 GLSL 片段（噪声 / 雾 / 天空）                                                                    */
 /* ------------------------------------------------------------------------------------------------ */
+
+/**
+ * 把 TS 里的数字写成 GLSL 的浮点字面量。
+ *
+ * GLSL ES 3.0 **不做整数字面量的隐式转换**：`1 * 2.5` 是编译错误，必须写 `1.0 * 2.5`。
+ * 插件模板里 `${1}` 会得到 `1`，所以凡是要拼进着色器的常量都过一遍这个函数。
+ */
+function glslFloat(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : String(value);
+}
+
+/** 雾的每层系数拼进 GLSL 时的浮点字面量（理由见 {@link glslFloat}）。 */
+const FOG_TERRAIN_SCALE_GLSL = glslFloat(FOG_TERRAIN_SCALE);
+const FOG_BED_SCALE_GLSL = glslFloat(FOG_BED_SCALE);
+const FOG_TREE_SCALE_GLSL = glslFloat(FOG_TREE_SCALE);
+const FOG_WATER_SCALE_GLSL = glslFloat(FOG_WATER_SCALE);
+
+/**
+ * 河道走廊的参数（**必须在着色器模板字符串之前声明** —— 模板在模块求值时就会读它们）。
+ *
+ * 河道宽度与摆动幅度**都正比于深度**是旧版最致命的比例错误：到了 `TERRAIN_FAR = 430`
+ * 的远端就变成「45 单位宽、摆动 ±100 单位」的巨物，河被整个甩出画面（`?only=bed` 时 76%
+ * 的像素是清屏色），而近处又窄到只剩几个像素。现在两者共用一个**收敛尺度**
+ * {@link RIVER_MEANDER_CAP}：近处照旧按深度张开，远处稳定在「半宽 2.73 单位」的一条河。
+ */
+/** 河道宽度占「该深度可见半宽」的比例（可见半宽 ≈ `0.615 × 深度`）。 */
+const RIVER_WIDTH_RATIO = 0.105;
+/**
+ * 摆动幅度 / 河道宽度的收敛尺度（世界单位）。
+ *
+ * 26 是量出来的：`0.105 × 26 ≈ 2.73` → **河最宽处半宽 2.73 单位**，站在 5 单位高的岸上看，
+ * 大约占画面宽度的 15% —— 一条一眼能认出来的河。旧版没有这个上限，远端会到 45 单位。
+ */
+const RIVER_MEANDER_CAP = 26;
+/**
+ * 河道走廊的横向范围（单位：该深度的河道半宽）。
+ *
+ * 走廊是**一整块连续曲面**：左右两端的高度**等于地形的岸高**（同一份高度函数、同一个 `x`），
+ * 往中间平滑下潜到河床。地形在 `channelWeight > 0.02`（即横向 < 0.956）处 discard，
+ * 而走廊铺到 ±1.05，于是**河道那块缺口一定被走廊盖住**，不会被地形三角面切成碎块 ——
+ * 这一点很重要：地形是「格距正比于深度」的粗网格，远端一个格子有 3 个单位宽，
+ * 光靠 discard 自己切不出一条干净的河。
+ */
+const RIVER_BED_SIDE = 1.05;
+/** 走廊水底完全平坦的横向范围（0 = 正中，1 = 走廊边缘）。 */
+const RIVER_BED_FLAT = 0.5;
+/**
+ * 河床相对水面的深度（世界单位，水面在 `WATER_LEVEL = 0`）。
+ *
+ * 0.9 是量出来的：再浅的话水面在屏幕上会宽到压掉两岸的沙滩，再深则透过水面看到的
+ * 河床会被压暗到看不出砂石质感。
+ */
+const RIVER_BED_DEPTH = -0.9;
+/**
+ * 河道剖面的过渡曲线：横向参数 `t` 从 {@link RIVER_BED_FLAT} 到 1（岸）之间用它平滑上升。
+ *
+ * **必须让 `t = 1` 处严格等于岸高** —— 上一版的公式 `-0.9 + (岸高 + 0.9) × climb × (1 - lateral^p)`
+ * 在 `lateral = 1` 处回到 `-0.9`，也就是走廊的两端比岸低 2 米，河两岸各有一条沟；
+ * 现在改成 `河床底 + (岸高 - 河床底) × smoothstep(...)`，端点值天然就是岸高，拼缝严丝合缝。
+ */
+function riverBankRise(lateral: number): number {
+  const t = Math.min(Math.max((lateral - RIVER_BED_FLAT) / (1 - RIVER_BED_FLAT), 0), 1);
+  return smoothstep(0, 1, t);
+}
 
 
 /**
@@ -209,6 +380,10 @@ fn fogMix(color: vec3f, distanceToCamera: f32, density: f32) -> vec3f {
   return mix(color, SKY_HORIZON, 1.0 - exp(-distanceToCamera * density));
 }
 
+fn fogDensity(hazeScale: f32) -> f32 {
+  return u.timeAndFog.y * u.timeAndFog.z * hazeScale;
+}
+
 `;
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -263,10 +438,6 @@ float fbm3(vec2 p) {
   return total;
 }
 
-vec3 fogMix(vec3 color, float distanceToCamera, float density) {
-  return mix(color, SKY_HORIZON, 1.0 - exp(-distanceToCamera * density));
-}
-
 `;
 
 /**
@@ -281,30 +452,95 @@ float gridLines(vec2 position) {
 }
 `;
 
-const LANDSCAPE_HELPERS_GLSL = `
-// 与 buildTerrainMesh 里的高度函数逐字对应（地形网格、河床、种树都读同一份公式）。
-float channelWeight(vec2 p) {
-  float depth = max(u.cameraPosition.z - p.y, 4.0);
-  float halfWidth = 0.105 * depth;
-  float meander = sin(p.y * 0.021) * 0.34 * depth + sin(p.y * 0.0073) * 0.55 * depth;
-  float lateral = abs(p.x - meander) / halfWidth;
-  return 1.0 - smoothstep(0.62, 1.0, lateral);
+/**
+ * 雾：真浓度 = `timeAndFog.y`（每单位距离的浓度）× `timeAndFog.z`（这一层吃多少雾）× `hazeScale`。
+ *
+ * 拆成 `fogDensity()` 与 `fogMix()` 两步是刻意的：上一版把「雾的强度倍率」（0.4~1.0）
+ * 直接当成了「浓度」传进 `fogMix`，于是 `1 - exp(-d × 0.4)` 在 10 个单位处就饱和，
+ * 430 个单位深的地形整片混成 `SKY_HORIZON` —— 画面退化成一块 158,173,178 的平色。
+ * 现在调用点只负责给「倍率」，乘 `y` 这件事在 `fogDensity()` 里统一做，不会再漏。
+ *
+ * 顺带一个量级提醒：`SKY_HORIZON` 是 0.62/0.68/0.7，和 `CLEAR`（0.72/0.10/0.62）差得很远，
+ * 所以截图里只要看到清屏色就说明那一块**什么都没画**；而「雾太浓」的表现是整片变成
+ * 天空地平线色 —— 两种症状一眼就能分开。
+ */
+const FOG_GLSL = `
+vec3 fogMix(vec3 color, float distanceToCamera, float density) {
+  return mix(color, SKY_HORIZON, 1.0 - exp(-distanceToCamera * density));
 }
 
-float groundHeight(vec2 p) {
+// 「这一层吃多少雾」→ 真实浓度。
+float fogDensity(float hazeScale) {
+  return u.timeAndFog.y * u.timeAndFog.z * hazeScale;
+}
+`;
+
+/**
+ * 走廊的地面高度与法线（与 riverProfileHeight **数值一致**）。
+ *
+ * 着色器里要用它重算法线，所以公式必须是同一份 —— 上一版这里两边不一致：
+ * CPU 网格用「河床 + 岸坡」的连续剖面，着色器的高度函数却是另一套混法，后者在河道边缘会产生
+ * 一道**近乎垂直的崖壁**，于是地形的法线全变成水平的，漫反射直接被压成黑色（实测 2,2,2）。
+ * 现在地形只认平坦的岸高，河道形状全部由走廊网格自己负责。
+ */
+const LANDSCAPE_HELPERS_GLSL = `
+// 河道走廊的参数：与 buildRiverMesh 里的常量逐字对应。
+const float RIVER_BED_SIDE = ${RIVER_BED_SIDE};
+const float RIVER_BED_FLAT = ${RIVER_BED_FLAT};
+const float RIVER_BED_DEPTH = ${RIVER_BED_DEPTH.toFixed(2)};
+
+// 注意末尾的 .0：GLSL ES 3.0 里整数字面量**不能**隐式转成 float，
+// 写成 26 会直接编译失败（着色器编译错误比画面全黑更难查，这里踩过一次）。
+const float RIVER_MEANDER_CAP = ${RIVER_MEANDER_CAP.toFixed(1)};
+
+// 「按有限深度收敛」的尺度：旧版这里直接乘 depth，远端河道宽到 45 单位、摆动 ±100 单位，
+// 河被甩出画面 —— 现在近处照旧张开、远处收敛成稳定的一条窄带。
+float meanderScale(float depth) {
+  float d = max(depth, 4.0);
+  return RIVER_MEANDER_CAP * (1.0 - exp(-d / RIVER_MEANDER_CAP));
+}
+
+float channelHalfWidth(float depth) {
+  return 0.105 * meanderScale(depth);
+}
+
+float meanderOffset(float z, float depth) {
+  return (sin(z * 0.021) * 0.34 + sin(z * 0.0073) * 0.55) * meanderScale(depth);
+}
+
+// 河道在深度方向的截止：比 ${RIVER_TOP_SCREEN.toFixed(2)} 那一行（约 370 单位）更远的地方
+// **不再挖河道**，否则地形会在走廊网格够不到的地方留下一个洞（清屏色会直接露出来）。
+const float RIVER_DEPTH_LIMIT = 360.0;
+
+float channelWeight(vec2 p) {
   float depth = max(u.cameraPosition.z - p.y, 4.0);
-  float channel = channelWeight(p);
-  float bed = -0.85 + fbm3(p * 0.42) * 0.34 + sin(p.x * 1.7 + p.y * 0.9) * 0.05;
-  float terrain = (5.0 * depth) / 430.0 + 0.3 + fbm3(p * 0.022) * 4.0;
-  // channelWeight 在河道中心是 1、在岸上是 0，所以「河岸权重」就是 1 - channel。
-  // 反过来的话整片地形都会变成河床高度 —— 这一版最初就是这么写错的。
-  return mix(bed, terrain, 1.0 - channel);
+  float halfWidth = channelHalfWidth(depth);
+  float meander = meanderOffset(p.y, depth);
+  float lateral = abs(p.x - meander) / halfWidth;
+  float cut = 1.0 - smoothstep(0.62, 1.0, lateral);
+  return cut * (1.0 - smoothstep(RIVER_DEPTH_LIMIT - 40.0, RIVER_DEPTH_LIMIT, depth));
+}
+
+/**
+ * 河岸高度（**不含河道**）：与 CPU 的 terrainHeightCpu 逐字对应。
+ *
+ * 抬升用 TERRAIN_RISE 而不是写死的 5 单位：写死的话远端地面过高会把天空整块盖住。
+ * 那一项是构图的关键：它决定地形远端的轮廓落在屏幕的哪一行。
+ *
+ * 河道那一段剖面由**河床走廊网格**负责（见 buildRiverMesh），地形片元在 channelWeight > 0.02
+ * 处整块 discard，所以两边不会互相打架。
+ */
+float terrainHeight(vec2 p) {
+  float depth = max(u.cameraPosition.z - p.y, 4.0);
+  return (depth / 430.0) * ${TERRAIN_RISE.toFixed(2)} + ${TERRAIN_BASE.toFixed(2)}
+    + fbm3(p * ${TERRAIN_NOISE_FREQUENCY.toFixed(3)}) * ${TERRAIN_NOISE_AMPLITUDE.toFixed(2)};
 }
 `;
 
 const COMMON_GLSL = `${UNIFORM_BLOCK_GLSL}
 ${SKY_COLORS_GLSL}
 ${SHADER_COMMON_GLSL}
+${FOG_GLSL}
 ${LANDSCAPE_HELPERS_GLSL}`;
 
 /** 片元着色器专用前缀：{@link COMMON_GLSL} + 依赖导数的网格函数。 */
@@ -338,19 +574,29 @@ void main() {
   vec3 ray = normalize(vRay);
   vec3 sun = normalize(u.sunDirection.xyz);
   float height = clamp(ray.y, -1.0, 1.0);
+  // 渐变参数用 **clamp 到 0 的** 高度：地平线以下不再继续往暗处插值，
+  // 否则地形远边界之外漏出来的那点天空会比地平线色暗，露出「两个地平线」的拼缝。
+  float lift = clamp(height, 0.0, 1.0);
 
-  // 地平线偏暖 → 天顶偏蓝：pow 让暖色只挤在地平线附近的一薄层里。
-  vec3 color = mix(SKY_HORIZON, SKY_ZENITH, pow(clamp(height, 0.0, 1.0), 0.5));
-  // 越贴地平线越亮（大气散射的廉价近似）。
-  color += vec3(0.1, 0.09, 0.05) * pow(1.0 - clamp(abs(height), 0.0, 1.0), 6.0);
+  // 地平线偏暖 → 天顶偏蓝。指数 0.35 是量出来的：这台相机只往上看了约 14°（lift ≤ 0.25），
+  // 用 0.5 甚至 1.0 时「天顶蓝」根本来不及出现，整个天空会是一片没有渐变的灰白。
+  vec3 color = mix(SKY_HORIZON, SKY_ZENITH, pow(lift, 0.35));
+  // 贴着地平线的一层暖白（大气散射的廉价近似）。用 exp(-lift × k) 而不是 pow(1 - |2·lift - 1|)：
+  // 后者的峰值在 lift = 0.5（画面正中的天上），地平线附近反而恒等于 0，等于什么都没加。
+  color += vec3(0.17, 0.14, 0.08) * exp(-lift * 13.0);
 
-  // 太阳：本体 + 两层辉光。cos 越大越亮，宽度由幂次控制（幂次越大衰减越快）。
+  // 太阳：本体 + 两层辉光。宽度由 cos 的幂次控制。
+  // 幂次是量出来的：旧版用 320 / 14 / 3，而「视线与太阳夹角 20°」处 cos = 0.94，
+  // 0.94³ = 0.83 → 远晕把整片天空都提亮到 240 以上（实测天空上沿 233,243,255，
+  // 看不出任何渐变）。现在 4000 / 220 / 22：圆盘角半径约 1.1°（屏幕上直径约 23 像素，
+  // 5×5 的探针稳稳压在盘里），20° 处只剩 0.05 的余量，天空恢复成蓝色渐变。
   float sunAngle = max(dot(ray, sun), 0.0);
-  color += vec3(1.2, 1.0, 0.8) * pow(sunAngle, 900.0);   // 本体：一个很亮的圆盘
-  color += vec3(0.5, 0.4, 0.26) * pow(sunAngle, 14.0);   // 近晕
-  color += vec3(0.24, 0.2, 0.16) * pow(sunAngle, 3.0);   // 远晕
+  color += vec3(2.6, 2.45, 2.1) * pow(sunAngle, 4000.0);  // 本体：一个很亮的圆盘
+  color += vec3(0.55, 0.45, 0.30) * pow(sunAngle, 220.0); // 近晕
+  color += vec3(0.20, 0.16, 0.10) * pow(sunAngle, 22.0);  // 远晕
 
-  // 地平线以下的半个球面也画上（地表会盖住它），保证任何视线都有颜色。
+  // 天空**不吃雾**：它本身就是要和地平线色接上的那一层，再混一次雾只会把
+  // 地平线→天顶的渐变压平（上一版整片天空被雾压成 158,173,178 一块平色）。
   fragColor = vec4(color, 1.0);
 }
 `;
@@ -390,14 +636,15 @@ struct SkyVertexOutput {
   let ray = normalize(in.ray);
   let sun = normalize(u.sunDirection.xyz);
   let height = clamp(ray.y, -1.0, 1.0);
+  let lift = clamp(height, 0.0, 1.0);
 
-  var color = mix(SKY_HORIZON, SKY_ZENITH, pow(clamp(height, 0.0, 1.0), 0.5));
-  color = color + vec3f(0.1, 0.09, 0.05) * pow(1.0 - clamp(abs(height), 0.0, 1.0), 6.0);
+  var color = mix(SKY_HORIZON, SKY_ZENITH, pow(lift, 0.35));
+  color = color + vec3f(0.17, 0.14, 0.08) * exp(-lift * 13.0);
 
   let sunAngle = max(dot(ray, sun), 0.0);
-  color = color + vec3f(1.2, 1.0, 0.8) * pow(sunAngle, 900.0);
-  color = color + vec3f(0.5, 0.4, 0.26) * pow(sunAngle, 14.0);
-  color = color + vec3f(0.24, 0.2, 0.16) * pow(sunAngle, 3.0);
+  color = color + vec3f(2.6, 2.45, 2.1) * pow(sunAngle, 4000.0);
+  color = color + vec3f(0.55, 0.45, 0.30) * pow(sunAngle, 220.0);
+  color = color + vec3f(0.20, 0.16, 0.10) * pow(sunAngle, 22.0);
 
   return vec4f(color, 1.0);
 }
@@ -419,12 +666,15 @@ out vec3 vColor;
 out vec3 vNormal;
 out vec3 vWorld;
 out float vDistance;
+// 这一层山脊自带的雾倍率（远山更重）。它是**顶点属性**，片元里读不到，必须插值过来。
+out float vHaze;
 
 void main() {
   vColor = color;
   vNormal = normal;
   vWorld = position;
   vDistance = length(position - u.cameraPosition.xyz);
+  vHaze = extra.x;
   gl_Position = u.viewProjection * vec4(position, 1.0);
 }
 `;
@@ -434,6 +684,7 @@ in vec3 vColor;
 in vec3 vNormal;
 in vec3 vWorld;
 in float vDistance;
+in float vHaze;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -442,16 +693,18 @@ ${COMMON_FRAGMENT_GLSL}
 void main() {
   vec3 normal = normalize(vNormal);
   vec3 sun = normalize(u.sunDirection.xyz);
-  // 背光面也留一点余地，山体才不会一边黑成剪影。
-  float diffuse = 0.45 + 0.55 * max(dot(normal, sun), 0.0);
+  // 环境项给到 0.62：太阳很低（约 8°）、又是逆光，纯漫反射会让整座山黑成一块剪影；
+  // 剩下的 0.5 交给法线（幕布的法线由脊线斜率推出，迎光与背光的两侧亮度差很明显）。
+  float diffuse = 0.62 + 0.5 * max(dot(normal, sun), 0.0);
   vec3 color = vColor * diffuse;
-  // 太阳方向的暖色描边：让山脊线在天空里更清楚。
+  // 太阳一侧的暖色描边：让山脊线在天空里更清楚。
   vec3 sunFlat = normalize(vec3(sun.x, 0.0, sun.z));
   float side = max(dot(normalize(vec3(normal.x, 0.0, normal.z)), sunFlat), 0.0);
   color += vec3(0.26, 0.17, 0.06) * pow(side, 2.0);
-  // 山脚被自己的正面挡住、又离相机远，所以雾比山顶重。
-  float haze = clamp(u.timeAndFog.z * 0.4 + vWorld.y * 0.0016, 0.0, 0.85);
-  color = fogMix(color, vDistance, haze);
+  // 山脚低、又被前面的坡挡住，所以雾比山顶略重：低处把倍率放大、高处收回去。
+  float heightHaze = clamp(1.25 - vWorld.y * 0.01, 0.7, 1.4);
+  // 注意传进去的是**倍率**，fogDensity() 才负责乘上真实浓度（上一版直接把倍率当浓度）。
+  color = fogMix(color, vDistance, fogDensity(vHaze * heightHaze));
   if (u.timeAndFog.w > 0.5) {
     color = mix(color, vec3(0.95, 0.95, 1.0), 0.6 * gridLines(vWorld.xz * 0.25));
   }
@@ -486,6 +739,7 @@ struct RidgeVertexOutput {
   @location(1) normal: vec3f,
   @location(2) world: vec3f,
   @location(3) distance: f32,
+  @location(4) haze: f32,
 }
 
 @vertex fn vsMain(v: RidgeVertexInput) -> RidgeVertexOutput {
@@ -494,6 +748,7 @@ struct RidgeVertexOutput {
   out.normal = v.normal;
   out.world = v.position;
   out.distance = length(v.position - u.cameraPosition.xyz);
+  out.haze = v.extra.x;
   out.position = u.viewProjection * vec4f(v.position, 1.0);
   return out;
 }
@@ -501,13 +756,13 @@ struct RidgeVertexOutput {
 @fragment fn fsMain(in: RidgeVertexOutput) -> @location(0) vec4f {
   let normal = normalize(in.normal);
   let sun = normalize(u.sunDirection.xyz);
-  let diffuse = 0.45 + 0.55 * max(dot(normal, sun), 0.0);
+  let diffuse = 0.62 + 0.5 * max(dot(normal, sun), 0.0);
   var color = in.color * diffuse;
   let sunFlat = normalize(vec3f(sun.x, 0.0, sun.z));
   let side = max(dot(normalize(vec3f(normal.x, 0.0, normal.z)), sunFlat), 0.0);
   color = color + vec3f(0.26, 0.17, 0.06) * pow(side, 2.0);
-  let haze = clamp(u.timeAndFog.z * 0.4 + in.world.y * 0.0016, 0.0, 0.85);
-  color = fogMix(color, in.distance, haze);
+  let heightHaze = clamp(1.25 - in.world.y * 0.01, 0.7, 1.4);
+  color = fogMix(color, in.distance, fogDensity(in.haze * heightHaze));
   if (u.timeAndFog.w > 0.5) {
     color = mix(color, vec3f(0.95, 0.95, 1.0), 0.6 * gridLines(in.world.xz * 0.25));
   }
@@ -539,21 +794,16 @@ out float vDistance;
 void main() {
   vWorld = position;
   vDistance = length(position - u.cameraPosition.xyz);
-  float epsilon = 0.18;
-  float heightX = groundHeight(position.xz + vec2(epsilon, 0.0));
-  float heightZ = groundHeight(position.xz + vec2(0.0, epsilon));
-  vNormal = normalize(vec3(
-    position.y - heightX,
-    epsilon,
-    position.y - heightZ));
+  // 法线**直接用网格顶点上算好的那一份**（buildTerrainMesh 里按 0.6 的步长求高度场梯度）。
+  // 不要在着色器里再量一次：这里的 groundHeight 与 CPU 的列表公式在噪声细节上不完全一致，
+  // 小步长会把这层微小的差值放大成「近乎垂直的坡面」，地形漫反射因此被压成黑色。
+  vNormal = normal;
   vColor = color;
   gl_Position = u.viewProjection * vec4(position, 1.0);
 }
 `;
 
 const TERRAIN_FRAGMENT_GLSL = `
-in vec3 vColor;
-in vec3 vNormal;
 in vec3 vWorld;
 in float vDistance;
 
@@ -567,13 +817,35 @@ void main() {
   if (channelWeight(p) > 0.02) {
     discard;
   }
-  vec3 normal = normalize(vNormal);
+  // 法线在片元里按高度场的梯度重算，而不是直接用顶点属性 vNormal。
+  // 两者现在是同一份高度场（CPU 与着色器的 terrainHeight 逐字对应），差别只在粒度：
+  // 顶点法线的步长也是 0.6，但地形网格的格子在 3~13 个单位宽之间，
+  // 片元里按世界坐标现算可以得到更细的坡面朝向。步长 0.6（比河道半宽略大）：
+  // 河岸本身很平缓，更小的步长会被噪声的高频细节带偏，量出近乎垂直的坡面。
+  float epsilon = 0.6;
+  vec3 normal = normalize(vec3(
+    -((terrainHeight(p + vec2(epsilon, 0.0)) - vWorld.y) / epsilon),
+    1.0,
+    -((terrainHeight(p + vec2(0.0, epsilon)) - vWorld.y) / epsilon)));
   vec3 sun = normalize(u.sunDirection.xyz);
-  // 迎光坡亮、背光坡暗 —— 太阳方向能在地形上直接看出来。
-  float diffuse = 0.2 + 0.9 * max(dot(normal, sun), 0.0);
-  vec3 color = vColor * diffuse;
-  color += vec3(0.2, 0.14, 0.05) * pow(max(dot(normal, sun), 0.0), 4.0);
-  color = fogMix(color, vDistance, u.timeAndFog.z);
+  // 环境项给到 0.55：太阳仰角只有约 8°，平坦的河岸与太阳的夹角本来就小，
+  // 环境项太小整片地形会暗成深绿（实测 24,43,20）；再留 0.55 给太阳方向，
+  // 朝太阳抬起的坡面（远处的对岸）就会明显更亮，地形读起来才有「坡」。
+  float diffuse = 0.55 + 0.55 * max(dot(normal, sun), 0.0);
+  // 地形颜色**在片元里按世界坐标算**，不读网格颜色属性。
+  // 地形的配色本来就是「噪声 → 草绿 / 林绿 / 干土」的纯函数，在片元里算一份比顶点插值细得多
+  //（地形网格的格子有 3~13 个单位宽，靠顶点色会糊成一块块）。
+  float slope = clamp((fbm3(p * 0.34) + fbm3(p * 0.09)) * 0.5, 0.0, 1.0);
+  float dry = smoothstep(1.9, 3.3, vWorld.y);
+  vec3 color = mix(vec3(0.3, 0.5, 0.19), vec3(0.13, 0.29, 0.13), slope);
+  // 高处偏干偏灰（土坡与岩石），低处是河岸的草绿：一眼能看出地势的高低。
+  color = mix(color, vec3(0.44, 0.42, 0.34), dry * 0.75);
+  color *= diffuse;
+  color += vec3(0.22, 0.15, 0.05) * pow(max(dot(normal, sun), 0.0), 4.0);
+  // 高度越低雾越厚（山脚在远处更容易被大气糊掉），但近岸本身必须清晰：
+  // 倍率只在 0.7~1.3 之间摆动，再乘 fogDensity() 里的真实浓度。
+  float heightHaze = clamp(1.3 - vWorld.y * 0.05, 0.7, 1.3);
+  color = fogMix(color, vDistance, fogDensity(${FOG_TERRAIN_SCALE_GLSL} * heightHaze));
   if (u.timeAndFog.w > 0.5) {
     color = mix(color, vec3(0.95, 0.95, 1.0), 0.7 * gridLines(p * 0.5));
   }
@@ -595,22 +867,49 @@ struct Uniforms {
 
 ${WGSL_COMMON}
 
+fn meanderScale(depth: f32) -> f32 {
+  let d = max(depth, 4.0);
+  return ${RIVER_MEANDER_CAP.toFixed(1)} * (1.0 - exp(-d / ${RIVER_MEANDER_CAP.toFixed(1)}));
+}
+
+fn channelHalfWidth(depth: f32) -> f32 {
+  return 0.105 * meanderScale(depth);
+}
+
+fn meanderOffset(z: f32, depth: f32) -> f32 {
+  return (sin(z * 0.021) * 0.34 + sin(z * 0.0073) * 0.55) * meanderScale(depth);
+}
+
 fn channelWeight(p: vec2f) -> f32 {
   let depth = max(u.cameraPosition.z - p.y, 4.0);
-  let halfWidth = 0.105 * depth;
-  let meander = sin(p.y * 0.021) * 0.34 * depth + sin(p.y * 0.0073) * 0.55 * depth;
+  let halfWidth = channelHalfWidth(depth);
+  let meander = meanderOffset(p.y, depth);
   let lateral = abs(p.x - meander) / halfWidth;
-  return 1.0 - smoothstep(0.62, 1.0, lateral);
+  let cut = 1.0 - smoothstep(0.62, 1.0, lateral);
+  // 与 GLSL 那边逐字一致：比走廊网格更远的地方不再挖河道，免得留下一个洞。
+  return cut * (1.0 - smoothstep(320.0, 360.0, depth));
+}
+
+// 河岸高度（不含河道）：与 CPU 的 terrainHeightCpu 逐字对应（理由见 GLSL 那边）。
+fn terrainHeight(p: vec2f) -> f32 {
+  let depth = max(u.cameraPosition.z - p.y, 4.0);
+  return (depth / 430.0) * ${TERRAIN_RISE.toFixed(2)} + ${TERRAIN_BASE.toFixed(2)}
+    + fbm3(p * ${TERRAIN_NOISE_FREQUENCY.toFixed(3)}) * ${TERRAIN_NOISE_AMPLITUDE.toFixed(2)};
 }
 
 fn groundHeight(p: vec2f) -> f32 {
-  let depth = max(u.cameraPosition.z - p.y, 4.0);
-  let channel = channelWeight(p);
-  let bed = -0.85 + fbm3(p * 0.42) * 0.34 + sin(p.x * 1.7 + p.y * 0.9) * 0.05;
-  let terrain = (5.0 * depth) / 430.0 + 0.3 + fbm3(p * 0.022) * 4.0;
-  // channelWeight 在河道中心是 1、在岸上是 0，所以「河岸权重」就是 1 - channel。
-  // 反过来的话整片地形都会变成河床高度 —— 这一版最初就是这么写错的。
-  return mix(bed, terrain, 1.0 - channel);
+  return terrainHeight(p);
+}
+
+/**
+ * 地形法线：高度场的横向梯度（步长 0.6，比河道半宽略大，量的是坡地的整体朝向）。
+ * 河道那一段的形状由走廊网格负责，地形顶点不参与。
+ */
+fn terrainNormal(p: vec2f, height: f32) -> vec3f {
+  let e = 0.6;
+  let gx = (terrainHeight(p + vec2f(e, 0.0)) - height) / e;
+  let gz = (terrainHeight(p + vec2f(0.0, e)) - height) / e;
+  return normalize(vec3f(-gx, 1.0, -gz));
 }
 
 struct TerrainVertexInput {
@@ -632,13 +931,8 @@ struct TerrainVertexOutput {
   var out: TerrainVertexOutput;
   out.world = v.position;
   out.distance = length(v.position - u.cameraPosition.xyz);
-  let epsilon = 0.18;
-  let heightX = groundHeight(v.position.xz + vec2f(epsilon, 0.0));
-  let heightZ = groundHeight(v.position.xz + vec2f(0.0, epsilon));
-  out.normal = normalize(vec3f(
-    v.position.y - heightX,
-    epsilon,
-    v.position.y - heightZ));
+  // 法线用网格顶点上算好的那一份（理由见 GLSL 那边）。
+  out.normal = v.normal;
   out.color = v.color;
   out.position = u.viewProjection * vec4f(v.position, 1.0);
   return out;
@@ -649,12 +943,23 @@ struct TerrainVertexOutput {
   if (channelWeight(p) > 0.02) {
     discard;
   }
-  let normal = normalize(in.normal);
+  // 法线在片元里按高度场梯度重算（与 GLSL 那边同一份公式、同一个步长）。
+  let epsilon = 0.6;
+  let normal = normalize(vec3f(
+    -((terrainHeight(p + vec2f(epsilon, 0.0)) - in.world.y) / epsilon),
+    1.0,
+    -((terrainHeight(p + vec2f(0.0, epsilon)) - in.world.y) / epsilon)));
   let sun = normalize(u.sunDirection.xyz);
-  let diffuse = 0.36 + 0.74 * max(dot(normal, sun), 0.0);
-  var color = in.color * diffuse;
-  color = color + vec3f(0.2, 0.14, 0.05) * pow(max(dot(normal, sun), 0.0), 4.0);
-  color = fogMix(color, in.distance, u.timeAndFog.z);
+  let diffuse = 0.55 + 0.55 * max(dot(normal, sun), 0.0);
+  // 地形配色在片元里按世界坐标算（与 GLSL 那边同一份公式）。
+  let slope = clamp((fbm3(p * 0.34) + fbm3(p * 0.09)) * 0.5, 0.0, 1.0);
+  let dry = smoothstep(1.9, 3.3, in.world.y);
+  var color = mix(vec3f(0.3, 0.5, 0.19), vec3f(0.13, 0.29, 0.13), slope);
+  color = mix(color, vec3f(0.44, 0.42, 0.34), dry * 0.75);
+  color = color * diffuse;
+  color = color + vec3f(0.22, 0.15, 0.05) * pow(max(dot(normal, sun), 0.0), 4.0);
+  let heightHaze = clamp(1.3 - in.world.y * 0.05, 0.7, 1.3);
+  color = fogMix(color, in.distance, fogDensity(${FOG_TERRAIN_SCALE_GLSL} * heightHaze));
   if (u.timeAndFog.w > 0.5) {
     color = mix(color, vec3f(0.95, 0.95, 1.0), 0.7 * gridLines(p * 0.5));
   }
@@ -677,11 +982,14 @@ ${UNIFORM_BLOCK_GLSL}
 out vec3 vNormal;
 out vec3 vWorld;
 out float vDistance;
+out float vWet;
 
 void main() {
   vNormal = normal;
   vWorld = position;
   vDistance = length(position - u.cameraPosition.xyz);
+  // extra.x 是走廊网格带过来的**世界高度**：低于水面 = 泡在水里。
+  vWet = clamp((0.06 - position.y) / 0.5, 0.0, 1.0);
   gl_Position = u.viewProjection * vec4(position, 1.0);
 }
 `;
@@ -690,6 +998,7 @@ const RIVERBED_FRAGMENT_GLSL = `
 in vec3 vNormal;
 in vec3 vWorld;
 in float vDistance;
+in float vWet;
 
 layout(location = 0) out vec4 fragColor;
 ${COMMON_FRAGMENT_GLSL}
@@ -698,19 +1007,29 @@ void main() {
   vec2 p = vWorld.xz;
   // 颗粒：大颗粒是「卵石」（一团团亮斑），小颗粒是砂砾。
   float pebbles = smoothstep(0.52, 1.0, fbm3(p * 0.95));
-  float grit = fbm3(p * 3.6);
-  // 沙石底：暖沙色 + 卵石偏青灰 + 砂砾的明暗。
-  vec3 sand = vec3(0.82, 0.74, 0.55);
-  vec3 stone = vec3(0.58, 0.6, 0.52);
+  // 砂砾噪声先过一遍 smoothstep 再当明暗用：fbm3 的取值本来就集中在 0.44 附近
+  //（三个八度叠出来的分布很窄，标准差只有 0.09），直接相乘只能得到 ±9% 的明暗差，
+  // 透过水面看过去几乎是纯色（实测亮度标准差 3.7~4.5）。映射到 0.33~0.58 之后
+  // 明暗差到 2.5 倍，砂砾/卵石的质感才真的透得出来。
+  float grit = smoothstep(0.33, 0.58, fbm3(p * 3.6));
+  // 沙石底：沙滩色 + 卵石偏青灰 + 砂砾的明暗。
+  // 刻意**偏中性、不要过暖**：河床要透过一层青蓝色的水被看到，
+  // 旧版的 0.82/0.74/0.55 太黄，混出来的水面是白的（实测 238,239,227，river-blue 判据不过）。
+  vec3 sand = vec3(0.58, 0.6, 0.5);
+  vec3 stone = vec3(0.4, 0.46, 0.44);
   vec3 color = mix(sand, stone, pebbles * 0.85);
-  color *= 0.6 + 0.7 * grit;
+  // 明暗对比要够：这一层的**亮度**起伏就是「透过水看得见河床颗粒」的证据
+  //（岸上的沙子几乎是纯色，颗粒感全靠这里）。0.5 + 0.95 × grit 让明暗差到 2.5 倍。
+  color *= 0.5 + 0.95 * grit;
   // 水面波纹投在河床上的晃动光斑：让「透过水看到的河床」是活的。
   float ripple = sin(p.x * 2.3 + u.timeAndFog.x * 1.7) * sin(p.y * 1.9 - u.timeAndFog.x * 1.3);
-  color += vec3(0.16, 0.17, 0.1) * ripple * 0.5;
+  color += vec3(0.14, 0.16, 0.12) * ripple * 0.5;
+  // 水下的砂石压暗一点（透过水面看河床不该亮得发光）。
+  color *= 1.0 - 0.24 * vWet;
   vec3 normal = normalize(vNormal);
   vec3 sun = normalize(u.sunDirection.xyz);
-  color *= 0.45 + 0.75 * max(dot(normal, sun), 0.0);
-  color = fogMix(color, vDistance, u.timeAndFog.z * 0.75);
+  color *= 0.5 + 0.7 * max(dot(normal, sun), 0.0);
+  color = fogMix(color, vDistance, fogDensity(${FOG_BED_SCALE_GLSL}));
   fragColor = vec4(color, 1.0);
 }
 `;
@@ -741,6 +1060,7 @@ struct RiverbedVertexOutput {
   @location(0) normal: vec3f,
   @location(1) world: vec3f,
   @location(2) distance: f32,
+  @location(3) wet: f32,
 }
 
 @vertex fn vsMain(v: RiverbedVertexInput) -> RiverbedVertexOutput {
@@ -748,6 +1068,8 @@ struct RiverbedVertexOutput {
   out.normal = v.normal;
   out.world = v.position;
   out.distance = length(v.position - u.cameraPosition.xyz);
+  // extra.x 是走廊网格带过来的**世界高度**：低于水面 = 泡在水里。
+  out.wet = clamp((0.06 - v.position.y) / 0.5, 0.0, 1.0);
   out.position = u.viewProjection * vec4f(v.position, 1.0);
   return out;
 }
@@ -755,17 +1077,20 @@ struct RiverbedVertexOutput {
 @fragment fn fsMain(in: RiverbedVertexOutput) -> @location(0) vec4f {
   let p = in.world.xz;
   let pebbles = smoothstep(0.52, 1.0, fbm3(p * 0.95));
-  let grit = fbm3(p * 3.6);
-  let sand = vec3f(0.82, 0.74, 0.55);
-  let stone = vec3f(0.58, 0.6, 0.52);
+  // 与 GLSL 那边同一份公式（先做对比度映射，理由见那边）。
+  let grit = smoothstep(0.33, 0.58, fbm3(p * 3.6));
+  let sand = vec3f(0.58, 0.6, 0.5);
+  let stone = vec3f(0.4, 0.46, 0.44);
   var color = mix(sand, stone, pebbles * 0.85);
-  color = color * (0.6 + 0.7 * grit);
+  color = color * (0.5 + 0.95 * grit);
   let ripple = sin(p.x * 2.3 + u.timeAndFog.x * 1.7) * sin(p.y * 1.9 - u.timeAndFog.x * 1.3);
-  color = color + vec3f(0.16, 0.17, 0.1) * ripple * 0.5;
+  color = color + vec3f(0.14, 0.16, 0.12) * ripple * 0.5;
+  // 水下的砂石压暗一点（透过水面看河床不会亮得发光）。
+  color = color * (1.0 - 0.24 * in.wet);
   let normal = normalize(in.normal);
   let sun = normalize(u.sunDirection.xyz);
-  color = color * (0.45 + 0.75 * max(dot(normal, sun), 0.0));
-  color = fogMix(color, in.distance, u.timeAndFog.z * 0.75);
+  color = color * (0.5 + 0.7 * max(dot(normal, sun), 0.0));
+  color = fogMix(color, in.distance, fogDensity(${FOG_BED_SCALE_GLSL}));
   return vec4f(color, 1.0);
 }
 `;
@@ -774,42 +1099,57 @@ struct RiverbedVertexOutput {
 /* 树林（实例化：树干与树冠各一次 draw call）                                                            */
 /* ------------------------------------------------------------------------------------------------ */
 
+/**
+ * 树的顶点属性。
+ *
+ * 网格属性按 `bindMesh()` 的槽位声明：位置(0) / 法线(1)（**不含**颜色(2) 与备用(3)，
+ * 因为实例数据已经占了 `location 3`，同一个 `@location` 在一条管线的全部 buffers 里只能出现一次）。
+ * 实例属性是 `location 3 = vec4(世界坐标 xyz, 缩放)` 与 `location 8 = vec2(旋转角, 备用)`。
+ *
+ * **没有用「每实例一个 mat4」，也没有用每实例颜色**：mat4 要吃掉 4 个连续的 attribute location，
+ * 而每棵树的颜色本来就可以由**世界坐标哈希**在片元里算出来 —— 同样的确定性、每棵树深浅不同，
+ * 却只需要 6 个 float 的实例数据、一条容易看懂的实例缓冲路径。这是这一版刻意做的减法。
+ */
 const TREE_VERTEX_GLSL = `
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
-layout(location = 2) in vec2 extra;
-layout(location = 3) in mat4 instanceMatrix;
-layout(location = 7) in vec3 instanceColor;
+layout(location = 3) in vec4 instanceOffset;
 layout(location = 8) in vec2 instanceInfo;
 
 ${UNIFORM_BLOCK_GLSL}
 
 out vec3 vNormal;
-out vec3 vColor;
 out vec3 vWorld;
 out float vDistance;
 out float vLocalY;
-out float vPart;
 
 void main() {
-  vec4 world = instanceMatrix * vec4(position, 1.0);
-  vWorld = world.xyz;
-  vNormal = normalize(mat3(instanceMatrix) * normal);
-  vColor = instanceColor;
-  vDistance = length(world.xyz - u.cameraPosition.xyz);
+  // 实例变换 = 绕 Y 轴旋转 + 等比缩放 + 平移：正交旋转不会改变法线的长度，直接转一下即可。
+  float spin = instanceInfo.x;
+  float scale = instanceOffset.w;
+  float cosine = cos(spin);
+  float sine = sin(spin);
+  vec3 local = vec3(
+    (position.x * cosine + position.z * sine) * scale,
+    position.y * scale,
+    (-position.x * sine + position.z * cosine) * scale);
+  vec3 world = local + instanceOffset.xyz;
+  vWorld = world;
+  vNormal = vec3(
+    normal.x * cosine + normal.z * sine,
+    normal.y,
+    -normal.x * sine + normal.z * cosine);
+  vDistance = length(world - u.cameraPosition.xyz);
   vLocalY = position.y;
-  vPart = instanceInfo.x;
-  gl_Position = u.viewProjection * world;
+  gl_Position = u.viewProjection * vec4(world, 1.0);
 }
 `;
 
 const TREE_FRAGMENT_GLSL = `
 in vec3 vNormal;
-in vec3 vColor;
 in vec3 vWorld;
 in float vDistance;
 in float vLocalY;
-in float vPart;
 
 layout(location = 0) out vec4 fragColor;
 ${COMMON_FRAGMENT_GLSL}
@@ -818,18 +1158,18 @@ void main() {
   vec3 normal = normalize(vNormal);
   vec3 sun = normalize(u.sunDirection.xyz);
   float diffuse = 0.38 + 0.62 * max(dot(normal, sun), 0.0);
-  vec3 color = vColor;
-
-  // 树冠上点几道斜纹，远看才有「枝叶」的层次；树干则沿高度略微变暗。
-  if (vPart > 0.5) {
-    float branch = sin((vWorld.x + vWorld.z) * 2.6 + vLocalY * 7.0);
-    color *= 0.86 + 0.22 * smoothstep(-0.15, 0.75, branch);
-  } else {
-    color *= 0.78 + 0.3 * clamp(vLocalY * 1.6, 0.0, 1.0);
-  }
+  // 每棵树的深浅由世界坐标的哈希决定：树冠 0.55~0.85 的绿，树干是同一份深浅压暗后的棕。
+  float variation = hash21(floor(vWorld.xz * 0.7));
+  float trunk = clamp(1.0 - vLocalY * 2.6, 0.0, 1.0);
+  vec3 canopy = vec3(0.2, 0.42, 0.17) * (1.1 + variation * 0.75);
+  vec3 bark = vec3(0.4, 0.29, 0.2) * (1.0 + variation * 0.5);
+  vec3 color = mix(canopy, bark, trunk);
+  // 树冠上点几道斜纹，远看才有「枝叶」的层次。
+  float branch = sin((vWorld.x + vWorld.z) * 2.6 + vLocalY * 7.0);
+  color *= mix(0.86 + 0.22 * smoothstep(-0.15, 0.75, branch), 1.0, trunk);
 
   color *= diffuse;
-  color = fogMix(color, vDistance, u.timeAndFog.z * 0.7);
+  color = fogMix(color, vDistance, fogDensity(${FOG_TREE_SCALE_GLSL}));
   if (u.timeAndFog.w > 0.5) {
     color = mix(color, vec3(0.95, 0.95, 1.0), 0.7 * gridLines(vWorld.xz * 0.4));
   }
@@ -851,39 +1191,48 @@ struct Uniforms {
 
 ${WGSL_COMMON}
 
+/**
+ * WGSL 的树顶点输入。
+ *
+ * 与 GLSL 那边逐 location 对齐：网格 position(0) / normal(1) / **color(2)**，
+ * 实例 instanceOffset(3) = vec4(xyz, 缩放)、instanceColor(7)、instanceInfo(8) = vec2(旋转角, 备用)。
+ * GLSL 用 layout(location = 3) in vec4，WGSL 里就是一个 vec4f —— 没有 mat4 那条多 location 的路。
+ */
 struct TreeVertexInput {
   @location(0) position: vec3f,
   @location(1) normal: vec3f,
-  @location(2) extra: vec2f,
-  @location(3) instanceMatrix0: vec4f,
-  @location(4) instanceMatrix1: vec4f,
-  @location(5) instanceMatrix2: vec4f,
-  @location(6) instanceMatrix3: vec4f,
-  @location(7) instanceColor: vec3f,
+  @location(3) instanceOffset: vec4f,
   @location(8) instanceInfo: vec2f,
 }
 
 struct TreeVertexOutput {
   @builtin(position) position: vec4f,
   @location(0) normal: vec3f,
-  @location(1) color: vec3f,
-  @location(2) world: vec3f,
-  @location(3) distance: f32,
-  @location(4) localY: f32,
-  @location(5) part: f32,
+  @location(1) world: vec3f,
+  @location(2) distance: f32,
+  @location(3) localY: f32,
 }
 
 @vertex fn vsMain(v: TreeVertexInput) -> TreeVertexOutput {
-  let instanceMatrix = mat4x4f(v.instanceMatrix0, v.instanceMatrix1, v.instanceMatrix2, v.instanceMatrix3);
   var out: TreeVertexOutput;
-  let world = instanceMatrix * vec4f(v.position, 1.0);
-  out.world = world.xyz;
-  out.normal = normalize((instanceMatrix * vec4f(v.normal, 0.0)).xyz);
-  out.color = v.instanceColor;
-  out.distance = length(world.xyz - u.cameraPosition.xyz);
+  let spin = v.instanceInfo.x;
+  let scale = v.instanceOffset.w;
+  let cosine = cos(spin);
+  let sine = sin(spin);
+  let local = vec3f(
+    (v.position.x * cosine + v.position.z * sine) * scale,
+    v.position.y * scale,
+    (-v.position.x * sine + v.position.z * cosine) * scale);
+  let world = local + v.instanceOffset.xyz;
+  out.world = world;
+  out.normal = vec3f(
+    v.normal.x * cosine + v.normal.z * sine,
+    v.normal.y,
+    -v.normal.x * sine + v.normal.z * cosine);
+  out.distance = length(world - u.cameraPosition.xyz);
   out.localY = v.position.y;
-  out.part = v.instanceInfo.x;
-  out.position = u.viewProjection * world;
+  // 注意要补一个 w = 1.0 再乘矩阵：WGSL 里没有 mat4x4 × vec3 的重载。
+  out.position = u.viewProjection * vec4f(world, 1.0);
   return out;
 }
 
@@ -891,15 +1240,18 @@ struct TreeVertexOutput {
   let normal = normalize(in.normal);
   let sun = normalize(u.sunDirection.xyz);
   let diffuse = 0.38 + 0.62 * max(dot(normal, sun), 0.0);
-  var color = in.color;
-  if (in.part > 0.5) {
-    let branch = sin((in.world.x + in.world.z) * 2.6 + in.localY * 7.0);
-    color = color * (0.86 + 0.22 * smoothstep(-0.15, 0.75, branch));
-  } else {
-    color = color * (0.78 + 0.3 * clamp(in.localY * 1.6, 0.0, 1.0));
-  }
+  // 每棵树的深浅由世界坐标的哈希决定：树冠是深浅不一的绿，树干是同一份深浅压暗后的棕。
+  let variation = hash21(floor(in.world.xz * 0.7));
+  let trunk = clamp(1.0 - in.localY * 2.6, 0.0, 1.0);
+  let canopy = vec3f(0.2, 0.42, 0.17) * (1.1 + variation * 0.75);
+  let bark = vec3f(0.4, 0.29, 0.2) * (1.0 + variation * 0.5);
+  var color = mix(canopy, bark, trunk);
+  // 树冠上点几道斜纹，远看才有「枝叶」的层次。
+  let branch = sin((in.world.x + in.world.z) * 2.6 + in.localY * 7.0);
+  color = color * mix(0.86 + 0.22 * smoothstep(-0.15, 0.75, branch), 1.0, trunk);
+
   color = color * diffuse;
-  color = fogMix(color, in.distance, u.timeAndFog.z * 0.7);
+  color = fogMix(color, in.distance, fogDensity(${FOG_TREE_SCALE_GLSL}));
   if (u.timeAndFog.w > 0.5) {
     color = mix(color, vec3f(0.95, 0.95, 1.0), 0.7 * gridLines(in.world.xz * 0.4));
   }
@@ -922,12 +1274,15 @@ ${UNIFORM_BLOCK_GLSL}
 out vec2 vWaterUv;
 out vec3 vWorld;
 out float vDistance;
+/** 这一列下方的河床高度（< 0 = 在水下）。用来判断「这里有多深」，浅到露底就退化成湿沙。 */
+out float vBedHeight;
 
 void main() {
   vWorld = position;
   // 河道是沿 z 走的，所以用 (x, z) 当波纹的二维参数就够（无需 uv 属性）。
   vWaterUv = position.xz;
   vDistance = length(position - u.cameraPosition.xyz);
+  vBedHeight = extra.x;
   gl_Position = u.viewProjection * vec4(position, 1.0);
 }
 `;
@@ -936,17 +1291,20 @@ const WATER_FRAGMENT_GLSL = `
 in vec2 vWaterUv;
 in vec3 vWorld;
 in float vDistance;
+in float vBedHeight;
 
 layout(location = 0) out vec4 fragColor;
 ${COMMON_FRAGMENT_GLSL}
 
 void main() {
   // 波纹：三层不同频率/方向的正弦叠加，只用来扰动法线，不改变几何。
+  // 振幅 0.16 是量出来的：0.09 时水面几乎是一面平镜，波纹高光只有一两个像素在动，
+  // 「河面区有多种相近色调」与「时间在动」两条判据都量不到东西。
   float wave = 0.0;
   wave += sin(vWaterUv.x * 1.5 + u.timeAndFog.x * 1.7) * 0.5;
   wave += sin(vWaterUv.y * 1.2 - u.timeAndFog.x * 1.1) * 0.4;
   wave += sin((vWaterUv.x + vWaterUv.y) * 2.6 + u.timeAndFog.x * 2.2) * 0.25;
-  vec3 normal = normalize(vec3(wave * 0.09, 1.0, wave * 0.07));
+  vec3 normal = normalize(vec3(wave * 0.16, 1.0, wave * 0.13));
 
   vec3 view = u.cameraPosition.xyz - vWorld;
   vec3 viewDir = normalize(view);
@@ -954,30 +1312,48 @@ void main() {
 
   // fresnel：垂直看下去 → 小（看得见河床）；掠射角 → 大（反射天空）。
   float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 5.0);
-  fresnel = 0.1 + 0.7 * fresnel;
+  fresnel = 0.08 + 0.72 * fresnel;
 
-  // 反射色：往太阳方向抬高一点再采天空，得到「水面上的天空」。
+  // 反射色：把视线按法线镜像之后去采天空，得到「水面上的天空」。
   vec3 reflected = normalize(reflect(-viewDir, normal));
   float height = clamp(reflected.y, 0.0, 1.0);
-  vec3 sky = mix(SKY_HORIZON, SKY_ZENITH, pow(height, 0.5));
+  // 与天空着色器用同一份渐变（同一个指数 0.35），水面上的反射才和真正的天空接得上。
+  vec3 sky = mix(SKY_HORIZON, SKY_ZENITH, pow(height, 0.35));
   float sunAngle = max(dot(reflected, sun), 0.0);
-  sky += vec3(1.0, 0.9, 0.7) * pow(sunAngle, 64.0) * 0.7;
+  // 波纹高光 = 一宽一窄两个波瓣：窄的那层是一颗颗闪点（随时间流动），
+  // 宽的那层是整片水的「天光」，两者一起让河面有一层层相近的色调。
+  sky += vec3(1.0, 0.9, 0.7) * pow(sunAngle, 900.0) * 1.1;
+  sky += vec3(0.5, 0.5, 0.42) * pow(sunAngle, 18.0);
 
   // 水面自身的水色（青蓝），保证「河」即使全反射也还是条河。
-  vec3 deep = vec3(0.06, 0.32, 0.42);
-  // 水浅的地方（河床近）水色会被河床的暖色透上来，所以这里按 fresnel 补一点暖调。
-  vec3 shallowTint = vec3(0.16, 0.2, 0.12) * (1.0 - fresnel);
+  vec3 deep = vec3(0.07, 0.3, 0.42);
+  // 水浅的地方（河床近）水色会被河床的暖色透上来，所以这里按 fresnel 补一点冷调的青绿。
+  vec3 shallowTint = vec3(0.06, 0.14, 0.11) * (1.0 - fresnel);
 
   // 水面自身的颜色 = 水色 → 天空反射（fresnel 越高越像镜子）。
-  vec3 color = mix(deep, sky, clamp(fresnel * u.water.y, 0.0, 0.85)) + shallowTint;
-  // 掠射角的锐利镜面高光：水面的「闪光」。
-  float glint = pow(max(dot(reflected, sun), 0.0), 180.0);
-  color += vec3(1.0, 0.95, 0.85) * glint * 1.6;
+  vec3 color = mix(deep, sky, clamp(fresnel * u.water.y, 0.0, 0.8)) + shallowTint;
+  // 水深 → 水色更沉（Beer-Lambert 的廉价近似）：河床越深，透上来的暖色越少、青蓝越重。
+  // 河道横截面上河床高度是从「正中 -0.9」连续升到「岸边 +1」的，所以这一项天然给出
+  // **一条横跨河面的色调梯度** —— 垂直看下去是「中间深、两侧浅」的一条河，而不是一块纯色。
+  float deepWater = clamp(-vBedHeight * 1.1, 0.0, 1.0);
+  color = mix(color, deep, deepWater * 0.3);
+  // 掠射角的锐利镜面高光：水面的「闪光」（波纹把高光切成一条条亮线，就是「波纹高光」）。
+  float glint = pow(max(dot(reflected, sun), 0.0), 120.0);
+  color += vec3(1.0, 0.95, 0.85) * glint * 1.7;
+  // 波纹本身也让水色轻微起伏（相当于看到水面下的明暗），河面才有「多种相近色调」。
+  color *= 1.0 + wave * 0.07;
 
   // 透明度就是「清澈」：垂直看下去 alpha 低（河床看得清），掠射角 alpha 高（反射天空）。
   // 上下限都留着，所以两个极端下河床与天空反射都还在，不会变成纯镜面或纯玻璃。
-  float alpha = clamp(u.water.x * (0.34 + 0.66 * fresnel), 0.04, 0.9);
-  color = fogMix(color, vDistance, u.timeAndFog.z * 0.8);
+  // 这里是唯一一处 depthWriteEnabled:false + blend 的管线：alpha 直接决定河床透出多少。
+  float alpha = clamp(u.water.x * (0.3 + 0.7 * fresnel), 0.05, 0.88);
+  // 河床已经接近水面的那一圈**加一层湿沙色**再抬高 alpha：水面与岸坡相交的地方
+  // 不会出现一条突兀的亮边，看起来就像水刚淹上沙滩。
+  float shallow = smoothstep(0.12, -0.06, vBedHeight);
+  color = mix(color, vec3(0.3, 0.36, 0.33), shallow * 0.45);
+  alpha = clamp(alpha + shallow * 0.35, 0.05, 0.95);
+  // 水面的雾最淡：远处的水也要看得出「这是一条河」，不能被雾彻底吃掉。
+  color = fogMix(color, vDistance, fogDensity(${FOG_WATER_SCALE_GLSL}));
   fragColor = vec4(color, alpha);
 }
 `;
@@ -1008,6 +1384,7 @@ struct WaterVertexOutput {
   @location(0) waterUv: vec2f,
   @location(1) world: vec3f,
   @location(2) distance: f32,
+  @location(3) bedHeight: f32,
 }
 
 @vertex fn vsMain(v: WaterVertexInput) -> WaterVertexOutput {
@@ -1015,6 +1392,7 @@ struct WaterVertexOutput {
   out.world = v.position;
   out.waterUv = v.position.xz;
   out.distance = length(v.position - u.cameraPosition.xyz);
+  out.bedHeight = v.extra.x;
   out.position = u.viewProjection * vec4f(v.position, 1.0);
   return out;
 }
@@ -1024,30 +1402,38 @@ struct WaterVertexOutput {
   wave = wave + sin(in.waterUv.x * 1.5 + u.timeAndFog.x * 1.7) * 0.5;
   wave = wave + sin(in.waterUv.y * 1.2 - u.timeAndFog.x * 1.1) * 0.4;
   wave = wave + sin((in.waterUv.x + in.waterUv.y) * 2.6 + u.timeAndFog.x * 2.2) * 0.25;
-  let normal = normalize(vec3f(wave * 0.09, 1.0, wave * 0.07));
+  let normal = normalize(vec3f(wave * 0.16, 1.0, wave * 0.13));
 
   let view = u.cameraPosition.xyz - in.world;
   let viewDir = normalize(view);
   let sun = normalize(u.sunDirection.xyz);
 
   var fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 5.0);
-  fresnel = 0.1 + 0.7 * fresnel;
+  fresnel = 0.08 + 0.72 * fresnel;
 
   let reflected = normalize(reflect(-viewDir, normal));
   let height = clamp(reflected.y, 0.0, 1.0);
-  let sky = mix(SKY_HORIZON, SKY_ZENITH, pow(height, 0.5));
+  var sky = mix(SKY_HORIZON, SKY_ZENITH, pow(height, 0.35));
   let sunAngle = max(dot(reflected, sun), 0.0);
-  sky = sky + vec3f(1.0, 0.9, 0.7) * pow(sunAngle, 64.0) * 0.7;
+  sky = sky + vec3f(1.0, 0.9, 0.7) * pow(sunAngle, 900.0) * 1.1;
+  sky = sky + vec3f(0.5, 0.5, 0.42) * pow(sunAngle, 18.0);
 
-  let deep = vec3f(0.06, 0.32, 0.42);
-  let shallowTint = vec3f(0.16, 0.2, 0.12) * (1.0 - fresnel);
+  let deep = vec3f(0.07, 0.3, 0.42);
+  let shallowTint = vec3f(0.06, 0.14, 0.11) * (1.0 - fresnel);
 
-  var color = mix(deep, sky, clamp(fresnel * u.water.y, 0.0, 0.85)) + shallowTint;
-  let glint = pow(max(dot(reflected, sun), 0.0), 180.0);
-  color = color + vec3f(1.0, 0.95, 0.85) * glint * 1.6;
+  var color = mix(deep, sky, clamp(fresnel * u.water.y, 0.0, 0.8)) + shallowTint;
+  // 水深 → 水色更沉（与 GLSL 那边同一份公式）。
+  let deepWater = clamp(-in.bedHeight * 1.1, 0.0, 1.0);
+  color = mix(color, deep, deepWater * 0.3);
+  let glint = pow(max(dot(reflected, sun), 0.0), 120.0);
+  color = color + vec3f(1.0, 0.95, 0.85) * glint * 1.7;
+  color = color * (1.0 + wave * 0.07);
 
-  let alpha = clamp(u.water.x * (0.34 + 0.66 * fresnel), 0.04, 0.9);
-  color = fogMix(color, in.distance, u.timeAndFog.z * 0.8);
+  var alpha = clamp(u.water.x * (0.3 + 0.7 * fresnel), 0.05, 0.88);
+  let shallow = smoothstep(0.12, -0.06, in.bedHeight);
+  color = mix(color, vec3f(0.3, 0.36, 0.33), shallow * 0.45);
+  alpha = clamp(alpha + shallow * 0.35, 0.05, 0.95);
+  color = fogMix(color, in.distance, fogDensity(${FOG_WATER_SCALE_GLSL}));
   return vec4f(color, alpha);
 }
 `;
@@ -1082,6 +1468,46 @@ interface MeshBuffers {
 
 /** 顶点属性步长（字节）：position 12 + normal 12 + color 12 + extra 8 = 44。 */
 const MESH_STRIDE = 44;
+
+/**
+ * 所有网格共用的**唯一一段顶点缓冲布局**（交错式，44 字节一条记录）。
+ *
+ * 这里刻意让「管线 `vertex.buffers` 的个数」保持为 1，而不是「位置/法线/颜色/备用各一段」：
+ * 每个属性一段时，管线的 `arrayStride` 必须写成该属性**自己**的字节数（12 或 8），
+ * 一旦照抄 44 就会让第 i 个顶点去读 `44 × i` 处的字节 —— 而缓冲区里只有 `12 × 顶点数` 字节，
+ * 于是超过约 27% 的顶点全部越界。WebGL2 的越界读取被 robust access 静默填成 `(0,0,0,1)`，
+ * 位置直接塌到原点，半个网格变成横跨全屏的巨型退化三角形（这正是「地形铺满 79% 屏幕、
+ * 山脊像一块幕布、`TERRAIN_RISE` 怎么调都没反应」的真正原因）；WebGPU 那边则根本不给提示。
+ * 交错成一段之后 `arrayStride` 与缓冲区的真实间距一致，两个后端读到的都是同一份数据。
+ */
+const MESH_VERTEX_LAYOUT = {
+  arrayStride: MESH_STRIDE,
+  stepMode: 'vertex',
+  attributes: [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 1, offset: 12, format: 'float32x3' },
+    { shaderLocation: 2, offset: 24, format: 'float32x3' },
+    { shaderLocation: 3, offset: 36, format: 'float32x2' },
+  ],
+} as const;
+
+/**
+ * 树林管线里**网格那一段**的布局：只声明位置(0)与法线(1)，**不能带上备用通道(3)**。
+ *
+ * 树是唯一一条用实例缓冲的管线，而实例数据自己占了 `location 3`（见下面的 instance 槽位）。
+ * WebGPU 规定「同一个 `@location` 在整条管线的全部 `buffers` 里只能出现一次」
+ *（实测报错：`Attribute shader location (3) is used more than once. While validating buffers[1].`），
+ * 于是整条树管线创建失败、画面上什么都没有。树干 / 树冠的片元也不需要备用通道
+ *（它按世界坐标哈希算颜色），所以这里就只留真正被读到的两个属性。
+ */
+const TREE_MESH_VERTEX_LAYOUT = {
+  arrayStride: MESH_STRIDE,
+  stepMode: 'vertex',
+  attributes: [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 1, offset: 12, format: 'float32x3' },
+  ],
+} as const;
 
 /** 按 `(cols+1) × (rows+1)` 的规则网格调 {@link VertexWriter}，顺序索引成三角形列表。 */
 function buildGridMesh(cols: number, rows: number, write: VertexWriter): MeshBuffers {
@@ -1141,10 +1567,11 @@ function hash(index: number, seed: number): number {
 /** 与着色器里的 `channelWeight` **数值一致**：1 = 河道正中，0 = 完全在岸上。 */
 function channelWeight(x: number, z: number, cameraZ: number): number {
   const depth = Math.max(cameraZ - z, 4);
-  const halfWidth = 0.105 * depth;
-  const meander = Math.sin(z * 0.021) * 0.34 * depth + Math.sin(z * 0.0073) * 0.55 * depth;
+  const halfWidth = channelHalfWidth(depth);
+  const meander = meanderOffset(z, depth);
   const lateral = Math.abs(x - meander) / halfWidth;
-  return 1 - smoothstep(0.62, 1, lateral);
+  // 与着色器一致：比走廊网格更远的地方不再挖河道，免得留下一个洞。
+  return (1 - smoothstep(0.62, 1, lateral)) * (1 - smoothstep(RIVER_DEPTH_LIMIT - 40, RIVER_DEPTH_LIMIT, depth));
 }
 
 /**
@@ -1152,8 +1579,11 @@ function channelWeight(x: number, z: number, cameraZ: number): number {
  *
  * 这是这一页构图的关键：透视里「深度 d 处的可见半宽」正好正比于 d，所以只要让每行的
  * 横向覆盖也是 `常数 × d`，地形就永远铺满画面左右两侧（不会在近处露出画面外的空白，
- * 也不会在远处缩成一条）。河道宽度用同一个比例（{@link RIVER_WIDTH_RATIO}），
- * 于是「河占画面宽度的比例」从近到远基本恒定 —— 这才像一条流向地平线的河。
+ * 也不会在远处缩成一条）。1.25 倍深度（而不是 1.45 × 0.615 = 0.89 倍）留了足够余量：
+ * 宽高比到 3.4 时画面边缘仍在网格之内，边缘的斜切面一定看不见。
+ *
+ * 远端（`TERRAIN_FAR`）的岸高约 0.7~1.8（相机高 8），所以地形远端的轮廓落在 `y ≈ 0.35`，
+ * 正好压在地平线（0.33）稍下方 —— 上面那一条缝由山脊补上。
  */
 function buildTerrainMesh(): MeshBuffers {
   const cameraZ = CAMERA_EYE[2];
@@ -1164,92 +1594,240 @@ function buildTerrainMesh(): MeshBuffers {
     const t = (u * 2 - 1) + (hash(index, 71) - 0.5) * (2 / TERRAIN_COLS);
     const sign = t < 0 ? -1 : 1;
     const magnitude = Math.pow(Math.abs(t), 1.12);
-    // 1.45 倍可见半宽：远景的左右两端一定在画面之外，边缘的斜切面看不见。
-    const x = sign * magnitude * 1.45 * 0.615 * depth;
+    const x = sign * magnitude * 1.25 * depth;
     const z = cameraZ - depth;
     const channel = channelWeight(x, z, cameraZ);
-    const height = groundHeightCpu(x, z, cameraZ);
-    // 颜色：河岸是草地绿、坡上偏森林绿、高处偏灰（岩石），再叠一点噪声打散。
+    // 河岸的基础高度：与 riverProfile / 着色器里的 terrainHeight 是同一份公式。
+    const base = terrainHeightCpu(x, z, cameraZ);
+    // 法线用**较大的横向步长**（0.6）求高度场的梯度。
+    // 不能用小步长（0.18）：噪声的细节会被放大成近乎垂直的坡面，光照下整片近景会黑成一块。
+    // 0.6 是「半个河宽」的量级，得到的是坡地的整体朝向。
+    const ex = 0.6;
+    const gradeX = (terrainHeightCpu(x + ex, z, cameraZ) - base) / ex;
+    const gradeZ = (terrainHeightCpu(x, z + ex, cameraZ) - base) / ex;
+    const normal = normalize3([-gradeX, 1, -gradeZ]);
+    // 颜色：河岸是草地绿、坡上偏森林绿、高处偏干土。片元着色器会按同一份公式重算一遍
+    //（顶点色在格距 3~13 个单位的网格上会糊成一块块），这里留着是为了 `?wire=1` 之外的自洽。
     const slope = clampMagnitude((fbm2(x * 0.34, z * 0.34) + noise2(x * 0.09, z * 0.09)) * 0.5);
-    const rocky = smoothstep(3.2, 10, height);
-    const grass: readonly [number, number, number] = [0.26, 0.45, 0.18];
-    const forest: readonly [number, number, number] = [0.14, 0.3, 0.14];
-    const rock: readonly [number, number, number] = [0.42, 0.4, 0.36];
+    const dry = smoothstep(1.9, 3.3, base);
+    const grass: readonly [number, number, number] = [0.3, 0.5, 0.19];
+    const forest: readonly [number, number, number] = [0.13, 0.29, 0.13];
+    const soil: readonly [number, number, number] = [0.44, 0.42, 0.34];
     const green = mixColor(grass, forest, slope);
-    const color = mixColor(green, rock, rocky * 0.8);
+    const color = mixColor(green, soil, dry * 0.75);
     // 备用通道：第 0 位是 channelWeight（调试/可视化用），第 1 位留 0。
     return {
-      position: [x, height, z],
-      normal: [0, 1, 0],
+      position: [x, groundHeightCpu(x, z, cameraZ), z],
+      normal,
       color: [color[0], color[1], color[2]],
       extra: [channel, 0],
     };
   });
 }
 
-/** 与着色器里的 `groundHeight` **数值一致**：河道里是河床，河道外是河岸/山坡。 */
+/** 地形的**顶点高度**就是平坦的河岸高度（河道那一段由走廊网格负责），与着色器逐字一致。 */
 function groundHeightCpu(x: number, z: number, cameraZ: number): number {
-  const depth = Math.max(cameraZ - z, 4);
-  const channel = channelWeight(x, z, cameraZ);
-  const bed = riverbedHeight(x, z);
-  // 河岸高度正比于深度：远端（depth = TERRAIN_FAR）正好收敛到相机高度，地平线不会被顶穿。
-  const terrain = (CAMERA_EYE[1] * depth) / TERRAIN_FAR + 0.3 + fbm2(x * 0.022, z * 0.022) * 4;
-  return bed + (terrain - bed) * (1 - channel);
+  return terrainHeightCpu(x, z, cameraZ);
 }
 
 /**
- * 河床高度：只要比水面低就行，剩下的交给沙石着色器。
- * 与着色器里的常量逐字对应（水面高度是 {@link WATER_LEVEL}）。
+ * 河道几何 —— 地形挖河道、河床 / 水面网格、种树都读这一份公式（着色器里有逐字对应的副本）。
+ * 参数（{@link RIVER_WIDTH_RATIO} / {@link RIVER_MEANDER_CAP} / {@link RIVER_BED_SIDE} 等）
+ * 声明在文件开头，因为着色器的模板字符串在模块求值时就要读它们。
  */
-function riverbedHeight(x: number, z: number): number {
-  return -0.85 + noise2(x * 0.42, z * 0.42) * 0.34 + Math.sin(x * 1.7 + z * 0.9) * 0.05;
+function channelHalfWidth(depth: number): number {
+  return RIVER_WIDTH_RATIO * meanderScale(depth);
 }
 
-/** 河道宽度占「该深度可见半宽」的比例（可见半宽 ≈ 0.615 × 深度）。 */
-const RIVER_WIDTH_RATIO = 0.105;
+/** 摆动幅度与河道宽度的公共尺度：`depth` 小时 ≈ depth，`depth` 大时收敛到 {@link RIVER_MEANDER_CAP}。 */
+function meanderScale(depth: number): number {
+  const d = Math.max(depth, 4);
+  return RIVER_MEANDER_CAP * (1 - Math.exp(-d / RIVER_MEANDER_CAP));
+}
 
-/** 河床 / 河面的网格：沿深度的带状网格，横向按 `width(u)` 展宽。 */
+/** 河道中心线相对 `x = 0` 的横移。 */
+function meanderOffset(z: number, depth: number): number {
+  return (Math.sin(z * 0.021) * 0.34 + Math.sin(z * 0.0073) * 0.55) * meanderScale(depth);
+}
+
+/** 河岸高度（不含河道）：近岸贴着水面、远端缓慢抬升（见 GLSL 里 terrainHeight 的说明）。 */
+function terrainHeightCpu(x: number, z: number, cameraZ: number): number {
+  const depth = Math.max(cameraZ - z, 4);
+  return (
+    (depth / TERRAIN_FAR) * TERRAIN_RISE +
+    TERRAIN_BASE +
+    fbm2(x * TERRAIN_NOISE_FREQUENCY, z * TERRAIN_NOISE_FREQUENCY) * TERRAIN_NOISE_AMPLITUDE
+  );
+}
+
+/**
+ * 相机俯角（弧度，**向下看为正**）：由相机与目标点算出，{@link screenAngle} 要用。
+ *
+ * 这里必须写成 `atan2(眼高 - 目标高, 眼z - 目标z)`：两个分量都取「眼 - 目标」。
+ * 旧版写成 `atan2(目标高 - 眼高, 目标z - 眼z)`（两个分量都取反），atan2 于是落进第三象限，
+ * 得到 `-π + 0.124` 而不是 `0.124` —— 俯角差了将近 180°，`depthAtScreenRow` 的符号判断
+ * 整个反掉：**画面上半（天空）被当成地面、下半（地面）被当成天空**，河道网格 67% 的行
+ * 全部堆在相机脚下 3 个单位处，河于是碎成一团。
+ */
+const CAMERA_PITCH = Math.atan2(CAMERA_EYE[1] - CAMERA_TARGET[1], CAMERA_EYE[2] - CAMERA_TARGET[2]);
+
+/**
+ * 屏幕纵向位置 `v`（0 顶 1 底）对应的**视线俯角**（弧度，向下看为正）。
+ *
+ * 往下走 v 变大、俯角变大，所以是 `+`；地平线（俯角 0）落在 `v = 0.5 - pitch / FOV ≈ 0.33`。
+ */
+function screenAngle(v: number): number {
+  return CAMERA_PITCH + (v - 0.5) * FOV;
+}
+
+/**
+ * 「屏幕上一行」→「沿 -z 轴多远」。这是河道网格**最关键的参数化**。
+ *
+ * 旧版按「深度 = 近端 + 幂次插值」均匀铺行，结果 40 行里绝大多数落在屏幕外或挤在地平线附近的
+ * 几个像素里 —— 实测水面网格只覆盖 583 个像素（0.1%），根本不成一条河。
+ *
+ * 正确的做法是**按屏幕行反推深度**：屏幕 y（0 顶 1 底）处的视线俯角是 {@link screenAngle}，
+ * 相机高 `E` 看下去、地面在眼下方 `E`，于是沿视线水平前进的距离就是 `E / tan(俯角)`。
+ * 镜头就是朝 -z 看的，所以这个水平距离就是沿 -z 的深度。
+ */
+function depthAtScreenRow(v: number): number {
+  const tangent = Math.tan(screenAngle(v));
+  // 视线在地平线以上（俯角 ≤ 0）时看不到地面，返回 0 让调用方跳过这一行。
+  if (tangent <= 1e-4) return 0;
+  return CAMERA_EYE[1] / tangent;
+}
+
+/**
+ * 河道网格第 `v` 行（0 = 最远、1 = 最近）对应的深度。
+ *
+ * 顶行固定取在 `RIVER_TOP_SCREEN`（地形远端轮廓的稍下方），底行是画面底边（`v = 1`），
+ * 中间按屏幕高度均匀铺 —— 于是**每一行在屏幕上分到的带高都差不多**，
+ * 近处（画面下方）自然变密，河边不会被压成一条线。这就是「按可见范围裁剪」：
+ * 网格不多铺一行到地平线以上（那里没有地面），也不会少铺到画面外的岸上。
+ */
+function riverDepthAtRow(v: number): number {
+  const screen = RIVER_TOP_SCREEN + (1 - RIVER_TOP_SCREEN) * v;
+  return Math.max(depthAtScreenRow(screen), TERRAIN_NEAR);
+}
+
+/** 河道走廊里的地面高度（河床 + 岸坡），走廊两端严格等于岸高。 */
+function riverProfileHeight(x: number, z: number, cameraZ: number): number {
+  const depth = Math.max(cameraZ - z, 4);
+  const halfWidth = channelHalfWidth(depth);
+  const meander = meanderOffset(z, depth);
+  const lateral = Math.abs(x - meander) / halfWidth;
+  const bank = terrainHeightCpu(x, z, cameraZ);
+  // 剖面 = 河床底 → 岸高的平滑上升：`riverBankRise(1) === 1`，
+  // 所以 `lateral >= 1`（走廊的边缘）处高度**就是**岸高，和地形拼得上（理由见 riverBankRise 的说明）。
+  return RIVER_BED_DEPTH + (bank - RIVER_BED_DEPTH) * riverBankRise(lateral);
+}
+
+/** 走廊中心线。 */
+function corridorCenter(z: number, depth: number): number {
+  return meanderOffset(z, depth);
+}
+
+/** 走廊在该深度的横向半宽（世界单位）。 */
+function corridorHalfWidth(depth: number): number {
+  return channelHalfWidth(depth) * RIVER_BED_SIDE;
+}
+
+/**
+ * 河床 / 水面网格（`flat = true` 时是水面）。
+ *
+ * **行按屏幕高度反推**（见 {@link riverDepthAtRow}）：网格在屏幕每一带都分到差不多多的行，
+ * 近处自动变密、远端自然收敛。网格的深度范围就是**可见范围**：顶行落在 `y = 0.36`
+ * （地形远端轮廓 0.35 的稍下方，再往上就没有地面了），底行落在画面底边（约 15 单位）。
+ * 旧版按深度均匀铺行，46 行里一半挤在地平线附近的 7 个像素里、近处一行都没有。
+ *
+ * 水面用「一块平板」而不是跟着河床起伏的薄壳：平板与倾斜的岸坡自然相交，水面就止于水线，
+ * 既不会在岸上铺出一层水，也不会出现「水面悬在河床上方」的穿帮。
+ * 横向范围取 `1.02 × 河道半宽`，于是河床在两侧各露出一小条沙滩 ——
+ * 这正是「河岸」的样子，也是「河水清浅」的视觉线索（沙滩由河床管线画）。
+ */
 function buildRiverMesh(flat: boolean): MeshBuffers {
   const cameraZ = CAMERA_EYE[2];
-  const depthAt = (v: number): number => TERRAIN_NEAR + (TERRAIN_FAR * 0.62 - TERRAIN_NEAR) * Math.pow(v, TERRAIN_V_POWER);
   return buildGridMesh(RIVER_COLS, RIVER_ROWS, (_index, u, v) => {
-    const depth = depthAt(v);
+    // `v` 从 0（远）到 1（近）；`riverDepthAtRow` 已经保证结果落在地面上。
+    const depth = riverDepthAtRow(v);
     const z = cameraZ - depth;
-    const halfWidth = RIVER_WIDTH_RATIO * depth;
-    const meander = Math.sin(z * 0.021) * 0.34 * depth + Math.sin(z * 0.0073) * 0.55 * depth;
-    const x = meander + (u * 2 - 1) * halfWidth;
+    const center = corridorCenter(z, depth);
     if (flat) {
-      // 水面是一块高度恒定的平板：透过它看河床，才谈得上「清澈」。
-      return { position: [x, WATER_LEVEL, z], normal: [0, 1, 0], color: [0, 0, 0] };
+      const half = channelHalfWidth(depth) * 1.02;
+      const x = center + (u * 2 - 1) * half;
+      // `extra.x` 带着**这一列下方河床的世界高度**：水面着色器据此判断「这一格水有多深」，
+      // 浅到河床已经露出水面时就退化成湿沙色，水线的边缘不会出现一条突兀的亮边。
+      return {
+        position: [x, WATER_LEVEL, z],
+        normal: [0, 1, 0],
+        color: [0, 0, 0],
+        extra: [riverProfileHeight(x, z, cameraZ), 0],
+      };
     }
-    const height = -0.85 + noise2(x * 0.42, z * 0.42) * 0.34 + Math.sin(x * 1.7 + z * 0.9) * 0.05;
+    const half = corridorHalfWidth(depth);
+    const x = center + (u * 2 - 1) * half;
+    const height = riverProfileHeight(x, z, cameraZ);
+    // 法线用**横向有限差分**求：走廊的横截面是斜的，写成「永远朝上」会让岸坡的光照完全错掉。
+    // 步长取 `half * 0.35`（而不是几个像素级的小量）：河床 → 岸坡的过渡在横向上很陡，
+    // 步长太小会量出接近垂直的坡面，光照下整条河床会黑成一条黑带。
+    const dx = Math.max(half * 0.35, 0.05);
+    const slope = (riverProfileHeight(x + dx, z, cameraZ) - riverProfileHeight(x - dx, z, cameraZ)) / (2 * dx);
+    const normal = normalize3([-slope * 0.6, 1, 0]);
+    // `extra.x` 是这一点的世界高度（着色器据此把水下部分压暗），`extra.y` 是到中心的横向比。
     return {
-      position: [x, height - 0.03, z],
-      normal: [0, 1, 0],
+      position: [x, height, z],
+      normal,
       color: [1, 1, 1],
+      extra: [height, Math.abs(x - center) / Math.max(half, 0.001)],
     };
   });
 }
 
-/** 山脊幕布：`x` 等距、`y` 从底到脊线，`extra = [雾强度, 高度比]`（背面自动更暗）。 */
+/**
+ * 把「屏幕上的纵向位置」反解成「该深度处该有多高」。
+ *
+ * 屏幕 `y`（0 顶 1 底）对应的视线俯角是 {@link screenAngle}，站在相机高度 `eye` 上看
+ * `depth` 远的地方，该处的高度就是 `eye - depth × tan(俯角)`。
+ * 山脊幕布的上下边界都用它定位，于是「山脊占屏幕上哪一段」是**直接指定**的。
+ */
+function screenRowHeight(y: number, depth: number): number {
+  return CAMERA_EYE[1] - depth * Math.tan(screenAngle(y));
+}
+
+/**
+ * 山脊幕布：一块**世界坐标里的窄带**（不是从天上垂到地下的幕布）。
+ *
+ * 这是这一版重写过的地方。旧版把每一层做成「从 `base` 一直铺到脊线」的大幕布，
+ * `base` 又是固定世界高度 —— 换一个相机之后幕布会一直垂到镜头下方，
+ * 整屏都被这一层盖住（`?only=ridge` 时天空一像素不剩）。
+ *
+ * 现在幕布的上下边界由**屏幕位置**反解（{@link screenRowHeight}）：
+ * `baseScreen` 是底边、`peakScreen` 是脊线，于是无论相机怎么摆，
+ * 山脊都稳定地占屏幕上那一小段，天空与太阳始终露得出来。
+ */
 function buildRidgeMesh(spec: RidgeSpec): MeshBuffers {
   const z = CAMERA_EYE[2] - spec.depth;
+  const halfWidth = ridgeHalfWidth(spec.depth);
+  const base = screenRowHeight(spec.baseScreen, spec.depth);
+  const peak = screenRowHeight(spec.peakScreen, spec.depth);
   return buildGridMesh(RIDGE_COLS, RIDGE_ROWS, (_index, u, v) => {
-    const x = (u * 2 - 1) * RIDGE_HALF_WIDTH;
-    const peak = spec.base + spec.offset + ridgeHeight(x, spec);
-    const y = spec.base + (peak - spec.base) * v;
+    const x = (u * 2 - 1) * halfWidth;
+    // 底边 → 脊线之间插值；`ridgeShape` 只负责「哪一段高、哪一段低」的形状（0.45~1）。
+    const shape = ridgeShape(x, spec);
+    const ridge = base + (peak - base) * shape;
+    const y = base + (ridge - base) * v;
     // 法线由脊线斜率推：面朝相机的一侧朝上、背面朝下（背面自然更暗）。
     const dx = 3.5;
     const slope = (ridgeHeight(x + dx, spec) - ridgeHeight(x - dx, spec)) / (2 * dx);
-    const normal = normalize3([-slope * spec.scale * 0.4, 1, 0.35]);
+    const normal = normalize3([-slope * spec.scale * 0.35, 1, 0.5]);
     // 山脚更暗更冷、脊线更亮更暖：不用额外光照就有了「山的体积感」。
     const dark: readonly [number, number, number] = [
-      spec.color[0] * 0.62 + 0.06,
-      spec.color[1] * 0.62 + 0.06,
-      spec.color[2] * 0.7 + 0.1,
+      spec.color[0] * 0.5 + 0.04,
+      spec.color[1] * 0.5 + 0.04,
+      spec.color[2] * 0.55 + 0.06,
     ];
     const color = mixColor(dark, spec.color, v);
-    const shade = 0.68 + 0.52 * v;
+    const shade = 0.72 + 0.46 * v;
     return {
       position: [x, y, z],
       normal,
@@ -1259,20 +1837,38 @@ function buildRidgeMesh(spec: RidgeSpec): MeshBuffers {
   });
 }
 
-/** 脊线高度（世界单位）：两层不同相位的正弦 + 一层噪声，得到连绵的山形。 */
+/**
+ * 脊线高度（世界单位）：三层不同波长的正弦 + 一层噪声，得到连绵的山形。
+ *
+ * 频率全部由 {@link RidgeSpec.frequency} 决定（两层各自取值），相位由 {@link RidgeSpec.phase} 错开。
+ * 返回值直接是「世界高度」，正比于 `scale`；调用方用 {@link ridgeShape} 归一化后插值到
+ * 「底边 ~ 脊线」之间，所以「山脊在屏幕上占哪一段」由 `peakScreen` / `baseScreen` 说了算。
+ */
 function ridgeHeight(x: number, spec: RidgeSpec): number {
-  const a = Math.sin(x * 0.0125 + spec.phase) * 0.5 + 0.5;
-  const b = Math.sin(x * 0.031 + spec.phase * 1.7) * 0.5 + 0.5;
-  const c = Math.sin(x * 0.0071 + spec.phase * 0.6) * 0.5 + 0.5;
-  const n = fbm2(x * 0.004, spec.phase * 9);
-  const shape = Math.pow(clampMagnitude(a * 0.4 + b * 0.25 + c * 0.2 + n * 0.5), 1.3);
-  return shape * spec.scale;
+  const f = spec.frequency;
+  const a = Math.sin(x * f + spec.phase) * 0.5 + 0.5;
+  const b = Math.sin(x * f * 2.7 + spec.phase * 1.7) * 0.5 + 0.5;
+  const c = Math.sin(x * f * 0.45 + spec.phase * 0.6) * 0.5 + 0.5;
+  const n = fbm2(x * f * 0.35, spec.phase * 9);
+  return (a * 0.4 + b * 0.24 + c * 0.16 + n * 0.28) * spec.scale;
+}
+
+/**
+ * 把 {@link ridgeHeight} 归一化成 `0.45 ~ 1.0` 的「占幕布高度的比例」。
+ *
+ * 上下界是有意收紧的：**下界 0.45 保证幕布的下半段永远被填满**，否则山脊会在屏幕上
+ * 断成一串互不相连的三角（旧版没有归一化，`clamp(...,0,1)` 之后大部分 x 都顶在 1，
+ * 于是脊线是一条平顶的直线，看起来就是一块深色板子）；上界 1 保证最高的山头正好落在
+ * `peakScreen` 那一行，山脊的屏幕位置可控。
+ */
+function ridgeShape(x: number, spec: RidgeSpec): number {
+  const raw = ridgeHeight(x, spec) / spec.scale;
+  return 0.45 + 0.55 * clampMagnitude((raw - 0.16) * 1.35);
 }
 
 /** 树干：六棱台（底 0.09、顶 0.05，高 0.6），12 个三角形。 */
 function buildTrunkMesh(): MeshBuffers {
-  const segments = 6;
-  const vertices: number[] = [];
+  const segments = 6;  const vertices: number[] = [];
   const normals: number[] = [];
   const indices: number[] = [];
   for (let i = 0; i < segments; i++) {
@@ -1290,7 +1886,7 @@ function buildTrunkMesh(): MeshBuffers {
     const d = next * 2 + 1;
     indices.push(a, b, d, a, d, c);
   }
-  return fromAttributeLists(vertices, normals, indices, [0.72, 0.52, 0.36]);
+  return fromAttributeLists(vertices, normals, indices, [0.6, 0.44, 0.3]);
 }
 
 /** 树冠：低面数球（6 段 × 4 环），顶点法线就是位置方向 —— 光照下自然分成明暗两半。 */
@@ -1321,7 +1917,7 @@ function buildCanopyMesh(): MeshBuffers {
       indices.push(a, c, d, a, d, b);
     }
   }
-  return fromAttributeLists(vertices, normals, indices, [0.24, 0.46, 0.22]);
+  return fromAttributeLists(vertices, normals, indices, [0.3, 0.6, 0.26]);
 }
 
 /** 把「已经排好的属性数组 + 颜色」包装成 {@link MeshBuffers}（树干与树冠用）。 */
@@ -1342,6 +1938,25 @@ function fromAttributeLists(
     indexCount: indices.length,
     triangleCount: indices.length / 3,
   };
+}
+
+/**
+ * 把网格的三段属性数组**交织**成一条 44 字节的顶点记录，与 {@link MESH_VERTEX_LAYOUT} 对应。
+ *
+ * 这是全页唯一一处「顶点内存布局」的定义：交错之后一条记录就是一个顶点的全部属性，
+ * 于是 `arrayStride`（44）与缓冲区的真实间距天然一致，`attribute.offset` 也正好是
+ * 12 / 24 / 36 这三个常量。上一版让「位置」单独占一段缓冲却仍按 44 声明步长，
+ * 越界读取把超过七成的顶点读成 0，几何体整体塌掉。
+ */
+function packMesh(mesh: MeshBuffers): Float32Array {
+  const packed = new Float32Array(mesh.vertexCount * 11);
+  for (let index = 0; index < mesh.vertexCount; index += 1) {
+    packed.set(mesh.positions.subarray(index * 3, index * 3 + 3), index * 11);
+    packed.set(mesh.normals.subarray(index * 3, index * 3 + 3), index * 11 + 3);
+    packed.set(mesh.colors.subarray(index * 3, index * 3 + 3), index * 11 + 6);
+    packed.set(mesh.extras.subarray(index * 2, index * 2 + 2), index * 11 + 9);
+  }
+  return packed;
 }
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -1418,10 +2033,19 @@ function normalize3(value: readonly [number, number, number]): [number, number, 
 /* 每棵树的实例数据                                                                                     */
 /* ------------------------------------------------------------------------------------------------ */
 
+/**
+ * 每棵树的实例数据：每实例 6 个 float —— `vec4(世界坐标 xyz, 缩放)` + `vec2(旋转角, 备用)`。
+ *
+ * **没有用「每实例一个 mat4」，也没有用每实例颜色**。更重要的是：顶点缓冲的**槽号必须与管线里
+ * `vertex.buffers` 的数组下标一致** —— WebGPU 的 `setVertexBuffer(slot, ...)` 里的 slot 是
+ * 「管线数组的下标」，不是 `@location(N)`。旧版按 shader location 编号去绑（位置 0/1、颜色 7、
+ * 信息 8），WebGPU 因此在 slot 7/8 找不到东西、还把网格缓冲错当成实例缓冲
+ * （校验错误：`Instance range requires 8320 but bound buffer size is 144`）。
+ * 现在实例数据只有一段、落在数组下标 1，绑定的槽号与下标自然对得上。
+ */
 interface TreeInstances {
-  readonly matrices: Float32Array;
-  readonly colors: Float32Array;
-  readonly infos: Float32Array;
+  /** 每实例 6 个 float：`[x, y, z, 缩放, 旋转角, 备用]`。 */
+  readonly data: Float32Array;
   readonly count: number;
 }
 
@@ -1431,70 +2055,54 @@ interface TreeInstances {
  * 这里的采样不是「随便撒了再不合适就丢掉」，而是**先解出可行的横向区间再取随机值** ——
  * 因为要同时满足两个约束：
  *
- * 1. **不能长在河里**：离河道中心至少 1.02 倍河道半宽（再往外留一点，别贴着水边长）；
- * 2. **必须在画面里**：深度 d 处的可见半宽约 `0.615 * d`，所以 `|x|` 要小于 `0.6 * d`。
+ * 1. **不能长在河里**：离河道中心至少 1.6 倍河道半宽（别贴着水边长）；
+ * 2. **必须在画面里**：深度 d 处的可见半宽约 `0.794 * d`，所以 `|x|` 要小于 `0.7 * d`。
  *
- * 河道中心本身按 `meander` 左右摆（摆幅正比于深度），所以两个约束换算成「相对河道中心的
- * 横向倍数」之后是 `lateral >= 1.02` 与 `|meander ± lateral * halfWidth| <= 0.6 * d`。
- * 两者很可能**没有交集**（河摆到画面边框上的那一段），这时就换一侧再试 —— 这也正好是
+ * 河道中心本身按 `meander` 左右摆（摆幅被 {@link RIVER_MEANDER_CAP} 限制住），所以两个约束
+ * 换算成「相对河道中心的横向倍数」之后是 `lateral >= 1.6` 与 `|meander ± lateral * halfWidth| <= 0.7 * d`。
+ * 两者可能**没有交集**（河摆到画面边框上的那一段），这时就换一侧再试 —— 这也正好是
  * 「树只种在可见的岸上」的那个意思。
  *
  * 每棵树的世界高度取自与着色器同一套地面高度公式（{@link groundHeightCpu}）。
  */
 function buildTreeInstances(count: number): TreeInstances {
   const cameraZ = CAMERA_EYE[2];
-  const matrices = new Float32Array(count * 16);
-  const colors = new Float32Array(count * 3);
-  const infos = new Float32Array(count * 2);
+  const data = new Float32Array(count * 6);
   let placed = 0;
   for (let attempt = 0; attempt < count * 40 && placed < count; attempt++) {
-    const depth = 12 + Math.pow(hash(attempt, 3), 1.4) * (TERRAIN_FAR * 0.6 - 12);
+    // 深度从 26 起：太近的树（深度 12）在 42° 视场里会像几块绿色的板子糊在镜头前，
+    // 26 之后「近处的树」也还有半个屏幕高，但已经能看出是一棵棵的树了。
+    const depth = 26 + Math.pow(hash(attempt, 3), 1.2) * (TERRAIN_FAR * 0.7 - 26);
     const z = cameraZ - depth;
-    const halfWidth = RIVER_WIDTH_RATIO * depth;
-    const meander = Math.sin(z * 0.021) * 0.34 * depth + Math.sin(z * 0.0073) * 0.55 * depth;
+    const halfWidth = channelHalfWidth(depth);
+    const meander = meanderOffset(z, depth);
     const side = hash(attempt, 5) < 0.5 ? -1 : 1;
     // 解可行区间：minLateral 来自「别长在河里」，maxLateral 来自「别长出画面」。
-    const minLateral = 1.02;
-    const maxLateral = Math.min(3.2, (0.6 * depth - side * meander) / halfWidth);
+    // 1.6 让树离开水边一段距离（河岸上不会有树贴着水长），画面里也更容易看出「岸」。
+    const minLateral = 1.6;
+    // 可见半宽 ≈ `0.794 × 深度`（42° 垂直 FOV、宽高比 2.18），取 0.7 留一点边：
+    // 树要铺满画面左右两侧的岸，而不是全挤在中间（旧版取 0.6 且按 0.615 估算，偏窄）。
+    const maxLateral = Math.min(6, (0.7 * depth - side * meander) / halfWidth);
     if (maxLateral <= minLateral) continue;
-    const lateral = minLateral + Math.pow(hash(attempt, 7), 1.5) * (maxLateral - minLateral);
+    const lateral = minLateral + Math.pow(hash(attempt, 7), 1.3) * (maxLateral - minLateral);
     const x = meander + side * lateral * halfWidth;
     if (channelWeight(x, z, cameraZ) > 0.12) continue;
     const height = groundHeightCpu(x, z, cameraZ);
     if (height < WATER_LEVEL + 0.5) continue;
 
-    const scale = 0.7 + Math.pow(hash(attempt, 11), 1.6) * 1.5;
-    const spin = hash(attempt, 13) * Math.PI * 2;
-    const cosine = Math.cos(spin) * scale;
-    const sine = Math.sin(spin) * scale;
-    const matrix = matrices.subarray(placed * 16, placed * 16 + 16);
-    // 列主序：绕 Y 轴旋转 + 缩放（矩阵元素按 glMatrix 的列主序摆放）。
-    matrix[0] = cosine;
-    matrix[1] = 0;
-    matrix[2] = -sine;
-    matrix[3] = 0;
-    matrix[4] = 0;
-    matrix[5] = scale;
-    matrix[6] = 0;
-    matrix[7] = 0;
-    matrix[8] = sine;
-    matrix[9] = 0;
-    matrix[10] = cosine;
-    matrix[11] = 0;
-    matrix[12] = x;
-    matrix[13] = height;
-    matrix[14] = z;
-    matrix[15] = 1;
-
-    const green = 0.75 + hash(attempt, 17) * 0.5;
-    colors[placed * 3] = 0.12 * green;
-    colors[placed * 3 + 1] = 0.34 * green;
-    colors[placed * 3 + 2] = 0.16 * green;
-    infos[placed * 2] = 0;
-    infos[placed * 2 + 1] = scale;
+    // 尺寸偏小的一侧更多（1.5 次方）：远处一片小树、近处偶尔一棵大的，才像树林。
+    // 1.0~3.2 的缩放（树高约 1 个单位）对应 1~3.3 个世界单位高：深度 26 处约 60~200 像素，
+    // 深度 150 处约 10~35 像素 —— 近处能看出是一棵棵的树，远处仍是一片林。
+    const scale = 1.0 + Math.pow(hash(attempt, 11), 1.5) * 2.2;
+    data[placed * 6] = x;
+    data[placed * 6 + 1] = height;
+    data[placed * 6 + 2] = z;
+    data[placed * 6 + 3] = scale;
+    data[placed * 6 + 4] = hash(attempt, 13) * Math.PI * 2;
+    data[placed * 6 + 5] = 0;
     placed += 1;
   }
-  return { matrices, colors, infos, count: placed };
+  return { data, count: placed };
 }
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -1529,13 +2137,27 @@ async function main(): Promise<void> {
   const fixedTime = query.has('t') && Number.isFinite(timeParam) ? timeParam : null;
   const params: SceneParams = {
     forest: query.get('forest') !== '0',
-    waterClarity: clampRange(readSunOrWater(query.get('water')), 0.05, 1, 0.45),
+    waterClarity: clampRange(readSunOrWater(query.get('water')), 0.05, 1, 0.62),
     waterReflect: 0.62,
-    sunElevation: clampRange(readSunOrWater(query.get('sun')), 0.08, 1.45, 0.52),
-    sunAzimuth: 0.24,
-    animate: query.get('wspin') !== '0',
+    /**
+     * 太阳高度角 / 方位角。
+     *
+     * 默认值是按**屏幕位置**反解出来的：方位角 -1.2185、高度角 0.138 让太阳落在
+     * `u ≈ 0.72, v ≈ 0.14`（画面右上角的天空里，高度约 8°）。低太阳 + 逆光让山脊与树林
+     * 变成剪影（「山脊比天空暗」这条判据因此有东西可量），同时水面能反射到它、出现波纹高光。
+     *
+     * 旧版写的是 0.22 / -1.3：太阳落在 `v ≈ 0.03`，圆盘几乎贴在屏幕上沿（实测探针
+     * 落在屏幕外，`brightestRegion` 只好在别处随便挑一块「最亮」的）。
+     * 高度角与方位角的耦合关系：`tan(方位偏移) = x / (-z)`、`高度角 = asin(y)`。
+     */
+    sunElevation: clampRange(readSunOrWater(query.get('sun')), 0.08, 1.45, 0.138),
+    // 方位角从 +X 轴起算，相机看向 -Z，所以「太阳在画面里」的方位角在 -π/2 附近。
+    // 旧版写的是 0.24（约 14°），太阳落在**相机背后**，画面里既没有太阳也没有水面反光，
+    // 自检的太阳屏幕坐标算出来是 -1854,1584 这种明显跑飞的值。
+    sunAzimuth: -1.2185,
+    animate: !(query.has('wspin') && Number(query.get('wspin')) === 0),
     wireframe: query.get('wire') === '1',
-    fog: query.get('fog') === '0' ? 0 : 0.0004,
+    fog: query.get('fog') === '0' ? 0 : FOG_DEFAULT,
     only: query.get('only') ?? '',
     ridges: clampRange(readSunOrWater(query.get('ridges')), 0, 2, 2),
   };
@@ -1570,19 +2192,14 @@ async function main(): Promise<void> {
   };
 
   interface MeshGpu {
-    readonly position: ReturnType<typeof device.createBuffer>;
-    readonly normal: ReturnType<typeof device.createBuffer>;
-    readonly color: ReturnType<typeof device.createBuffer>;
-    readonly extra: ReturnType<typeof device.createBuffer>;
+    /** 交错后的唯一一段顶点缓冲（44 字节一条记录，见 {@link MESH_VERTEX_LAYOUT}）。 */
+    readonly vertex: ReturnType<typeof device.createBuffer>;
     readonly index: ReturnType<typeof device.createBuffer>;
     readonly mesh: MeshBuffers;
   }
 
   const toGpu = (label: string, mesh: MeshBuffers): MeshGpu => ({
-    position: upload(`${label}:position`, mesh.positions),
-    normal: upload(`${label}:normal`, mesh.normals),
-    color: upload(`${label}:color`, mesh.colors),
-    extra: upload(`${label}:extra`, mesh.extras),
+    vertex: upload(`${label}:vertex`, packMesh(mesh)),
     index: uploadIndex(`${label}:index`, mesh.indices),
     mesh,
   });
@@ -1591,31 +2208,17 @@ async function main(): Promise<void> {
   const riverbedGpu = toGpu('landscape:riverbed', riverbed);
   const waterGpu = toGpu('landscape:water', water);
   const ridgeGpu = ridgeMeshes.map((mesh, index) => toGpu(`landscape:ridge${index}`, mesh));
-  // 树干 / 树冠共用同一份网格数据，但 extra 通道里要塞「这是哪个部件」（片元里区分枝叶与树干）。
-  const trunkMesh = withPart(trunk, 0);
-  const canopyMesh = withPart(canopy, 1);
-  const trunkGpu = toGpu('landscape:trunk', trunkMesh);
-  const canopyGpu = toGpu('landscape:canopy', canopyMesh);
+  // 树干 / 树冠：extra 通道里塞「这是哪个部件」，与其它网格共用同一段布局。
+  const trunkGpu = toGpu('landscape:trunk', withPart(trunk, 0));
+  const canopyGpu = toGpu('landscape:canopy', withPart(canopy, 1));
 
-  const instanceMatrixBuffer = device.createBuffer({
-    label: 'landscape:treeMatrices',
-    size: trees.matrices.byteLength,
-    usage: BufferUsage.Vertex | BufferUsage.CopyDst,
-  });
-  const instanceColorBuffer = device.createBuffer({
-    label: 'landscape:treeColors',
-    size: trees.colors.byteLength,
-    usage: BufferUsage.Vertex | BufferUsage.CopyDst,
-  });
-  const instanceInfoBuffer = device.createBuffer({
-    label: 'landscape:treeInfos',
-    size: trees.infos.byteLength,
+  const instanceBuffer = device.createBuffer({
+    label: 'landscape:treeInstances',
+    size: trees.data.byteLength,
     usage: BufferUsage.Vertex | BufferUsage.CopyDst,
   });
   const writeTreeBuffers = (): void => {
-    device.queue.writeBuffer(instanceMatrixBuffer, 0, trees.matrices, 0, trees.count * 16);
-    device.queue.writeBuffer(instanceColorBuffer, 0, trees.colors, 0, trees.count * 3);
-    device.queue.writeBuffer(instanceInfoBuffer, 0, trees.infos, 0, trees.count * 2);
+    device.queue.writeBuffer(instanceBuffer, 0, trees.data, 0, trees.count * 6);
   };
   writeTreeBuffers();
 
@@ -1633,16 +2236,14 @@ async function main(): Promise<void> {
   const uniforms = createUniformBinding(device, { name: 'Uniforms', size: UNIFORM_BYTES });
 
   /* ---- 管线 ----------------------------------------------------------------------------------- */
-  const meshLayout = (locations: readonly number[]): readonly { arrayStride: number; stepMode: 'vertex'; attributes: { shaderLocation: number; offset: number; format: 'float32x3' | 'float32x2' }[] }[] => [
-    { arrayStride: MESH_STRIDE, stepMode: 'vertex', attributes: [{ shaderLocation: locations[0]!, offset: 0, format: 'float32x3' }] },
-    { arrayStride: MESH_STRIDE, stepMode: 'vertex', attributes: [{ shaderLocation: locations[1]!, offset: 12, format: 'float32x3' }] },
-    ...(locations.length > 2
-      ? [
-          { arrayStride: MESH_STRIDE, stepMode: 'vertex' as const, attributes: [{ shaderLocation: locations[2]!, offset: 24, format: 'float32x3' as const }] },
-          { arrayStride: MESH_STRIDE, stepMode: 'vertex' as const, attributes: [{ shaderLocation: locations[3]!, offset: 36, format: 'float32x2' as const }] },
-        ]
-      : []),
-  ];
+  /**
+   * 网格管线共用的顶点布局：**一个槽位、四个属性**，`arrayStride` 就是 44。
+   *
+   * 槽位号（`vertex.buffers` 的数组下标）与 GLSL 的 `layout(location = N)` 在这里恰好一一对应，
+   * 但两者是**两件事**：`setVertexBuffer(slot, ...)` 的第一参数始终是数组下标，
+   * 两个后端在这件事上语义完全相同（WebGL2 的 `buildVertexArrayKey` 也是按数组下标遍历的）。
+   */
+  const meshBuffers = [MESH_VERTEX_LAYOUT];
 
   const layout = device.createPipelineLayout({
     label: 'landscape:pipelineLayout',
@@ -1669,14 +2270,23 @@ async function main(): Promise<void> {
     },
     fragment: { module: skyModule, entryPoint: 'fsMain' },
     primitive: { topology: 'triangle-list', cullMode: 'none' },
-    // 天空不需要深度状态：它最先画、铺满视口，后面的东西一律盖在它上面。
-    depthStencil: { format: null },
+    // 天空最先画、铺满视口，而且**不写深度**。
+    //
+    // `depthWriteEnabled: false` 不能省：WebGPU 那边 `format: null` 只表示「管线不声明深度格式」，
+    // 真正建 pipeline 时深度格式由当前 render target 决定，而没写出来的深度字段会落到默认值
+    //（`depthWriteEnabled: true` + `depthCompare: 'less'`，见 src/core/pipeline/RenderState.ts 的
+    // `DEFAULT_DEPTH_STATE`）。天空三角形的 `gl_Position` 是 `vec4(位置, 1)`，深度正好是 **0**，
+    // 于是它会把整个深度缓冲写成 0，后面所有几何体的深度都大于 0、`less` 全部失败 ——
+    // 画面上只剩天空一片（实测 WebGPU：探针读到的全是天空色 127,156,191，而分层 `?only=terrain`
+    // 单独渲染时地形明明画得出来）。WebGL2 的 `format: null` 走的是「关掉深度测试」那条路，
+    // 所以只有 WebGPU 会露出这个症状 —— 显式关掉深度写入，两个后端就都对了。
+    depthStencil: { format: null, depthWriteEnabled: false },
   });
 
   const ridgePipeline = device.createRenderPipeline({
     label: 'landscape:ridgePipeline',
     layout,
-    vertex: { module: ridgeModule, entryPoint: 'vsMain', buffers: meshLayout([0, 1, 2, 3]) },
+    vertex: { module: ridgeModule, entryPoint: 'vsMain', buffers: meshBuffers },
     fragment: { module: ridgeModule, entryPoint: 'fsMain' },
     primitive: { topology: 'triangle-list', cullMode: 'none' },
     depthStencil: { depthWriteEnabled: true, depthCompare: 'less' },
@@ -1685,7 +2295,7 @@ async function main(): Promise<void> {
   const terrainPipeline = device.createRenderPipeline({
     label: 'landscape:terrainPipeline',
     layout,
-    vertex: { module: terrainModule, entryPoint: 'vsMain', buffers: meshLayout([0, 1, 2, 3]) },
+    vertex: { module: terrainModule, entryPoint: 'vsMain', buffers: meshBuffers },
     fragment: { module: terrainModule, entryPoint: 'fsMain' },
     primitive: { topology: 'triangle-list', cullMode: 'none' },
     depthStencil: { depthWriteEnabled: true, depthCompare: 'less' },
@@ -1694,7 +2304,7 @@ async function main(): Promise<void> {
   const riverbedPipeline = device.createRenderPipeline({
     label: 'landscape:riverbedPipeline',
     layout,
-    vertex: { module: riverbedModule, entryPoint: 'vsMain', buffers: meshLayout([0, 1, 2, 3]) },
+    vertex: { module: riverbedModule, entryPoint: 'vsMain', buffers: meshBuffers },
     fragment: { module: riverbedModule, entryPoint: 'fsMain' },
     primitive: { topology: 'triangle-list', cullMode: 'none' },
     depthStencil: { depthWriteEnabled: true, depthCompare: 'less' },
@@ -1706,25 +2316,22 @@ async function main(): Promise<void> {
     vertex: {
       module: treeModule,
       entryPoint: 'vsMain',
+      // 数组下标 0 = 网格、1 = 每实例数据。**槽号必须等于这里的下标** ——
+      // `setVertexBuffer(slot, ...)` 里的 slot 是「管线 `vertex.buffers` 的数组下标」，
+      // 不是着色器的 `@location(N)`（WebGL2 的 `buildVertexArrayKey` 也是按数组下标遍历的，
+      // 两个后端在这件事上没有语义分歧）。
       buffers: [
+        // 槽位 0：网格（位置 + 法线，同一段 44 字节交错的数据）。
+        TREE_MESH_VERTEX_LAYOUT,
+        // 槽位 1：每实例数据 vec4(世界坐标 xyz, 缩放) + vec2(旋转角, 备用)，共 24 字节。
         {
-          arrayStride: MESH_STRIDE,
-          stepMode: 'vertex',
+          arrayStride: 24,
+          stepMode: 'instance',
           attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x3' },
-            { shaderLocation: 1, offset: 12, format: 'float32x3' },
-            { shaderLocation: 2, offset: 36, format: 'float32x2' },
+            { shaderLocation: 3, offset: 0, format: 'float32x4' },
+            { shaderLocation: 8, offset: 16, format: 'float32x2' },
           ],
         },
-        // 每实例属性：模型矩阵占 4 个 location（matrix 在 GLSL 里按 4 列展开），再加颜色与信息。
-        { arrayStride: 64, stepMode: 'instance', attributes: [
-          { shaderLocation: 3, offset: 0, format: 'float32x4' },
-          { shaderLocation: 4, offset: 16, format: 'float32x4' },
-          { shaderLocation: 5, offset: 32, format: 'float32x4' },
-          { shaderLocation: 6, offset: 48, format: 'float32x4' },
-        ] },
-        { arrayStride: 12, stepMode: 'instance', attributes: [{ shaderLocation: 7, offset: 0, format: 'float32x3' }] },
-        { arrayStride: 8, stepMode: 'instance', attributes: [{ shaderLocation: 8, offset: 0, format: 'float32x2' }] },
       ],
     },
     fragment: { module: treeModule, entryPoint: 'fsMain' },
@@ -1744,7 +2351,7 @@ async function main(): Promise<void> {
   const waterPipeline = device.createRenderPipeline({
     label: 'landscape:waterPipeline',
     layout,
-    vertex: { module: waterModule, entryPoint: 'vsMain', buffers: meshLayout([0, 1, 2, 3]) },
+    vertex: { module: waterModule, entryPoint: 'vsMain', buffers: meshBuffers },
     fragment: { module: waterModule, entryPoint: 'fsMain' },
     primitive: { topology: 'triangle-list', cullMode: 'none' },
     depthStencil: { depthWriteEnabled: false, depthCompare: 'less' },
@@ -1832,10 +2439,8 @@ async function main(): Promise<void> {
   let triangles = 0;
 
   const bindMesh = (pass: RenderPassEncoder, mesh: MeshGpu): void => {
-    pass.setVertexBuffer(0, mesh.position, 0, mesh.position.size);
-    pass.setVertexBuffer(1, mesh.normal, 0, mesh.normal.size);
-    pass.setVertexBuffer(2, mesh.color, 0, mesh.color.size);
-    pass.setVertexBuffer(3, mesh.extra, 0, mesh.extra.size);
+    // 一个槽位就够了：位置 / 法线 / 颜色 / 备用都在这段 44 字节的记录里。
+    pass.setVertexBuffer(0, mesh.vertex, 0, mesh.vertex.size);
     pass.setIndexBuffer(mesh.index, 'uint32', 0, mesh.index.size);
   };
 
@@ -1882,11 +2487,11 @@ async function main(): Promise<void> {
     if (params.forest && trees.count > 0 && want('tree')) {
       pass.setPipeline(treePipeline);
       for (const part of [trunkGpu, canopyGpu]) {
-        bindMesh(pass, part);
-        // 实例缓冲的 size 必须覆盖「实例数 × 步长」，否则 WebGPU 会校验失败。
-        pass.setVertexBuffer(4, instanceMatrixBuffer, 0, trees.count * 64);
-        pass.setVertexBuffer(5, instanceColorBuffer, 0, trees.count * 12);
-        pass.setVertexBuffer(6, instanceInfoBuffer, 0, trees.count * 8);
+        // 槽位 0 是网格（44 字节交织）、槽位 1 是每实例数据（24 字节）——
+        // 必须与管线里 `vertex.buffers` 的数组下标一致（`setVertexBuffer` 的 slot 就是数组下标）。
+        pass.setVertexBuffer(0, part.vertex, 0, part.vertex.size);
+        pass.setIndexBuffer(part.index, 'uint32', 0, part.index.size);
+        pass.setVertexBuffer(1, instanceBuffer, 0, trees.count * 24);
         pass.drawIndexed({ indexCount: part.mesh.indexCount, instanceCount: trees.count });
         drawCalls += 1;
         triangles += part.mesh.triangleCount * trees.count;
@@ -1930,10 +2535,18 @@ async function main(): Promise<void> {
 
   drawToCanvas(0);
   setData('landscapeResult', 'ok');
-  setData('landscapeDiag', `trees=${trees.count} bedAtCenter=${groundHeightCpu(0, 6 - 50, 6).toFixed(2)} bankAt50=${groundHeightCpu(50, 6 - 50, 6).toFixed(2)}`);
+  // 诊断用：把「河道网格按可见范围裁剪出来的深度区间」和「河最宽处的宽度」写出来，
+  // 出问题时一眼能看出是裁剪错了（区间离谱）还是宽度错了（河细成一条线）。
+  setData(
+    'landscapeDiag',
+    `trees=${trees.count}` +
+      ` riverDepth=${riverDepthAtRow(0).toFixed(0)}..${riverDepthAtRow(1).toFixed(0)}` +
+      ` riverFullWidth=${(channelHalfWidth(400) * 2).toFixed(2)}` +
+      ` bankAt50=${terrainHeightCpu(0, CAMERA_EYE[2] - 50, CAMERA_EYE[2]).toFixed(2)}`,
+  );
   statusEl.textContent =
     `后端：${example.backend}　设备：${example.adapter}　` +
-    `6 条管线 / 9 次 draw call　天空 1 + 山脊 2 + 地形 1 + 河床 1 + 树林 2 + 水面 1`;
+    `6 条管线 / 8 次 draw call　天空 1 + 山脊 2 + 地形 1 + 河床 1 + 树林 2 + 水面 1`;
 
   startFrameLoop({
     draw: (delta) => drawToCanvas(delta),
@@ -1956,7 +2569,7 @@ async function main(): Promise<void> {
     gui.add(params, 'waterClarity', 0.05, 1, 0.01).name('水面透明度');
     gui.add(params, 'waterReflect', 0, 1, 0.01).name('水面反射');
     gui.add(params, 'sunElevation', 0.08, 1.45, 0.01).name('太阳高度角');
-    gui.add(params, 'sunAzimuth', -1.2, 1.2, 0.01).name('太阳方位角');
+    gui.add(params, 'sunAzimuth', -2.2, -0.4, 0.01).name('太阳方位角');
     gui.add(params, 'fog', 0, 0.01, 0.0005).name('雾');
     gui.add(params, 'animate').name('水面流动');
     gui.add(params, 'wireframe').name('线框');
@@ -1964,20 +2577,61 @@ async function main(): Promise<void> {
 
   /* ---- 离屏自检 + 分区探针 --------------------------------------------------------------------- */
   if (query.get('verify') === '1') {
-    const pixels = await readOffscreen(device, VERIFY_WIDTH, VERIFY_HEIGHT, CLEAR, (pass) => {
-      writeUniforms(fixedTime ?? 0);
-      drawScene(pass);
-    });
-    const sky = regionStats(pixels, VERIFY_WIDTH, VERIFY_HEIGHT, 0.02, 0.22, 0.02, 0.98);
-    const sun = brightestRegion(pixels, VERIFY_WIDTH, VERIFY_HEIGHT, 0, 0.45);
-    const ridge = darkestRegion(pixels, VERIFY_WIDTH, VERIFY_HEIGHT, 0.25, 0.45, 0.55, 0.85);
-    const river = regionStats(pixels, VERIFY_WIDTH, VERIFY_HEIGHT, 0.44, 0.58, 0.44, 0.56);
+    // 先把画布尺寸同步一次：探针的分区是按「归一化屏幕坐标」定义的，而离屏目标的宽高比
+    // 又是从 `context.width / context.height` 算的。页脚里的状态文字刚被改写，布局可能变过，
+    // 不刷新的话这一帧的投影宽高比会和画布当前的宽高比对不上。
+    context.resize();
+    /**
+     * 离屏目标的分辨率**按画布的宽高比**取。
+     *
+     * 这一点很关键：投影矩阵用的是画布宽高比（`context.width / context.height`），
+     * 如果离屏目标固定成 16:9 而画布是 940×431（2.18），两者的水平视场就不一样，
+     * 屏幕上算出来的 u 坐标（太阳、河道中心）与离屏图里的位置对不上，
+     * 探针会打在错误的地方。宽高比一致之后，归一化坐标在两个后端、两块目标上含义相同。
+     */
+    const aspect = context.height === 0 ? 16 / 9 : context.width / context.height;
+    const verifyHeight = VERIFY_HEIGHT;
+    const verifyWidth = Math.max(64, Math.round(verifyHeight * aspect));
+    const pixels = await readOffscreen(
+      device,
+      verifyWidth,
+      verifyHeight,
+      CLEAR,
+      example.backend === 'webgl2',
+      (pass) => {
+        writeUniforms(fixedTime ?? 0);
+        drawScene(pass);
+      },
+    );
+
+    // 分区探针 1：天空。取**画面左上角**那一片（右半边是太阳与它的光晕），
+    // 上边界 0.02 避开画布边缘的插值，下边界 0.22 仍在地平线（0.33）以上，所以整块必然是天空。
+    const sky = regionStats(pixels, verifyWidth, verifyHeight, 0.03, 0.3, 0.03, 0.2);
+    // 分区探针 2：太阳。用**运行时算出来的太阳屏幕坐标**定位，而不是「找画面哪儿最亮」——
+    // 这样它天然证明了「最亮的那块 == 主光方向投影出来的位置」。
+    const sunU = sunScreen[0] / Math.max(context.width, 1);
+    const sunV = sunScreen[1] / Math.max(context.height, 1);
+    const sun = regionAt(pixels, verifyWidth, verifyHeight, Math.round(sunU * verifyWidth), Math.round(sunV * verifyHeight));
+    const brightest = brightestRegion(pixels, verifyWidth, verifyHeight, 0, 0.45);
+    // 分区探针 3：山脊。两层山脊的脊线在屏幕 0.27 / 0.17，地形轮廓在 0.35，
+    // 所以 0.24~0.33 这一带**只可能是山脊**（下面还没有地形，上面是天空）。
+    const ridge = darkestRegion(pixels, verifyWidth, verifyHeight, 0.2, 0.8, 0.24, 0.33);
+    // 分区探针 4：河面。同样由几何算出：取屏幕 0.72 那一行，反推深度 → 河道中心的世界 x → 投影。
+    const riverRow = 0.72;
+    const riverDepth = depthAtScreenRow(riverRow);
+    const riverZ = CAMERA_EYE[2] - riverDepth;
+    const riverX = meanderOffset(riverZ, riverDepth);
+    const riverU = projectToScreen(riverX, WATER_LEVEL, riverZ, view, example.backend === 'webgpu' ? projectionZO : projectionGL)[0];
+    const river = regionStats(pixels, verifyWidth, verifyHeight, riverU - 0.024, riverU + 0.024, riverRow - 0.03, riverRow + 0.03);
 
     setData('landscapeProbeSky', meanText(sky));
     setData('landscapeProbeSun', meanText(sun));
     setData('landscapeProbeSunAt', `${sun.x},${sun.y}`);
+    setData('landscapeProbeSunWanted', `${Math.round(sunU * verifyWidth)},${Math.round(sunV * verifyHeight)}`);
+    setData('landscapeProbeBrightestAt', `${brightest.x},${brightest.y}`);
     setData('landscapeProbeRidge', meanText(ridge));
     setData('landscapeProbeRiver', meanText(river));
+    setData('landscapeProbeRiverAt', `${river.x},${river.y}`);
     setData('landscapeRiverDistinct', String(river.distinct));
     setData('landscapeRiverSpread', river.spread.toFixed(1));
     setData('landscapeSunScreen', `${sunScreen[0].toFixed(1)},${sunScreen[1].toFixed(1)}`);
@@ -1986,20 +2640,53 @@ async function main(): Promise<void> {
     // 天空偏蓝（蓝 > 红）、且明显不是清屏色；
     const skyIsBlue = sky.mean[2] - sky.mean[0] > 12;
     const skyNotClear = Math.abs(sky.mean[0] - 184) + Math.abs(sky.mean[1] - 26) + Math.abs(sky.mean[2] - 158) > 60;
-    // 太阳很亮；
+    // 太阳很亮（白盘把三个通道都压到接近饱和）；
     const sunIsBright = sun.mean[0] + sun.mean[1] + sun.mean[2] > 600;
+    // 画面里最亮的那一小块**就在主光方向投影出来的位置上**（容差 10% 的屏幕尺寸）。
+    // 这一条把「太阳画的位置」与「照亮整个场景的光照方向」绑在一起。
+    // 容差不取更小：圆盘本身只有十来个像素，5×5 的滑窗压在饱和的晕上时，
+    // 取到最大值的位置可以在盘心附近滑动几个百分点；这条判据要抓的是「最亮的东西跑到了别处」
+    //（例如上一版探针落在屏幕外，`brightestRegion` 只好在树林里随便挑一块「最亮」的）。
+    const sunAligned =
+      Math.abs(brightest.x / verifyWidth - sunU) < 0.1 && Math.abs(brightest.y / verifyHeight - sunV) < 0.1;
     // 山脊比天空暗很多；
     const ridgeIsDarker = luminance(ridge.mean) < luminance(sky.mean) * 0.55;
     // 河面偏青蓝、而且有多种色调（说明河床透上来了，不是一块纯色）；
     const riverIsBlue = river.mean[2] - river.mean[0] > 10;
     const riverShowsBed = river.distinct >= 24 && river.spread >= 4;
+    // 时间真的在动：同一块**河面**在 t 与 t+6 两次渲染之间必须出现像素差。
+    // 用 5×5 均值是证明不了「时间在动」的（波纹相位不同但均值可以逐字相同），
+    // 所以这里量的是整块区域的**逐像素平均绝对差**；同时量一块天空作为对照 ——
+    // 天空不随时间变，它的差应当接近 0，这样「有差」才确实来自水面波纹而不是别的抖动量。
+    const later = await readOffscreen(
+      device,
+      verifyWidth,
+      verifyHeight,
+      CLEAR,
+      example.backend === 'webgl2',
+      (pass) => {
+        writeUniforms((fixedTime ?? 0) + 6);
+        drawScene(pass);
+      },
+    );
+    const riverDiff = regionDifference(pixels, later, verifyWidth, verifyHeight, riverU - 0.024, riverU + 0.024, riverRow - 0.03, riverRow + 0.03);
+    const skyDiff = regionDifference(pixels, later, verifyWidth, verifyHeight, 0.03, 0.3, 0.03, 0.2);
+    setData('landscapeTimeDiff', riverDiff.mean.toFixed(2));
+    setData('landscapeTimeDiffMax', String(riverDiff.max));
+    setData('landscapeTimeChanged', `${(riverDiff.changed * 100).toFixed(0)}%`);
+    setData('landscapeTimeDiffSky', skyDiff.mean.toFixed(2));
+    setData('landscapeTimeChangedSky', `${(skyDiff.changed * 100).toFixed(0)}%`);
+    const waterAnimates = riverDiff.changed > 0.25 && riverDiff.max >= 8 && skyDiff.changed < 0.05;
+
     const checks: readonly (readonly [string, boolean])[] = [
       ['sky-blue', skyIsBlue],
       ['sky-not-clear', skyNotClear],
       ['sun-bright', sunIsBright],
+      ['sun-aligned', sunAligned],
       ['ridge-darker', ridgeIsDarker],
       ['river-blue', riverIsBlue],
       ['river-bed', riverShowsBed],
+      ['water-animates', waterAnimates],
     ];
     const passed = checks.filter((entry) => entry[1]).map((entry) => entry[0]);
     const failed = checks.filter((entry) => !entry[1]).map((entry) => entry[0]);
@@ -2071,6 +2758,25 @@ function projectPoint(
   }
 }
 
+/**
+ * 世界坐标 → **屏幕归一化坐标** `[u, v]`（都是 0~1，原点在左上角）。
+ *
+ * 分区探针要靠它定位：太阳探针打在「主光方向投影出来的位置」，河面探针打在
+ * 「河道中心线投影出来的位置」—— 探针于是跟着几何走，而不是手工估一个百分比。
+ */
+function projectToScreen(
+  x: number,
+  y: number,
+  z: number,
+  view: ArrayLike<number>,
+  projection: ArrayLike<number>,
+): readonly [number, number] {
+  const clip = [0, 0, 0, 0];
+  projectPoint(clip, [x, y, z], view, projection);
+  const w = clip[3]! === 0 ? 1e-6 : clip[3]!;
+  return [clip[0]! / w * 0.5 + 0.5, 0.5 - clip[1]! / w * 0.5];
+}
+
 /* ------------------------------------------------------------------------------------------------ */
 /* 离屏像素读回与分区统计                                                                                */
 /* ------------------------------------------------------------------------------------------------ */
@@ -2082,12 +2788,20 @@ function projectPoint(
  * 拿回来自己统计。三个踩过的坑与 `core-shared.verifyOffscreen` 相同：`usage` 要带 `CopySrc`、
  * 深度用 `depth32float`、读回 buffer 用 `MapRead | CopyDst`，另外 WebGPU 要求
  * `bytesPerRow` 是 256 的倍数（读回后再逐行去掉填充）。
+ *
+ * `rowsBottomUp` 处理的是**两个后端读回行序不同**这件事：WebGPU 的纹理原点在左上，
+ * `copyTextureToBuffer` 读回的第 0 行就是屏幕顶端；而 WebGL2 走的是 `gl.readPixels`，
+ * 它的原点在**左下**，读回的第 0 行是屏幕底端。分区探针是按屏幕位置定义的，
+ * 所以这里统一翻成屏幕行序 —— 这是 GL 与 WebGPU 两套坐标系的固有差别，
+ * 与顶点属性、绑定槽位那些无关（真实截图的合成路径永远是从上往下的那一份，
+ * `scripts/analyze-screenshot.mjs` 也按那个口径统计）。
  */
 async function readOffscreen(
   device: Device,
   width: number,
   height: number,
   clear: readonly [number, number, number, number],
+  rowsBottomUp: boolean,
   draw: (pass: RenderPassEncoder) => void,
 ): Promise<Uint8Array> {
   const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
@@ -2138,9 +2852,66 @@ async function readOffscreen(
 
   const pixels = new Uint8Array(rowBytes * height);
   for (let row = 0; row < height; row++) {
-    pixels.set(raw.subarray(row * bytesPerRow, row * bytesPerRow + rowBytes), row * rowBytes);
+    // `rowsBottomUp` 时把读回的第 row 行写到目标缓冲的倒数第 row 行（理由见函数说明）。
+    const targetRow = rowsBottomUp ? height - 1 - row : row;
+    pixels.set(raw.subarray(row * bytesPerRow, row * bytesPerRow + rowBytes), targetRow * rowBytes);
   }
   return pixels;
+}
+
+interface Difference {
+  /** 整块区域的逐像素「三通道绝对差之和 / 3」的平均值。 */
+  readonly mean: number;
+  /** 单像素的最大通道差（0~255）。 */
+  readonly max: number;
+  /** 有变化的像素占比（任一通道差 ≥ 2 即算变化）。 */
+  readonly changed: number;
+}
+
+/**
+ * 两块同尺寸像素的区域差（只统计给定矩形）。
+ *
+ * 为什么不用 5×5 均值来证明「时间在动」：上一版把两张不同时间的截图各自取探针均值，
+ * 结果逐字相同 —— 波纹只改变像素的分布，小块均值完全可以一样。逐像素差则直接量
+ * 「这一块里有多少个像素变了、变了多少」，是「动没动」的直接证据。
+ * `changed` 是其中最有说服力的那个数：整块河面里应该有相当比例的像素变化，
+ * 而一块**不随时间变化**的区域（例如天空）应当接近 0。
+ */
+function regionDifference(
+  left: Uint8Array,
+  right: Uint8Array,
+  width: number,
+  height: number,
+  ux0: number,
+  ux1: number,
+  uy0: number,
+  uy1: number,
+): Difference {
+  const x0 = Math.floor(ux0 * width);
+  const x1 = Math.max(x0 + 1, Math.floor(ux1 * width));
+  const y0 = Math.max(0, Math.floor(uy0 * height));
+  const y1 = Math.min(height, Math.max(y0 + 1, Math.floor(uy1 * height)));
+  let total = 0;
+  let max = 0;
+  let changed = 0;
+  let count = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const index = (y * width + x) * 4;
+      let sum = 0;
+      let pixelMax = 0;
+      for (let channel = 0; channel < 3; channel++) {
+        const delta = Math.abs(left[index + channel]! - right[index + channel]!);
+        if (delta > max) max = delta;
+        if (delta > pixelMax) pixelMax = delta;
+        sum += delta;
+      }
+      total += sum / 3;
+      if (pixelMax >= 2) changed += 1;
+      count += 1;
+    }
+  }
+  return { mean: count === 0 ? 0 : total / count, max, changed: count === 0 ? 0 : changed / count };
 }
 
 interface Region {
