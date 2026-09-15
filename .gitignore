@@ -7,3 +7,5 @@ dist-demo/
 examples/*.png
 .tmp-*/
 .npmrc
+# 例外的例外：`.tmp-probe/` 这个探针脚本要入库（它是可复现的测量工具，不是一次性产物）
+!.tmp-probe/
