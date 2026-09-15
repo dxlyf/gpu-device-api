@@ -100,19 +100,56 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     const sourceBuffer = source as WebGL2Buffer;
     const destinationBuffer = destination as WebGL2Buffer;
 
-    // WebGL2 没有 copyBufferSubData，只能借一段 CPU 内存中转。
-    const bytes = new Uint8Array(size);
+    /*
+     * 索引缓冲（`ELEMENT_ARRAY_BUFFER`）**不能**当 `copyBufferSubData` 的源或目标：
+     * WebGL2 里一个 buffer 的绑定目标在第一次绑定时就永久确定（见 `WebGL2Buffer` 的类注释），
+     * 而 `ELEMENT_ARRAY_BUFFER` 同时是 **VAO 状态**的一部分 —— 让拷贝去动它就必须在默认 VAO 上
+     * 重新绑定，等于改掉当前 VAO 记录的索引缓冲，之后的 draw 会拿错误的索引去解引用顶点。
+     * 所以这一路保留 CPU 中转（`download` / `upload` 各自走 buffer 自己的目标）。
+     */
     if (sourceBuffer.isIndexBuffer || destinationBuffer.isIndexBuffer) {
-      // 索引缓冲固定在 ELEMENT_ARRAY_BUFFER 上、且两个 buffer 不能同时占同一个目标
-      // （见 WebGL2Buffer），所以各自走自己的目标。
+      const bytes = new Uint8Array(size);
       sourceBuffer.download(sourceOffset, bytes);
       destinationBuffer.upload(destinationOffset, bytes);
       return;
     }
-    this.state.bindCopyReadBuffer(sourceBuffer.native);
-    this.gl.getBufferSubData(this.gl.COPY_READ_BUFFER, sourceOffset, bytes);
+
+    /*
+     * 区间重叠时也回退 CPU：`gl.copyBufferSubData` 要求两个区间**不重叠**（重叠是 INVALID_VALUE），
+     * 而 CPU 中转天然是「先把整段读出来、再写回去」，与 memmove 一致。WebGPU 的
+     * `copyBufferToBuffer` 允许重叠区间（结果由实现决定），这里选保守的那条路，
+     * 保证两个后端的可观察行为都不变。
+     */
+    if (
+      sourceBuffer === destinationBuffer &&
+      sourceOffset < destinationOffset + size &&
+      destinationOffset < sourceOffset + size
+    ) {
+      const bytes = new Uint8Array(size);
+      sourceBuffer.download(sourceOffset, bytes);
+      destinationBuffer.upload(destinationOffset, bytes);
+      return;
+    }
+
+    /*
+     * WebGL2 **有** `copyBufferSubData`（原生探针实测 `typeof gl.copyBufferSubData === 'function'`，
+     * 见 `.tmp-probe/gl-probe.ts`）：让这段拷贝留在 GPU 侧，不再绕一圈 CPU 内存。
+     * 这里原先写着「WebGL2 没有 copyBufferSubData」，那句话是错的。
+     *
+     * 两个绑定槽（`COPY_READ_BUFFER` / `COPY_WRITE_BUFFER`）复用 `GlStateCache` 的记录。
+     * **先绑写槽、再绑读槽**：非索引 buffer 的绑定目标被永久固定在 `COPY_WRITE_BUFFER` 上
+     * （见 `WebGL2Buffer`），而这个顺序可以保证拷贝结束后写槽留下的仍然是**目标缓冲** ——
+     * 这正是 `WebGL2Buffer.upload()` 依赖的那条不变量（它直接往 `COPY_WRITE_BUFFER` 上写）。
+     */
     this.state.bindCopyWriteBuffer(destinationBuffer.native);
-    this.gl.bufferSubData(this.gl.COPY_WRITE_BUFFER, destinationOffset, bytes);
+    this.state.bindCopyReadBuffer(sourceBuffer.native);
+    this.gl.copyBufferSubData(
+      this.gl.COPY_READ_BUFFER,
+      this.gl.COPY_WRITE_BUFFER,
+      sourceOffset,
+      destinationOffset,
+      size,
+    );
   }
 
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void {
@@ -202,20 +239,21 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     // 紧凑读回的暂存区：行距就是 tightRowBytes，与请求的行距无关。
     const tight = new Uint8Array(tightRowBytes * copySize.height);
 
-    // 用 framebuffer 把纹理当附件读回：WebGL2 没有直接的 getTexImage。
-    const framebuffer = gl.createFramebuffer();
-    if (!framebuffer) {
-      throw new ValidationError('[gpu-device-api] gl.createFramebuffer() 返回 null，无法读回纹理。');
-    }
-    const previous = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    /*
+     * 用 framebuffer 把纹理当附件读回：WebGL2 没有直接的 getTexImage。
+     *
+     * framebuffer 是**复用**的（`GlStateCache.readbackFramebuffer`）：读回只需要一个临时挂附件的
+     * 容器，内容每次都会被重设，所以每次 `createFramebuffer` + `deleteFramebuffer` 是白付的
+     * 对象 churn。挂新附件前会先把上一个附件摘掉（同一个纹理挂在两个附着点上会让 framebuffer 不完整）。
+     */
+    const previous = this.state.currentFramebuffer();
     const attachment = info.depth ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0;
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture.native, source.mipLevel ?? 0);
+    this.state.attachReadbackTexture(texture.native, attachment, source.mipLevel ?? 0);
 
     const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
     if (status !== gl.FRAMEBUFFER_COMPLETE) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
-      gl.deleteFramebuffer(framebuffer);
+      // 读回失败也要把绑定还原：这个 framebuffer 是复用对象，不能留在「已绑定」的状态上。
+      this.state.bindFramebuffer(previous);
       throw new ValidationError(
         `[gpu-device-api] 无法把纹理「${texture.label}」作为附件读回（framebuffer 不完整，0x${status.toString(16)}）。` +
           '请确认该纹理的 usage 里包含 RenderAttachment 或 CopySrc。',
@@ -226,11 +264,15 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     const { x: readX, y: readY } = resolveOrigin(source.origin);
     gl.readPixels(readX, readY, copySize.width, copySize.height, info.format, info.type, tight);
     gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
-    gl.deleteFramebuffer(framebuffer);
-    // 这条读回路径临时切了 framebuffer：framebuffer 绑定不在状态缓存里（见 WebGL2RenderTarget.attach），
-    // 所以保留整体作废。它不在每 draw 的热路径上，不必为它冒状态失准的风险。
-    this.state.invalidate();
+    this.state.bindFramebuffer(previous);
+    /*
+     * 这条读回路径临时切过 framebuffer，所以只作废 **framebuffer 绑定**这一项记录。
+     *
+     * 原来的写法是整体 `invalidate()`：那会把 program / blend / depth / cull / VAO / 纹理单元
+     * 一起丢掉，于是**紧随其后的那一次 draw 要把固定功能状态全部重下发一遍** ——
+     * 而读回并没有改动它们中的任何一个，这笔开销完全是白付的。
+     */
+    this.state.invalidateFramebufferBinding();
 
     // 按请求的行距重排。行距等于紧凑行距时就是一次整体拷贝，不需要逐行。
     // 填充字节保持 0（`new Uint8Array` 的初值）：WebGPU 不写这些字节，但给出确定的值
@@ -314,9 +356,13 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     this.assertOpen('clearBuffer');
     const target = buffer as WebGL2Buffer;
     const length = size ?? (buffer.size - offset);
-    const zeros = new Uint8Array(length);
     // 走 buffer 自己的目标：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
-    target.upload(offset, zeros);
+    // 零数据来自**共享的分块暂存**：小清零（≤ 4KB，绝大多数用法）连分配都省掉，
+    // 大清零按块复用同一块内存，不再一次分配 `length` 字节。
+    for (const chunk of zeroChunks(length)) {
+      target.upload(offset, chunk);
+      offset += chunk.length;
+    }
   }
 
   /**
@@ -415,4 +461,40 @@ function resolveOrigin(origin: Partial<{ x: number; y: number; z: number }> | un
   z: number;
 } {
   return { x: origin?.x ?? 0, y: origin?.y ?? 0, z: origin?.z ?? 0 };
+}
+
+/** 共享零暂存块的块大小（字节）。必须是 4 的倍数，见 {@link zeroChunks}。 */
+const ZERO_CHUNK_BYTES = 4096;
+
+/**
+ * 共享的零暂存块。
+ *
+ * 只在这里读取、从不写入，所以「共享」不会让它变成可被外部改动的可变状态：
+ * 它的消费者是 `gl.bufferSubData`（只读源）。即便同一块内存被并发/重入地用于多次 `clearBuffer`，
+ * 每次调用读到的都是同样的全零字节，结果与「每次新建一块」完全相同。
+ */
+const ZERO_CHUNK = new Uint8Array(ZERO_CHUNK_BYTES);
+
+/**
+ * 把长度为 `length` 的区间切成若干个「全零块」，块之间不重叠。
+ *
+ * 为什么分块：`clearBuffer` 原先每次调用都 `new Uint8Array(length)` —— 分配 + 清零，
+ * 对大区间（例如每帧清 16MB 的 uniform arena）是每帧一次的实打实开销。分块之后
+ * ≤ 4KB 的小清零**连分配都没有**，大清零也只是一次次复用同一块内存。
+ *
+ * 每块长度都必须是 4 的倍数（且块起点随之 4 对齐）：`WebGL2Buffer` 要求 buffer 大小是 4 的
+ * 倍数，而 `bufferSubData` 的偏移是任意的，所以这里按 4 对齐切分即可覆盖任意合法的
+ * `(offset, length)` 组合（两者都是 4 的倍数）。
+ */
+function* zeroChunks(length: number): Generator<Uint8Array> {
+  if (length <= 0) {
+    // 与 `new Uint8Array(0)` 的上传行为一致：不产生任何字节。
+    return;
+  }
+  let remaining = length;
+  while (remaining > 0) {
+    const take = Math.min(remaining, ZERO_CHUNK_BYTES);
+    yield take === ZERO_CHUNK_BYTES ? ZERO_CHUNK : ZERO_CHUNK.subarray(0, take);
+    remaining -= take;
+  }
 }

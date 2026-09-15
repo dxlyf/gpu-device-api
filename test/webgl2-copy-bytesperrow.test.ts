@@ -290,6 +290,10 @@ describe('WebGL2CommandEncoder.copyTextureToBuffer 的 bytesPerRow', () => {
     );
 
     expect(fake.packAlignment).toEqual([1, 4]);
-    expect(fake.deletes).toEqual(['framebuffer1']);
+    // framebuffer 是**复用**的（第四档优化 #30）：这里只创建、不删除。
+    // 原先每次读回都 create + delete 一个临时 framebuffer，现在是同一块读回 framebuffer 反复用，
+    // 释放点在 `Device.dispose()`（`GlStateCache.dispose()`）。复用与淘汰的断言在
+    // `test/webgl2-opt-2a.test.ts` 里。
+    expect(fake.deletes).toEqual([]);
   });
 });

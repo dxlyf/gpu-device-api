@@ -269,8 +269,10 @@ export class WebGL2Device implements Device {
     this.assertUsable('createTexture');
     return this.track(
       new WebGL2Texture(this.gl, this.state, descriptor, (texture) => {
-        // 纹理销毁时清掉引用它的 framebuffer 缓存，避免复用到已经失效的附件。
-        this.framebuffers.clear();
+        // 只淘汰**引用了它**的 framebuffer 条目，避免复用到已经失效的附件。
+        // 整体 clear() 会把与该纹理无关的附件组合也一起打回重建（一张临时纹理的生死
+        // 就能让整帧的 framebuffer 全部重建）。
+        this.framebuffers.releaseTexture(texture);
         this.untrack(texture);
       }),
     );
@@ -289,7 +291,7 @@ export class WebGL2Device implements Device {
       this.state,
       { format, size: { width, height }, usage: usage as TextureDescriptor['usage'], label },
       (destroyed) => {
-        this.framebuffers.clear();
+        this.framebuffers.releaseTexture(destroyed);
         this.untrack(destroyed);
       },
     );
@@ -554,6 +556,8 @@ export class WebGL2Device implements Device {
     }
     this.programs.dispose();
     this.framebuffers.dispose();
+    // 状态缓存也持有 GL 对象（复用的读回 framebuffer），必须在 context 还在时释放。
+    this.state.dispose();
     this.planCache.clear();
     for (const context of this.canvasContexts.values()) context.dispose();
     this.canvasContexts.clear();

@@ -6,7 +6,12 @@
  *
  * 使用时必须注意：**通过 `device.native` 从外部改动 GL 状态后要调用 {@link GlStateCache.invalidate}**，
  * 否则缓存会与实际状态不一致（这是本层唯一无法自动兜住的情况）。
+ *
+ * 它还替设备持有唯一一个**读回用的 framebuffer**（{@link GlStateCache.readbackFramebuffer}）：
+ * 这个 GL 对象不属于任何用户资源，放在这里才能有明确的释放点（{@link GlStateCache.dispose}）。
  */
+
+import { ValidationError } from '../../core/errors/ValidationError.js';
 
 export interface UniformBufferBinding {
   buffer: WebGLBuffer | null;
@@ -85,6 +90,27 @@ export class GlStateCache {
   private scissor: [number, number, number, number] | null = null;
   /** `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 的记忆值（设备常量，见同名方法）。 */
   private uniformAlignment: number | null = null;
+  /**
+   * `FRAMEBUFFER_BINDING` 的记忆值。
+   *
+   * 为什么要记它：framebuffer 绑定不属于上面任何一个缓存，所以过去只要有人绕过缓存切了它，
+   * 就只能整体 {@link invalidate}，代价是下一次 draw 把 program / blend / depth / cull / VAO
+   * 全部重下发一遍（见 {@link invalidateFramebufferBinding} 的说明）。
+   *
+   * 初值 `undefined` 表示**未知**，与 `null`（默认帧缓冲）是两回事：未知时会在第一次需要时
+   * 用一次 `getParameter(FRAMEBUFFER_BINDING)` 问出来。
+   */
+  private framebufferBinding: WebGLFramebuffer | null | undefined = undefined;
+  /**
+   * 读回纹理时复用的 framebuffer（见 {@link readbackFramebuffer}）。
+   *
+   * 它不承载任何用户资源，也不属于 `FramebufferCache`（那是「附件组合」的缓存），
+   * 所以由状态缓存代为持有、由 {@link dispose} 释放 —— 否则这个 GL 对象既不在设备资源表里，
+   * 也没有任何一处会删它。
+   */
+  private readbackFramebufferValue: WebGLFramebuffer | null = null;
+  /** 读回 framebuffer 上当前挂着哪个纹理、挂在哪个附着点（避免重复挂载同一个附件）。 */
+  private readbackAttachment: { texture: WebGLTexture; attachment: number } | null = null;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
@@ -138,6 +164,113 @@ export class GlStateCache {
     this.scissorEnabled = null;
     this.viewport = null;
     this.scissor = null;
+    this.framebufferBinding = undefined;
+  }
+
+  /**
+   * 只把 framebuffer 绑定标记为未知，其它缓存全部保留。
+   *
+   * 用在「某段代码临时切了 framebuffer、之后已经恢复」的场合（例如读回纹理时的临时 framebuffer）。
+   * 过去的做法是整体 `invalidate()`：那会把 program / blend / depth / cull / VAO / 纹理单元的
+   * 记录一并丢掉，于是**紧随其后的那一次 draw 要把固定功能状态全部重下发一遍** ——
+   * 在「每帧读回一次、之后照常画」的用法里，这笔开销是白付的（读回只动了 framebuffer 绑定）。
+   */
+  invalidateFramebufferBinding(): void {
+    this.framebufferBinding = undefined;
+  }
+
+  /**
+   * 记录「framebuffer 已经切到 `framebuffer`」（不调用 GL，只更新记忆值）。
+   *
+   * 用在已经**直接** `gl.bindFramebuffer()` 之后：调用方那次调用是必须的（要走 READ/DRAW
+   * 这类缓存未覆盖的目标，或在默认 VAO 之类的前提下），这里把结果补记进缓存，
+   * 免得之后被迫整体失效。
+   */
+  noteFramebufferBinding(framebuffer: WebGLFramebuffer | null): void {
+    this.framebufferBinding = framebuffer;
+  }
+
+  /**
+   * 绑定 `FRAMEBUFFER`（绑定目标同时作用于读/写两侧）；重复绑定同一个对象会被跳过。
+   *
+   * 与其它绑定一样，**帧缓冲相关的分帧状态**（`drawBuffers`、各附着点）不在这里检查 ——
+   * 它们由 `FramebufferCache` 在创建时设置一次，同一个 framebuffer 对象不被别的路径改。
+   */
+  bindFramebuffer(framebuffer: WebGLFramebuffer | null): void {
+    if (this.framebufferBinding !== undefined && this.framebufferBinding === framebuffer) return;
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, framebuffer);
+    this.framebufferBinding = framebuffer;
+  }
+
+  /**
+   * 当前生效的 framebuffer（未知时会同步问一次 GL 并记下来）。
+   *
+   * WebGL2 的 `FRAMEBUFFER_BINDING` 查询返回的是默认帧缓冲之外的绑定对象，默认帧缓冲是 `null`；
+   * 这个查询是同步的，所以只在缓存未知时做一次（`device.native` 外部改过状态后的
+   * {@link invalidate} 会让它变回未知）。
+   */
+  currentFramebuffer(): WebGLFramebuffer | null {
+    if (this.framebufferBinding === undefined) {
+      this.framebufferBinding = this.gl.getParameter(this.gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    }
+    return this.framebufferBinding;
+  }
+
+  /**
+   * 复用的读回 framebuffer：第一次调用时创建，之后一直返回同一个对象。
+   *
+   * 为什么复用而不是每次建删：`copyTextureToBuffer` 每次读回都 `createFramebuffer` +
+   * `deleteFramebuffer` 是纯粹的对象 churn（还牵着驱动侧的分配/回收），而读回用的 framebuffer
+   * 只需一个「临时挂附件」的容器，内容每次都会被重设。
+   *
+   * @throws ValidationError 当 `gl.createFramebuffer()` 返回 null（上下文丢失或资源耗尽）。
+   */
+  readbackFramebuffer(): WebGLFramebuffer {
+    const existing = this.readbackFramebufferValue;
+    if (existing) return existing;
+    const framebuffer = this.gl.createFramebuffer();
+    if (!framebuffer) {
+      throw new ValidationError(
+        '[gpu-device-api] gl.createFramebuffer() 返回 null，无法创建读回用的 framebuffer。',
+      );
+    }
+    this.readbackFramebufferValue = framebuffer;
+    this.readbackAttachment = null;
+    return framebuffer;
+  }
+
+  /**
+   * 把某个纹理挂到读回 framebuffer 的指定附着点上（需要时先摘掉上一个附件）。
+   *
+   * **必须先摘掉上一个附件**：同一个纹理同时挂在同一个 framebuffer 的两个附着点上会让
+   * framebuffer 不完整；而且旧实现每次新建 FBO 所以从没遇到这个问题 —— 复用之后必须显式处理。
+   * 摘掉（`framebufferTexture2D(..., null)`）不影响纹理本身，只是解除引用。
+   */
+  attachReadbackTexture(texture: WebGLTexture, attachment: number, mipLevel: number): void {
+    const framebuffer = this.readbackFramebuffer();
+    // 每次都确保它是当前绑定的 FRAMEBUFFER：期间可能有人（例如 `copyTextureToTexture`）
+    // 直接改过绑定，缓存里的记录不能当成事实。
+    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, framebuffer);
+    this.framebufferBinding = framebuffer;
+    const previous = this.readbackAttachment;
+    if (previous && previous.texture === texture && previous.attachment === attachment) return;
+    if (previous && previous.texture !== texture) {
+      this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, previous.attachment, this.gl.TEXTURE_2D, null, 0);
+    }
+    this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, attachment, this.gl.TEXTURE_2D, texture, mipLevel);
+    this.readbackAttachment = { texture, attachment };
+  }
+
+  /**
+   * 释放状态缓存自己持有的 GL 对象（目前只有复用的读回 framebuffer）。
+   *
+   * 只应在 `Device.dispose()` / 上下文丢失后调用。幂等。
+   */
+  dispose(): void {
+    const framebuffer = this.readbackFramebufferValue;
+    this.readbackFramebufferValue = null;
+    this.readbackAttachment = null;
+    if (framebuffer) this.gl.deleteFramebuffer(framebuffer);
   }
 
   /**
