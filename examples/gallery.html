@@ -104,7 +104,7 @@
         <div class="desc">
           天空渐变 + 太阳 + 两层山脊 + 实例化树林（520 棵、2 次 draw call）+ 一条清澈的河：
           先画河床、再画半透明水面，<code>fresnel</code> 让垂直看更透明、掠射角更反射天空。
-          6 条管线 / 9 次 draw call，<code>?only=sky|ridge|terrain|bed|tree|water</code> 可逐层排查。
+          6 条管线 / 8 次 draw call，<code>?only=sky|ridge|terrain|bed|tree|water</code> 可逐层排查。
         </div>
       </a>
       <a class="card" href="./benchmark.html">
@@ -112,6 +112,60 @@
         <div class="desc">
           2000 / 5000 / 10000 / 20000 / 40000 个图形逐档计时（帧耗时、CPU 提交、每秒三角形），
           实例化与「逐个 draw」两种模式对照。别加 <code>--virtual-time-budget</code>。
+        </div>
+      </a>
+      <a class="card" href="./core-texture-async.html">
+        <span class="title">异步贴图</span><span class="tag core">core</span>
+        <div class="desc">
+          <code>createImageBitmap</code> 异步解码路径：URL / Blob / 已有 bitmap / canvas 四条入口，
+          读回第 0 级逐字节比对（两后端 <code>maxDiff=0</code>）。支持 6 种格式，不再锁死 <code>rgba8unorm</code>。
+        </div>
+      </a>
+      <a class="card" href="./core-prewarm.html">
+        <span class="title">管线预热与编译诊断</span><span class="tag core">core</span>
+        <div class="desc">
+          把着色器编译/链接挪出渲染循环：<code>createRenderPipelineAsync</code>（WebGPU 真异步）
+          与 <code>KHR_parallel_shader_compile</code>（WebGL2，扩展缺失时如实降级为 <code>sync</code>）。
+          编译错误能给出<strong>真实行号</strong>。
+        </div>
+      </a>
+      <a class="card" href="./depth-null-format.html">
+        <span class="title">「不使用深度」的语义回归</span><span class="tag core">core</span>
+        <div class="desc">
+          <code>depthStencil: { format: null }</code> 与「不声明」都必须表示<strong>不使用深度</strong>。
+          含一个反向对照（显式写深度时后方物体<strong>必须</strong>被遮住），防止判据假通过。
+        </div>
+      </a>
+      <a class="card" href="./msaa-offscreen.html">
+        <span class="title">离屏 MSAA</span><span class="tag core">core</span>
+        <div class="desc">
+          <code>renderbufferStorageMultisample</code> + <code>blitFramebuffer</code> resolve。
+          判据是真实截图里的<strong>中间色像素</strong>：<code>samples=1</code> 时 0 个、
+          <code>samples=4</code> 时 3203 个（恰好 3 种 = <code>sampleCount−1</code>）。
+          采样数不支持时明确报错，不静默降级。
+        </div>
+      </a>
+      <a class="card" href="./rtt-orientation.html">
+        <span class="title">渲染到纹理的行序</span><span class="tag core">core</span><span class="tag gfx">gfx</span>
+        <div class="desc">
+          「先渲染进纹理、再采样上屏」这条链路在两个后端必须给出同一幅画面。
+          本库约定<strong>纹素 (0,0) 在左上</strong>；WebGL2 的渲染目标原生是自下而上，
+          所以 core 层<strong>显式</strong>提供统一用的 helper，gfx 层<strong>自动</strong>统一。
+        </div>
+      </a>
+      <a class="card" href="./device-lost.html">
+        <span class="title">设备丢失</span><span class="tag core">core</span>
+        <div class="desc">
+          真的丢掉 WebGL2 上下文（<code>WEBGL_lose_context</code>）、真的销毁 WebGPU 设备，
+          验证后续提交会抛 <code>DeviceLostError</code> 而不是静默丢弃命令。
+          <strong>抽象层内无法自动恢复</strong>，只能新建设备并重建资源 —— 这条如实写进文档。
+        </div>
+      </a>
+      <a class="card" href="./compute.html">
+        <span class="title">Compute</span><span class="tag core">core</span>
+        <div class="desc">
+          WebGPU 上 <code>dispatchWorkgroups</code> 计算 4096 个值，读回<strong>逐元素严格相等</strong>
+          （校验和一致，不是阈值判据）。WebGL2 没有 compute，两条入口都抛带前缀的错误并给出替代方案。
         </div>
       </a>
     </div>
@@ -144,6 +198,10 @@
         <div class="desc">
           17 项检查：设备创建、管线交叉校验、canvas 与离屏目标的像素级断言、以及各类错误路径。
           结果写在 <code>data-smoke-result</code>。
+          <strong>注意：本页只跑 WebGL2</strong>（着色器是 GLSL、读回用 <code>gl.readPixels</code>、
+          另有三条 WebGL2 专有的错误断言），所以它也输出 <code>data-smoke-backend="webgl2"</code>
+          —— 别把它当成「两个后端都验证过」。WebGPU 的 core 层覆盖见 <code>depth</code> /
+          <code>instancing</code> / <code>device-lost</code> / <code>compute</code>。
         </div>
       </a>
       <a class="card" href="./depth.html?backend=webgl2">
@@ -154,6 +212,24 @@
           读回的是 <strong>canvas 本身</strong>（WebGL2 走 <code>readPixels</code>，WebGPU 走
           <code>copyTextureToBuffer</code>）。用 <code>?backend=webgl2|webgpu</code> 各跑一遍，
           结论在 <code>data-depth-result / -pixel / -format</code>。
+        </div>
+      </a>
+      <a class="card" href="./gfx-prewarm.html">
+        <span class="title">管线预热（gfx 层）</span><span class="tag gfx">gfx</span>
+        <div class="desc">
+          <code>renderer.prewarm()</code> / <code>renderer.compilationInfo()</code>：
+          预热后<strong>首个使用该管线的帧</strong>耗时降一个数量级。
+          实测 WebGPU <code>469.9ms → 7.4ms</code>（真异步）；WebGL2 <code>347.7ms → 0.20ms</code>
+          （本机缺扩展，<code>mode:'sync'</code>，如实透出）。
+        </div>
+      </a>
+      <a class="card" href="./gfx-benchmark.html">
+        <span class="title">性能基准（gfx 层）</span><span class="tag gfx">gfx</span>
+        <div class="desc">
+          每个物体一次 <code>draw()</code> 逐档计时，CPU 提交与 <strong>GPU 执行</strong>两列分开
+          （<code>renderer.stats.gpuFrameTime</code>，取不到就是 <code>null</code> 而不是 0）。
+          <code>?counts=</code> 调档位、<code>?ab=cull</code> 做剔除开/关配对测量
+          （20000 个物体时 draw calls <code>20000 → 10617</code>）。
         </div>
       </a>
     </div>
