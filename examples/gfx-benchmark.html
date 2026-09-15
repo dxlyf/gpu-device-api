@@ -65,7 +65,7 @@
           <tr>
             <th>物体数</th><th>draw calls</th><th>三角形/帧</th><th>CPU 提交(均值)</th>
             <th>最小</th><th>最大</th><th>GPU 执行(均值)</th><th>每次 draw</th><th>draws/s</th><th>管线切换</th>
-            <th>含等待后端(均值)</th><th>说明</th>
+            <th>含等待后端(均值)</th><th>剔除/跳过测试</th><th>说明</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -80,12 +80,31 @@
         拿不到 GPU 计时的原因（缺 feature / 缺扩展 / disjoint）写在 <code>data-bench-gpu-error</code> 里。
       </p>
       <p class="hint">
+        <b>配对 A/B（推荐用这个看收益）</b>：<code>ab=split</code> 或 <code>ab=cull</code> 会在**同一个页面里
+        交替**测两种配置（<code>split=1/0</code> 用两条材质切换，<code>culling=1/0</code> 用渲染器的开关切换），
+        每档跑 <code>rounds</code> 轮（默认 3）、每轮取最小帧耗时再比 —— 机器上有别的负载时，
+        跨次运行的数字能在 9ms 与 278ms 之间摆动，只有这种交替测量才说明得了问题。
+        结果写在 <code>data-bench-ab</code>：<code>档:off=..ms,on=..ms,deltaPct=..,drawCalls=..,culled=..</code>。
+        剔剔除的对照建议配 <code>spread=60</code>（物体铺得开，才真的有东西被剔掉：
+        <code>spread=10</code> 在这种超宽画布下几乎全部可见，剔除数是 0）。
+      </p>
+      <p class="hint">
         这一页和 <a href="./benchmark.html">core 层基准</a> 测的是**同一件事的两个层次**：core 基准手写
         着色器/缓冲/bind group/管线/通道，所以它看不到便捷层的开销；本页只用 <code>src/gfx</code>，
         每个物体一次 <code>renderer.draw()</code>，每次 draw 都要走：相机 uniform、自己的
         <code>model</code>、自动计算的法线矩阵（<code>lambert</code> 声明了 <code>normalMatrix</code>）、
         uniform arena + 动态偏移、bind group，以及按材质属性逐个绑定顶点缓冲（3 个属性 = 3 次
         <code>setVertexBuffer</code>）。两页同档的「CPU 提交(均值)」可以直接相减，差值就是便捷层的净开销。
+      </p>
+      <p class="hint">
+        <b>同一份构建下的三个开关</b>（刷新页面时带上参数即可，用来做 A/B）：
+        <code>split=1|0</code> 关掉 scene / per-draw 的 uniform 拆分（<code>split=0</code> 时材质写成
+        <code>sceneFields: false</code>，所有字段回到一个块、每 draw 整块重写 —— 也就是拆分前的行为）；
+        <code>culling=1|0</code> 打开视锥剔除（打开后 <code>draw calls</code> 会小于物体数，差额是
+        「剔除/跳过测试」列的前一个数字，也写在 <code>data-bench-culled</code> 里）；
+        <code>sort=none|opaque|all</code> 打开 draw 排序（按管线 → 绑定组 → 深度；半透明物只按深度
+        从远到近，绝不被管线分组打乱）。三个开关都可以用 <code>data-bench-split</code> /
+        <code>data-bench-culling</code> / <code>data-bench-sort</code> 抓取。
       </p>
       <p class="hint">
         计时只算 CPU 时间（<code>frames</code> 是每档测量的帧数，先空跑几帧热身）。帧与帧之间只

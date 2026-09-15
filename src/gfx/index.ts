@@ -31,6 +31,8 @@ export {
   UNIFORM_PLACEHOLDER,
   ATTRIBUTE_PLACEHOLDER,
   TEXTURE_PLACEHOLDER,
+  SCENE_BLOCK_INSTANCE,
+  SCENE_UNIFORM_NAMES,
   Material,
   defineMaterial,
   type MaterialDesc,
@@ -73,15 +75,29 @@ export {
   Geometry,
   STANDARD_ATTRIBUTE_FORMATS,
   createGeometry,
+  type BoundingSphere,
   type GeometryAttribute,
   type GeometryAttributeInput,
   type GeometryDesc,
 } from './Geometry.js';
 
+export { FrustumCuller } from './Culling.js';
+
 export {
+  compareOpaque,
+  compareTransparent,
+  sortDraws,
+  type DrawSortMode,
+  type SortableDraw,
+} from './DrawSort.js';
+
+export {
+  GFX_UPLOAD_FORMATS,
   GfxTexture,
   buildMipChain,
   isImageSource,
+  type AsyncTextureDesc,
+  type DecodedPixels,
   type ImageSource,
   type TextureDesc,
 } from './Texture.js';

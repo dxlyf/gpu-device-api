@@ -15,6 +15,7 @@
 import { ValidationError } from '../core/errors/ValidationError.js';
 import { smallestIndexFormat, type IndexFormat } from '../core/enums/IndexFormat.js';
 import { vertexFormatInfo, type VertexFormat } from '../core/enums/VertexFormat.js';
+import { vec3, type Vec3 } from '../utils/math/index.js';
 import type { VertexStepMode } from '../core/enums/VertexStepMode.js';
 import type { PrimitiveTopology } from '../core/enums/PrimitiveTopology.js';
 import type { Buffer } from '../core/resources/Buffer.js';
@@ -36,6 +37,20 @@ export const STANDARD_ATTRIBUTE_FORMATS: Readonly<Record<string, VertexFormat>> 
   joints: 'uint16x4',
   weights: 'float32x4',
 });
+
+/**
+ * 包围球（局部空间）：视锥剔除与「按深度排序」都用它。
+ *
+ * 它由几何体创建时**算一次**（遍历顶点求 AABB 的中心，再取到中心最远的顶点距离），
+ * 之后只读 —— 每帧重算包围体是纯粹的浪费，这里刻意不提供「每帧刷新」的接口：
+ * 顶点数据在创建后就不变了（`Geometry` 是只读的）。
+ */
+export interface BoundingSphere {
+  /** 球心（局部空间，3 个分量）。 */
+  readonly center: Vec3;
+  /** 半径。 */
+  readonly radius: number;
+}
 
 /** 单个属性的输入。 */
 export interface GeometryAttributeInput {
@@ -60,6 +75,17 @@ export interface GeometryDesc {
   topology?: PrimitiveTopology;
   /** 显式指定顶点数；省略时按属性数据长度推断。 */
   vertexCount?: number;
+  /**
+   * 显式提供包围球，覆盖「按 `position` 顶点算出来的那个」。
+   *
+   * 两个场合非给不可：
+   * - **position 不是 `float32x3`**（例如量化过的 `unorm16x4`）：这时无法从数据推断，自动计算会被跳过；
+   * - **顶点着色器会位移顶点**（水面波动、草地摇摆…）：按原始顶点算出来的球可能盖不住实际的绘制范围，
+   *   那种情况下必须由调用方给一个足够大的球（或者直接关掉剔除）。
+   *
+   * `center` 省略时按原点处理。
+   */
+  boundingSphere?: { center?: ArrayLike<number>; radius: number };
   label?: string;
 }
 
@@ -90,6 +116,21 @@ export class Geometry {
    * 一个盒子的 36 个顶点 + 1000 份实例数据），所以两者分开推断、也分开校验。
    */
   readonly instanceCount: number | null;
+  /**
+   * 局部空间的包围球；推断不出来时为 `null`（例如 `position` 不是 `float32x3` 且调用方也没给）。
+   * 创建时算一次，之后不再变。
+   */
+  readonly boundingSphere: BoundingSphere | null;
+  /**
+   * 这个几何体是否适合做视锥剔除。
+   *
+   * 有两种情况返回 `false`，都是为了让剔除**不会**画错：
+   * - 没有包围球（见 {@link boundingSphere}）；
+   * - 带按实例步进的属性、且包围球是**按基础顶点**算出来的：实例化绘制里每个实例的位置由
+   *   实例属性决定，基础顶点的包围球完全盖不住它们（拿它剔除会把可见的实例整批丢掉）。
+   *   显式传了 `boundingSphere` 时调用方已经对实例分布负责，这时仍然可剔除。
+   */
+  readonly cullable: boolean;
 
   private _disposed = false;
   /**
@@ -110,6 +151,8 @@ export class Geometry {
     indexBuffer: Buffer | null;
     indexFormat: IndexFormat | null;
     indexCount: number;
+    boundingSphere: BoundingSphere | null;
+    cullable: boolean;
   }) {
     this.label = init.label;
     this.topology = init.topology;
@@ -120,6 +163,8 @@ export class Geometry {
     this.indexBuffer = init.indexBuffer;
     this.indexFormat = init.indexFormat;
     this.indexCount = init.indexCount;
+    this.boundingSphere = init.boundingSphere;
+    this.cullable = init.cullable;
   }
 
   /** 上传几何体数据到 GPU。 */
@@ -203,6 +248,13 @@ export class Geometry {
       });
     }
 
+    /* ---- 包围球 ---------------------------------------------------------------------------- */
+    // 只算一次（遍历顶点），之后每帧的剔除/排序都直接用它，不再碰顶点数据。
+    const boundingSphere = resolveBoundingSphere(desc, attributes, inputs, vertexCount);
+    const hasInstanceAttributes = [...inputs.values()].some((input) => input.perInstance === true);
+    const cullable =
+      boundingSphere !== null && (desc.boundingSphere !== undefined || !hasInstanceAttributes);
+
     /* ---- 索引 ------------------------------------------------------------------------------ */
     let indexBuffer: Buffer | null = null;
     let indexFormat: IndexFormat | null = null;
@@ -228,6 +280,8 @@ export class Geometry {
       indexBuffer,
       indexFormat,
       indexCount,
+      boundingSphere,
+      cullable,
     });
   }
 
@@ -286,6 +340,102 @@ export class Geometry {
     for (const attribute of this.attributes.values()) attribute.buffer.destroy();
     this.indexBuffer?.destroy();
   }
+}
+
+/**
+ * 定出这个几何体的包围球。
+ *
+ * 优先用调用方显式给的那份（`GeometryDesc.boundingSphere`）；否则从 `position` 顶点算
+ * ——**只在 `position` 是 `float32x3` 且数据确实是 `Float32Array` 时**才算，
+ * 别的格式（量化的 unorm/snorm、float16…）无法直接当下标读，返回 `null` 让调用方补。
+ *
+ * 球心取 AABB 的中心而不是顶点平均值、半径取「到球心最远的顶点距离」：前者对分布不均的
+ * 顶点集更稳，后者让球尽可能紧（球越紧，剔除才越有效）。
+ */
+function resolveBoundingSphere(
+  desc: GeometryDesc,
+  attributes: ReadonlyMap<string, GeometryAttribute>,
+  inputs: ReadonlyMap<string, GeometryAttributeInput>,
+  vertexCount: number,
+): BoundingSphere | null {
+  const explicit = desc.boundingSphere;
+  if (explicit) {
+    const radius = explicit.radius;
+    if (!Number.isFinite(radius) || radius < 0) {
+      throw new ValidationError(
+        `[gpu-device-api] 几何体「${desc.label ?? 'geometry'}」显式给出的包围球半径必须是有限的非负数，` +
+          `实际是 ${String(radius)}。`,
+      );
+    }
+    const center = vec3.create();
+    const source = explicit.center;
+    if (source !== undefined) {
+      if (source.length < 3) {
+        throw new ValidationError(
+          `[gpu-device-api] 几何体「${desc.label ?? 'geometry'}」显式给出的包围球球心至少要有 3 个分量，` +
+            `实际是 ${source.length} 个。`,
+        );
+      }
+      const x = source[0]!;
+      const y = source[1]!;
+      const z = source[2]!;
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        throw new ValidationError(
+          `[gpu-device-api] 几何体「${desc.label ?? 'geometry'}」显式给出的包围球球心必须是有限数，` +
+            `实际是 (${x}, ${y}, ${z})。`,
+        );
+      }
+      vec3.set(center, x, y, z);
+    }
+    return { center, radius };
+  }
+
+  const attribute = attributes.get('position');
+  const input = inputs.get('position');
+  if (!attribute || !input || attribute.format !== 'float32x3') return null;
+  if (!(input.data instanceof Float32Array)) return null;
+  return sphereFromPositions(input.data, vertexCount);
+}
+
+/** 由 `float32x3` 的顶点数据算包围球（两个 pass：先 AABB 中心，再最远顶点距离）。 */
+function sphereFromPositions(positions: Float32Array, vertexCount: number): BoundingSphere {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let index = 0; index < vertexCount; index += 1) {
+    const offset = index * 3;
+    const x = positions[offset]!;
+    const y = positions[offset + 1]!;
+    const z = positions[offset + 2]!;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const centerZ = (minZ + maxZ) / 2;
+
+  let maxDistanceSquared = 0;
+  for (let index = 0; index < vertexCount; index += 1) {
+    const offset = index * 3;
+    const dx = positions[offset]! - centerX;
+    const dy = positions[offset + 1]! - centerY;
+    const dz = positions[offset + 2]! - centerZ;
+    const distanceSquared = dx * dx + dy * dy + dz * dz;
+    if (distanceSquared > maxDistanceSquared) maxDistanceSquared = distanceSquared;
+  }
+
+  return {
+    center: vec3.fromValues(centerX, centerY, centerZ),
+    radius: Math.sqrt(maxDistanceSquared),
+  };
 }
 
 function inferFormat(name: string, data: ArrayBufferView): VertexFormat {

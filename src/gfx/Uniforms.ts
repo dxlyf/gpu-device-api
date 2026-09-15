@@ -215,14 +215,20 @@ export class UniformLayout {
   readonly key: string;
   /** WGSL 结构体名；GLSL 的块名是 `${structName}Block` 之外，这里同时用作 GLSL 块名。 */
   readonly structName: string;
-  /** 着色器里的实例名；两种语言都是 `u`，所以成员访问写法一致。 */
-  readonly instanceName = 'u';
+  /**
+   * 着色器里的实例名；两种语言都是这个名字，所以成员访问写法一致。
+   *
+   * 默认 `'u'`；gfx 的场景块用 `'uScene'`（两个 uniform 块的实例名不能重复），
+   * 见 `Material.SCENE_BLOCK_INSTANCE`。
+   */
+  readonly instanceName: string;
   readonly group: number;
   readonly binding: number;
 
   constructor(desc: UniformLayoutDesc, options: UniformOptions = {}) {
     this.desc = { ...desc };
     this.structName = options.structName ?? 'Uniforms';
+    this.instanceName = options.instanceName ?? 'u';
     this.group = options.group ?? 0;
     this.binding = options.binding ?? 0;
 
@@ -261,7 +267,8 @@ export class UniformLayout {
     this.fields = fields;
     this.fieldByName = new Map(fields.map((field) => [field.name, field]));
     this.byteLength = alignTo(cursor, maxAlign);
-    this.key = `${this.structName}|${this.group}|${this.binding}|${names.map((name) => `${name}:${desc[name]}`).join(',')}`;
+    // 实例名要进缓存键：同一个结构体名 + 不同实例名（例如 `u` 与 `uScene`）不能互相复用。
+    this.key = `${this.structName}|${this.instanceName}|${this.group}|${this.binding}|${names.map((name) => `${name}:${desc[name]}`).join(',')}`;
   }
 
   field(name: string): UniformFieldLayout {
@@ -329,6 +336,13 @@ export class UniformLayout {
 export interface UniformOptions {
   /** WGSL 结构体名 / GLSL 块名，默认 `'Uniforms'`。 */
   structName?: string;
+  /**
+   * 着色器里的实例名（GLSL 的 `} 实例名;` / WGSL 的 `var<uniform> 实例名`），默认 `'u'`。
+   *
+   * 同一个着色器里放两个 uniform 块时必须给成不同的名字 —— GLSL 与 WGSL 都不允许两个块
+   * 共用实例名。gfx 的场景块用的就是它（`Material.SCENE_BLOCK_INSTANCE`）。
+   */
+  instanceName?: string;
   group?: number;
   binding?: number;
 }

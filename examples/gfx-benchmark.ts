@@ -49,8 +49,19 @@
  * 一一对应），全部测完再写 `gfxBenchmarkResult = ok`，之后页面**自己停下来**（不再排 rAF 循环）。
  * 每档还会核对 `renderer.stats`（drawCalls 必须等于物体数），用来证明这些 draw 真的发生了。
  *
+ * ## 三个开关（都是查询参数，用来做「同一台机器、同一份代码」的 A/B）
+ *
+ * - `split=0|1`（默认 1）：材质是否做 scene / per-draw uniform 拆分。`split=0` 时材质写成
+ *   `sceneFields: false`，所有 uniform 都在一个块里、每 draw 整块重写（= 拆分前的行为）。
+ *   同一份构建下对比这两档，差值就是拆分带来的净收益，不受机器噪声影响；
+ * - `culling=0|1`（默认 0）：视锥剔除。打开后 `draw calls` 会少于物体数，
+ *   差额写在 `data-bench-culled`（“物体数:剔除数”）里；
+ * - `sort=none|opaque|all`（默认 none）：draw 排序模式。
+ *   注意开启排序后本页的 `CPU 提交` 包含「排队 + 排序」的开销（本来就是为了看这个）。
+ *
  * 无头抓取关心的是这几个 key：
  * `data-bench-cpu-ms`（每档 CPU 均值，`档:值;档:值`）、`data-bench-gpu-ms`（每档 GPU 均值）、
+ * `data-bench-draws`（每档真实 draw calls）、`data-bench-culled`（每档剔除数）、
  * `data-bench-gpu-source`（`webgpu-timestamp-query` / `webgl2-EXT_disjoint_timer_query_webgl2` /
  * `unavailable`）、`data-bench-gpu-error`（拿不到时的原文错误）。
  *
@@ -59,10 +70,11 @@
  * ```
  * pnpm dev
  * # 浏览器打开 http://localhost:5199/examples/gfx-benchmark.html?backend=webgl2&counts=2000,5000
+ * # 关闭 uniform 拆分（对照）：…&split=0   打开剔除：…&culling=1   排序：…&sort=all
  * ```
  *
  * 查询参数（解析方式与 `benchmark.ts` 一致）：
- * `?backend=webgl2|webgpu|auto&counts=2000,5000&frames=10`
+ * `?backend=webgl2|webgpu|auto&counts=2000,5000&frames=10&split=1&culling=0&sort=none`
  */
 
 import { PerspectiveCamera, Renderer, materials, shapes } from '../src/gfx/index.js';
@@ -90,14 +102,28 @@ const SLOW_FRAME_LIMIT_MS = 8000;
 /** 与 `benchmark.ts` 相同的清屏色，方便两页对照。 */
 const CLEAR_COLOR = '#0b0e13';
 /** 世界空间的立方体边长；与 core 基准共用同一块空间，方便横向对比。 */
-const SPREAD = 10;
+const DEFAULT_SPREAD = 10;
 /** `shapes.createBox` 三个分段都为 1 时是 12 个三角形。 */
 const TRIANGLES_PER_BOX = 12;
 /** 最大档的格点边长；各档共用同一个盒子，所以档与档之间只差 draw 次数。 */
 const GRID_SIDE = Math.max(1, Math.ceil(Math.cbrt(MAX_COUNT)));
-const BOX_SIZE = (SPREAD / GRID_SIDE) * 0.9;
 
 const query = new URLSearchParams(location.search);
+/**
+ * 物体分布的空间边长（默认 10）。
+ *
+ * 调大它会让大部分物体落到视锥外 —— 那才是**视锥剔除**能省下东西的场景（`?spread=60`）。
+ * 默认的 10 在无头浏览器那种超宽画布（横向 FOV 120°）下几乎所有物体都在视锥内，
+ * 剔除数会是 0：这不是剔除失效，而是「确实没有东西可剔」。
+ */
+const SPREAD = (() => {
+  const raw = query.get('spread');
+  if (raw === null) return DEFAULT_SPREAD;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SPREAD;
+})();
+const BOX_SIZE = (SPREAD / GRID_SIDE) * 0.9;
+
 const backendParam = query.get('backend');
 const backend: 'auto' | 'webgl2' | 'webgpu' =
   backendParam === 'webgl2' || backendParam === 'webgpu' ? backendParam : 'auto';
@@ -116,6 +142,33 @@ const counts: readonly number[] =
         .map((part) => clampInt(Number(part.trim()), 0, 0, MAX_COUNT))
         .filter((value) => value > 0)
     : DEFAULT_COUNTS;
+
+/**
+ * 三个开关：是否拆分 uniform、是否剔除、排序模式。
+ *
+ * 默认 `split=1`（拆分）/ `culling=0`（不剔除）/ `sort=none`。
+ * `culling` 默认关是为了保住本页「drawCalls === 物体数」这条自检（见 measure()），
+ * 剔除的收益要单独用 `?culling=1` 量。
+ */
+function flag(name: string, fallback: boolean): boolean {
+  const raw = query.get(name);
+  if (raw === null) return fallback;
+  return raw !== '0' && raw !== 'false';
+}
+const splitEnabled = flag('split', true);
+const cullingEnabled = flag('culling', false);
+/** 配对 A/B 模式：`split`（拆分开/关）或 `cull`（剔除开/关）；缺省不做配对测量。 */
+const abParam = query.get('ab');
+const abKind: 'split' | 'cull' | null = abParam === 'split' || abParam === 'cull' ? abParam : null;
+/** 配对测量的轮数（每轮两种配置各测一遍，顺序交替）。 */
+const abRounds = (() => {
+  const raw = query.get('rounds');
+  if (raw === null) return 3;
+  return Math.max(1, Math.min(clampInt(Number(raw), 3, 1, 20), 20));
+})();
+const sortParam = query.get('sort');
+const sortMode: 'none' | 'opaque' | 'all' =
+  sortParam === 'opaque' || sortParam === 'all' ? sortParam : 'none';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const statusEl = document.getElementById('status') as HTMLElement;
@@ -188,11 +241,21 @@ function buildPlacements(): readonly Placement[] {
 interface Scene {
   readonly renderer: Renderer;
   readonly geometry: Geometry;
-  readonly material: Material;
+  /** 做了 scene / per-draw 拆分的材质。 */
+  readonly materialSplit: Material;
+  /** 没做拆分（`sceneFields: false`）的材质 —— 行为等价于拆分前。 */
+  readonly materialPlain: Material;
   readonly placements: readonly Placement[];
 }
 
 let scene: Scene | null = null;
+/**
+ * 当前用哪条材质：`true` = 拆分过的。
+ *
+ * 平时恒等于 `splitEnabled`；只有 `?ab=split` 的配对测量会在两种配置之间来回切，
+ * 所以它是一个模块级变量而不是常量。
+ */
+let useSplitMaterial = false;
 const reportedErrors: string[] = [];
 
 async function createScene(): Promise<Scene> {
@@ -205,6 +268,10 @@ async function createScene(): Promise<Scene> {
     clearColor: CLEAR_COLOR,
     // GPU 计时：申请 timestamp-query 并尝试打开（后端不支持时不会让页面失败，原因进 error）。
     gpuTiming: true,
+    // 剔除默认关：开了之后 drawCalls 会小于物体数，本页的 stats 自检就变成
+    // 「drawCalls + culled === 物体数」（见 measure()）。要量剔除收益就加 ?culling=1。
+    culling: cullingEnabled,
+    sort: sortMode,
   });
 
   renderer.device.onError((error) => {
@@ -226,15 +293,21 @@ async function createScene(): Promise<Scene> {
   });
   renderer.setCamera(camera);
 
-  // 一份几何 + 一条材质，全部 draw 共用；`lambert` 带 normalMatrix 与 3 个属性，
+  // 一份几何 + 两条材质，全部 draw 共用；`lambert` 带 normalMatrix 与 3 个属性，
   // 正好覆盖便捷层每 draw 的开销（法线矩阵、3 次 setVertexBuffer）。
   const geometry = renderer.createGeometry({
     label: 'gfx-bench-box',
     ...shapes.createBox({ width: BOX_SIZE, height: BOX_SIZE, depth: BOX_SIZE }),
   });
-  const material = renderer.createMaterial(materials.lambert({ color: [1, 1, 1, 1] }));
+  // 两条材质：一条走 scene / per-draw 拆分，一条 `sceneFields: false`（所有 uniform 在同一个块、
+  // 每 draw 整块重写 —— 也就是拆分前的行为）。平时只用其中一条，
+  // `?ab=split` 时在同一进程里交替测两条，机器有负载时也能看出净差值。
+  const lambertDesc = materials.lambert({ color: [1, 1, 1, 1] });
+  const materialSplit = renderer.createMaterial(lambertDesc);
+  const materialPlain = renderer.createMaterial({ ...lambertDesc, sceneFields: false });
+  useSplitMaterial = splitEnabled;
 
-  return { renderer, geometry, material, placements: buildPlacements() };
+  return { renderer, geometry, materialSplit, materialPlain, placements: buildPlacements() };
 }
 
 /* ------------------------------------------------------------------------------------------------ */
@@ -248,7 +321,7 @@ function drawFrame(count: number): void {
 
   active.renderer.beginFrame({ color: CLEAR_COLOR });
   // 一次 setMaterial，之后 N 次 draw 复用同一条管线（所以 stats.pipelineSwitches 应该恒为 1）。
-  active.renderer.setMaterial(active.material);
+  active.renderer.setMaterial(useSplitMaterial ? active.materialSplit : active.materialPlain);
   for (let index = 0; index < count; index++) {
     const placement = active.placements[index]!;
     active.renderer.draw(active.geometry, {
@@ -361,6 +434,10 @@ async function collectGpuSamples(count: number): Promise<number[]> {
 interface Measurement {
   readonly count: number;
   readonly drawCalls: number;
+  /** 本帧被视锥剔除掉的绘制数（`culling=0` 时恒为 0）。 */
+  readonly culled: number;
+  /** 本帧因为几何体不适合剔除而没做测试的数量（本页的盒子有 float32x3 顶点，应恒为 0）。 */
+  readonly cullSkipped: number;
   readonly triangles: number;
   readonly pipelineSwitches: number;
   /** `beginFrame → endFrame` 的 CPU 帧耗时：本页的主角。 */
@@ -381,6 +458,9 @@ interface Measurement {
   readonly framesMeasured: number;
   /** `renderer.stats.drawCalls` 是否等于物体数（证明这些 draw 真的发生了）。 */
   readonly statsConsistent: boolean;
+  /** 本帧向每 draw 块 / 场景块上传的次数（拆分的机制证据，见 RendererStats）。 */
+  readonly drawUniformWrites: number;
+  readonly sceneUniformWrites: number;
   readonly note: string;
 }
 
@@ -446,9 +526,13 @@ async function measure(count: number): Promise<TierResult> {
   const frameMsMean = mean(cpuSamples);
   const stats = active.renderer.stats;
   const drawCalls = stats.drawCalls;
+  const culled = stats.culled;
+  const cullSkipped = stats.cullSkipped;
   const triangles = stats.triangles;
   const pipelineSwitches = stats.pipelineSwitches;
-  const statsConsistent = drawCalls === count && triangles === count * TRIANGLES_PER_BOX;
+  // 关剔除时每个物体都必须真的画了；开剔除时「画了 + 剔了」才该等于物体数。
+  const statsConsistent =
+    drawCalls + culled === count && triangles === drawCalls * TRIANGLES_PER_BOX;
   if (!statsConsistent) {
     setData('gfxBenchmarkStatsOk', 'false');
   }
@@ -459,6 +543,8 @@ async function measure(count: number): Promise<TierResult> {
   return {
     count,
     drawCalls,
+    culled,
+    cullSkipped,
     triangles,
     pipelineSwitches,
     frameMsMean,
@@ -474,6 +560,8 @@ async function measure(count: number): Promise<TierResult> {
     gpuError: active.renderer.gpuTiming.error,
     framesMeasured: measuredFrames,
     statsConsistent,
+    drawUniformWrites: stats.drawUniformWrites,
+    sceneUniformWrites: stats.sceneUniformWrites,
     note: active.renderer.backend === 'webgpu' ? 'WebGPU：队列排空' : 'WebGL2：gl.finish()',
   };
 }
@@ -482,7 +570,7 @@ async function measure(count: number): Promise<TierResult> {
 /* 结果展示                                                                                            */
 /* ------------------------------------------------------------------------------------------------ */
 
-const COLUMN_COUNT = 12;
+const COLUMN_COUNT = 13;
 
 function rowFor(count: number): HTMLTableRowElement {
   const row = document.createElement('tr');
@@ -499,8 +587,8 @@ function renderMeasurement(result: TierResult): void {
 
   if ('skipped' in result) {
     row.className = 'skipped';
-    for (let index = 1; index <= 10; index++) row.cells[index]!.textContent = '—';
-    row.cells[11]!.textContent = result.skipped;
+    for (let index = 1; index <= 11; index++) row.cells[index]!.textContent = '—';
+    row.cells[12]!.textContent = result.skipped;
     return;
   }
 
@@ -517,7 +605,11 @@ function renderMeasurement(result: TierResult): void {
   row.cells[8]!.textContent = result.drawsPerSecond.toFixed(0);
   row.cells[9]!.textContent = String(result.pipelineSwitches);
   row.cells[10]!.textContent = `${result.syncMsMean.toFixed(2)} ms`;
-  row.cells[11]!.textContent = result.statsConsistent ? result.note : `stats 不一致（drawCalls=${result.drawCalls}）`;
+  row.cells[11]!.textContent =
+    `${result.culled} / ${result.cullSkipped}`;
+  row.cells[12]!.textContent = result.statsConsistent
+    ? result.note
+    : `stats 不一致（drawCalls=${result.drawCalls}, culled=${result.culled}）`;
 }
 
 /** 每档一条紧凑摘要；档与档之间用 `;` 分隔（与 `benchmark.ts` 的 `benchmarkResults` 同一写法）。 */
@@ -532,7 +624,9 @@ function summarize(results: readonly TierResult[]): string {
           `gpuError=${result.gpuError === null ? 'none' : result.gpuError.replace(/\s+/g, ' ').trim()},` +
           `perDraw=${result.perDrawUs.toFixed(2)}us,` +
           `drawsPerSecond=${result.drawsPerSecond.toFixed(0)},sync=${result.syncMsMean.toFixed(2)}ms,` +
-          `drawCalls=${result.drawCalls},tris=${result.triangles},pipelineSwitches=${result.pipelineSwitches},` +
+          `drawCalls=${result.drawCalls},culled=${result.culled},cullSkipped=${result.cullSkipped},` +
+          `uniformWrites=${result.drawUniformWrites}/${result.sceneUniformWrites},` +
+          `tris=${result.triangles},pipelineSwitches=${result.pipelineSwitches},` +
           `frames=${result.framesMeasured},stats=${result.statsConsistent ? 'ok' : 'mismatch'}`,
     )
     .join(';');
@@ -549,6 +643,17 @@ function seriesOf(results: readonly TierResult[], pick: (result: Measurement) =>
     .join(';');
 }
 
+/** 每档一列整数，供无头抓取（剔除数 / 真实 draw calls）。 */
+function integerSeriesOf(
+  results: readonly TierResult[],
+  pick: (result: Measurement) => number,
+): string {
+  return results
+    .filter((result): result is Measurement => !('skipped' in result))
+    .map((result) => `${result.count}:${pick(result)}`)
+    .join(';');
+}
+
 /** `#out` 里的人读版本：每档一行。 */
 function describeLine(result: TierResult): string {
   if ('skipped' in result) return `${result.count} 个物体：跳过 —— ${result.skipped}`;
@@ -559,7 +664,8 @@ function describeLine(result: TierResult): string {
       : `GPU 执行 ${result.gpuMsMean.toFixed(3)} ms（${result.gpuSamples} 个样本，跳过 ${result.gpuSkipped} 次读回）`;
   return `${result.count} 个物体：CPU 提交 ${result.frameMsMean.toFixed(2)} ms（${result.perDrawUs.toFixed(2)} µs/draw，` +
     `${result.drawsPerSecond.toFixed(0)} draws/s），${gpu}，含等待后端 ${result.syncMsMean.toFixed(2)} ms，` +
-    `draw calls ${result.drawCalls}，三角形 ${result.triangles}，管线切换 ${result.pipelineSwitches}，` +
+    `draw calls ${result.drawCalls}（剔除 ${result.culled}，跳过测试 ${result.cullSkipped}），` +
+    `三角形 ${result.triangles}，管线切换 ${result.pipelineSwitches}，` +
     `测了 ${result.framesMeasured} 帧`;
 }
 
@@ -583,6 +689,11 @@ async function runBenchmark(): Promise<void> {
   setData('gfxBenchmarkResults', '');
   setData('gfxBenchmarkStatsOk', 'true');
   setData('gfxBenchmarkFrames', String(framesToMeasure));
+  // 三个开关也写进 data-*：抓取方一眼能看出这批数字是在哪种配置下测的。
+  setData('benchSpread', String(SPREAD));
+  setData('benchSplit', splitEnabled ? 'on' : 'off');
+  setData('benchCulling', cullingEnabled ? 'on' : 'off');
+  setData('benchSort', sortMode);
 
   const gpuStats = active.renderer.gpuTiming;
   setData('benchGpuSource', gpuTimingSource());
@@ -600,6 +711,10 @@ async function runBenchmark(): Promise<void> {
     setData('gfxBenchmarkResults', summarize(results));
     setData('benchCpuMs', seriesOf(results, (item) => item.frameMsMean));
     setData('benchGpuMs', seriesOf(results, (item) => item.gpuMsMean));
+    setData('benchDraws', integerSeriesOf(results, (item) => item.drawCalls));
+    setData('benchCulled', integerSeriesOf(results, (item) => item.culled));
+    setData('benchDrawWrites', integerSeriesOf(results, (item) => item.drawUniformWrites));
+    setData('benchSceneWrites', integerSeriesOf(results, (item) => item.sceneUniformWrites));
     statsEl.textContent = `后端 ${active.renderer.backend}　画布 ${active.renderer.width}×${active.renderer.height}　物体 ${active.placements.length} 份摆放已就绪`;
     await yieldToBrowser();
   }
@@ -610,11 +725,16 @@ async function runBenchmark(): Promise<void> {
   setData('gfxBenchmarkResults', summarize(results));
   setData('benchCpuMs', seriesOf(results, (item) => item.frameMsMean));
   setData('benchGpuMs', seriesOf(results, (item) => item.gpuMsMean));
+  setData('benchDraws', integerSeriesOf(results, (item) => item.drawCalls));
+  setData('benchCulled', integerSeriesOf(results, (item) => item.culled));
+  setData('benchDrawWrites', integerSeriesOf(results, (item) => item.drawUniformWrites));
+  setData('benchSceneWrites', integerSeriesOf(results, (item) => item.sceneUniformWrites));
   setData('benchGpuSource', gpuTimingSource());
   const gpuTierCount = okTiers.filter((result) => result.gpuMsMean !== null).length;
   outEl.textContent =
     `后端 ${active.renderer.backend}　画布 ${active.renderer.width}×${active.renderer.height}　` +
-    `几何 ${active.geometry.label}（${TRIANGLES_PER_BOX} 三角形）　材质 ${active.material.name}\n` +
+    `几何 ${active.geometry.label}（${TRIANGLES_PER_BOX} 三角形）　材质 ${active.materialSplit.name}\n` +
+    `开关：uniform 拆分 ${splitEnabled ? '开' : '关'}　视锥剔除 ${cullingEnabled ? '开' : '关'}　排序 ${sortMode}\n` +
     `GPU 计时：${gpuTimingSource()}（${gpuTierCount}/${okTiers.length} 档拿到样本）\n` +
     results.map(describeLine).join('\n');
 
@@ -640,6 +760,102 @@ function failRun(error: unknown): void {
 }
 
 /* ------------------------------------------------------------------------------------------------ */
+/* 配对 A/B（?ab=split / ?ab=cull）                                                                    */
+/* ------------------------------------------------------------------------------------------------ */
+
+/**
+ * 在**同一个页面进程里交替**测两种配置，取各自的最小帧耗时。
+ *
+ * 为什么需要它：跨进程/跨次运行的数字受机器负载影响极大（本仓库实测同一档能在 9ms 与 278ms 之间
+ * 摆动），单次运行之间相减根本说明不了问题。交替测量把「漂移」摊到两种配置上，再取最小值
+ * （最小值最接近「没有外部干扰时的真实成本」），是比较 CPU 热路径的常规做法。
+ *
+ * 只测 CPU 提交耗时，不收集 GPU 样本（那一项另有 `runBenchmark()` 负责，而且它每档要等十几秒）。
+ */
+async function runAb(kind: 'split' | 'cull'): Promise<void> {
+  const active = scene;
+  if (running || !active) return;
+  running = true;
+  rerunButton.disabled = true;
+  rowsEl.replaceChildren();
+  document.documentElement.removeAttribute('data-gfx-benchmark-result');
+  setData('benchAbKind', kind);
+  setData('benchAbRounds', String(abRounds));
+  setData('benchAb', '');
+
+  const lines: string[] = [];
+  const rows: string[] = [];
+
+  for (const count of counts) {
+    const off: number[] = [];
+    const on: number[] = [];
+    for (let round = 0; round < abRounds; round++) {
+      // 顺序逐轮翻转：这样两种配置各自都经历过「机器正忙」与「机器空闲」的位置。
+      const order: boolean[] = round % 2 === 0 ? [false, true] : [true, false];
+      for (const enabled of order) {
+        applyAbConfig(active, kind, enabled);
+        // 热身：arena 扩容、管线创建都发生在头一帧里。
+        for (let index = 0; index < 2; index++) {
+          drawFrame(count);
+          await syncFrame();
+        }
+        const samples: number[] = [];
+        const frames = framesForCount(count);
+        for (let index = 0; index < frames; index++) {
+          const start = performance.now();
+          drawFrame(count);
+          const submitted = performance.now();
+          await syncFrame();
+          samples.push(submitted - start);
+        }
+        (enabled ? on : off).push(Math.min(...samples));
+        progressEl.textContent = `${kind} 配对测量：${count} 个物体（第 ${round + 1}/${abRounds} 轮）`;
+        await yieldToBrowser();
+      }
+    }
+
+    const offMin = Math.min(...off);
+    const onMin = Math.min(...on);
+    const delta = offMin > 0 ? ((onMin - offMin) / offMin) * 100 : 0;
+    const stats = active.renderer.stats;
+    lines.push(
+      `${count}：${kind === 'split' ? '拆分关' : '剔除关'} ${offMin.toFixed(2)} ms / ` +
+        `${kind === 'split' ? '拆分开' : '剔除开'} ${onMin.toFixed(2)} ms（${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%），` +
+        `draw calls ${stats.drawCalls}，剔除 ${stats.culled}，` +
+        `uniform 上传 每draw ${stats.drawUniformWrites} / 场景 ${stats.sceneUniformWrites}`,
+    );
+    rows.push(
+      `${count}:off=${offMin.toFixed(3)}ms,on=${onMin.toFixed(3)}ms,deltaPct=${delta.toFixed(1)},` +
+        `drawCalls=${stats.drawCalls},culled=${stats.culled},` +
+        `drawWrites=${stats.drawUniformWrites},sceneWrites=${stats.sceneUniformWrites}`,
+    );
+    setData('benchAb', rows.join(';'));
+  }
+
+  outEl.textContent =
+    `后端 ${active.renderer.backend}　配对 A/B（${kind}，每档 ${abRounds} 轮、每轮取最小帧耗时）\n` +
+    `分布 ${SPREAD}　分档 ${counts.join(', ')}\n` +
+    lines.join('\n');
+  progressEl.textContent = '完成';
+  statusEl.textContent = `配对 A/B 完成：${kind}（${counts.length} 档 × ${abRounds} 轮）`;
+  setData('benchAb', rows.join(';'));
+  setData('gfxBenchmarkBackend', active.renderer.backend);
+  rerunButton.disabled = false;
+  running = false;
+  finished = true;
+  setData('gfxBenchmarkResult', 'ok');
+}
+
+/** 切换配对测量用的配置。 */
+function applyAbConfig(target: Scene, kind: 'split' | 'cull', enabled: boolean): void {
+  if (kind === 'split') {
+    useSplitMaterial = enabled;
+    return;
+  }
+  target.renderer.culling = enabled;
+}
+
+/* ------------------------------------------------------------------------------------------------ */
 /* 启动                                                                                                */
 /* ------------------------------------------------------------------------------------------------ */
 
@@ -649,7 +865,7 @@ framesInput.addEventListener('change', () => {
   framesInput.value = String(framesToMeasure);
 });
 rerunButton.addEventListener('click', () => {
-  void runBenchmark().catch(failRun);
+  void (abKind ? runAb(abKind) : runBenchmark()).catch(failRun);
 });
 window.addEventListener('resize', () => {
   scene?.renderer.resize();
@@ -664,13 +880,19 @@ window.addEventListener('error', (event) => {
 setData('gfxBenchmarkCounts', counts.join(','));
 setData('gfxBenchmarkFrames', String(framesToMeasure));
 setData('gfxBenchmarkBackend', backend);
+setData('benchSpread', String(SPREAD));
+setData('benchSplit', splitEnabled ? 'on' : 'off');
+setData('benchCulling', cullingEnabled ? 'on' : 'off');
+setData('benchSort', sortMode);
 
 createScene()
   .then(async (created) => {
     scene = created;
     setData('gfxBenchmarkBackend', created.renderer.backend);
     statusEl.textContent =
-      `后端：${created.renderer.backend}　${MAX_COUNT} 份摆放 / 1 份几何 / 1 条材质　分档 ${counts.join(', ')}`;
-    await runBenchmark();
+      `后端：${created.renderer.backend}　${MAX_COUNT} 份摆放 / 1 份几何 / 1 条材质　分档 ${counts.join(', ')}　` +
+      `分布 ${SPREAD}　拆分 ${splitEnabled ? '开' : '关'} / 剔除 ${cullingEnabled ? '开' : '关'} / 排序 ${sortMode}`;
+    if (abKind) await runAb(abKind);
+    else await runBenchmark();
   })
   .catch(failRun);
