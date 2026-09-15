@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * 无头 Chrome 会话的公共部分（`verify-headless.mjs` 与 `capture-screenshot.mjs` 共用）。
+ * 无头 Chrome 会话的公共部分（`verify-headless.mjs`、`capture-screenshot.mjs` 与
+ * `verify-texture-parity.mjs` 共用）。
  *
  * 这里集中处理三件在这个仓库里踩过坑的事：
  *
@@ -28,11 +29,12 @@ import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/** 本工具在系统临时目录里使用的两个 profile 前缀。清扫只认这两个前缀，别的一律不碰。 */
+/** 本工具在系统临时目录里使用的三个 profile 前缀。清扫只认这几个前缀，别的一律不碰。 */
 export const PROFILE_PREFIX_HEADLESS = 'gpu-device-api-headless-';
 export const PROFILE_PREFIX_SHOT = 'gpu-device-api-shot-';
+export const PROFILE_PREFIX_PARITY = 'gpu-device-api-parity-';
 
-const OWN_PROFILE_PREFIXES = [PROFILE_PREFIX_HEADLESS, PROFILE_PREFIX_SHOT];
+const OWN_PROFILE_PREFIXES = [PROFILE_PREFIX_HEADLESS, PROFILE_PREFIX_SHOT, PROFILE_PREFIX_PARITY];
 
 /** 目录名里没有 pid（本修复之前创建的老目录）时的陈旧判定阈值：默认 6 小时。 */
 export const DEFAULT_STALE_AGE_MS = 6 * 60 * 60 * 1000;
@@ -169,7 +171,7 @@ function waitForChildExitSync(pid, timeoutMs = SYNC_EXIT_WAIT_MS) {
   }
 }
 
-/** 建一个带 pid 的 profile 目录。前缀必须是本工具登记过的两个之一。 */
+/** 建一个带 pid 的 profile 目录。前缀必须是本工具登记过的三个之一。 */
 export function createProfileDir(prefix) {
   if (!OWN_PROFILE_PREFIXES.includes(prefix)) {
     throw new Error(`[gpu-device-api] headless-chrome: unknown profile prefix "${String(prefix)}".`);
@@ -330,7 +332,7 @@ function describeAttempt(summary) {
 /**
  * 起一个无头 Chrome 会话，负责 profile 的创建、回收与 page target 的有界重试。
  *
- * 调用方传进来的 `args` 是不含 `--user-data-dir` 与 url 的固定启动参数（两个脚本的
+ * 调用方传进来的 `args` 是不含 `--user-data-dir` 与 url 的固定启动参数（各脚本的
  * 基础参数略有不同），`flags` 是命令行末尾 `--` 之后用户给的原样参数。
  */
 export function createHeadlessSession({
@@ -479,32 +481,47 @@ export function createHeadlessSession({
 /**
  * 给会话挂上所有退出路径的清理。
  *
+ * `sessions` 可以是单个会话，也可以是数组（`verify-texture-parity` 两个后端各一个会话，
+ * 一次性注册，避免同一个信号被处理两遍、错误被打印两次）。
+ *
  * `exit` 处理器里只能同步操作，所以走 `stopSync`；信号与未捕获异常都还在正常的事件循环里，
  * 走**异步**的 `session.stop()`（先等 Chrome 真的退出再删 profile，Windows 上这样才删得掉 ——
  * 实测同步删必报 EPERM），并带一个硬超时兜底，保证进程一定会退出。
  *
  * 未捕获异常 / 未处理的 Promise 拒绝都要先把原始错误原样打印出来，绝不吞掉错误信息。
  */
-export function installSessionCleanup(session, { label, log = () => {} }) {
+export function installSessionCleanup(sessions, { label, log = () => {} }) {
+  const list = Array.isArray(sessions) ? sessions : [sessions];
   let exiting = false;
+
+  /** 同步回收全部会话（`exit` 处理器里用）。单个失败不影响其它的。 */
+  function stopAllSync() {
+    for (const session of list) {
+      try {
+        session.stopSync();
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  }
 
   /** 清理然后退出；清理失败也要退出，并把失败原因打出来。 */
   function cleanupThenExit(code) {
     const guard = setTimeout(() => process.exit(code), SHUTDOWN_HARD_TIMEOUT_MS);
     void (async () => {
-      try {
-        await session.stop();
-      } catch (error) {
-        console.error(error);
+      for (const session of list) {
+        try {
+          await session.stop();
+        } catch (error) {
+          console.error(error);
+        }
       }
       clearTimeout(guard);
       process.exit(code);
     })();
   }
 
-  process.on('exit', () => {
-    session.stopSync();
-  });
+  process.on('exit', stopAllSync);
   const signals = [
     ['SIGINT', 130],
     ['SIGTERM', 143],

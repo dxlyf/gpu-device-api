@@ -16,6 +16,10 @@
  * 两个后端不能同时开（Chrome 的软件光栅化与 WebGPU 标志互斥），所以这里顺序起两次 Chrome。
  * 页面必须用 `spin=0` 固定动画角度，否则每个后端的自检时刻不同、画面本来就对不上。
  *
+ * 临时 profile（Chrome 的 `--user-data-dir`）建在系统临时目录下，由 scripts/headless-chrome.mjs
+ * 统一管理：启动时清扫陈旧残留、所有退出路径（正常 / exit / 信号 / 未捕获异常）都回收，
+ * 以及等 page target 的有界重试。历史事故见该文件头部说明。
+ *
  * 用法：
  *   node scripts/verify-texture-parity.mjs --chrome "<chrome.exe>" \
  *     --url "http://localhost:5399/examples/core-texture.html" [--tolerance 8] [--timeout 90000]
@@ -23,12 +27,20 @@
  * 退出码：0 = 两个后端的像素结论一致；1 = 不一致 / 某个后端没出结论 / 页面报错。
  */
 
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import {
+  PROFILE_PREFIX_PARITY,
+  createHeadlessSession,
+  describeKeptProfile,
+  formatSweepReport,
+  installSessionCleanup,
+  noteworthyKeptProfiles,
+  sweepStaleProfiles,
+} from './headless-chrome.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const label = '[gpu-device-api] verify-texture-parity:';
+// 诊断信息一律走 stderr，stdout 留给结论。
+const log = (message) => console.error(message);
 
 function parseArgs(argv) {
   const options = { timeout: 90000, tolerance: 8, wait: null };
@@ -73,61 +85,41 @@ function buildUrl(url, backend) {
   return parsed.toString();
 }
 
-/** 起一次无头 Chrome，等 `data-<wait>` 出现，返回整份 `data-*`。 */
-async function collect(url, flags, port) {
-  const profileDir = mkdtempSync(join(tmpdir(), 'gpu-device-api-parity-'));
-  const chrome = spawn(
-    options.chrome,
-    [
+// 启动时先清扫：上一次被掐断（或删失败）的运行留下的 profile。
+// 只认本工具自己的三个前缀；所有者进程还活着的目录一律跳过（并行运行的另一个调用）。
+const sweep = sweepStaleProfiles();
+if (sweep.scanned > 0) log(`${label} 启动清扫：${formatSweepReport(sweep)}。`);
+for (const kept of noteworthyKeptProfiles(sweep)) log(`${label} 清扫跳过 — ${describeKeptProfile(kept)}`);
+
+// 两个后端各一个会话（顺序跑，端口错开）。两个会话一次性注册进退出清理：
+// 同一个信号只会被处理一遍，错误也只会打印一次。
+const sessions = BACKENDS.map((entry, index) =>
+  createHeadlessSession({
+    label,
+    chrome: options.chrome,
+    args: [
       '--headless=new',
       '--disable-gpu-sandbox',
       '--no-sandbox',
-      `--remote-debugging-port=${port}`,
+      `--remote-debugging-port=${9500 + index}`,
       '--remote-allow-origins=*',
-      `--user-data-dir=${profileDir}`,
-      ...flags,
-      url,
     ],
-    { stdio: 'ignore' },
-  );
+    flags: entry.flags,
+    url: buildUrl(options.url, entry.backend),
+    port: 9500 + index,
+    profilePrefix: PROFILE_PREFIX_PARITY,
+    timeoutMs: options.timeout,
+    log,
+  }),
+);
+installSessionCleanup(sessions, { label, log });
 
-  let socket = null;
-  const cleanup = () => {
-    try {
-      socket?.close();
-    } catch {
-      /* 关闭失败无所谓：进程马上退出 */
-    }
-    try {
-      chrome.kill();
-    } catch {
-      /* 同上 */
-    }
-    try {
-      rmSync(profileDir, { recursive: true, force: true });
-    } catch {
-      /* 临时 profile 删不掉不影响结论 */
-    }
-  };
-
+/** 起一次无头 Chrome，等 `data-<wait>` 出现，返回整份 `data-*`。 */
+async function collect(index) {
+  const session = sessions[index];
+  const target = await session.start();
+  let socket = new WebSocket(target.webSocketDebuggerUrl);
   try {
-    // 等 Chrome 暴露 page target。
-    const deadline = Date.now() + 30000;
-    let target = null;
-    while (Date.now() < deadline) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-        const targets = await response.json();
-        target = targets.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl) ?? null;
-        if (target) break;
-      } catch {
-        /* Chrome 还没起来 */
-      }
-      await sleep(200);
-    }
-    if (!target) throw new Error('[gpu-device-api] verify-texture-parity: Chrome did not expose a page target.');
-
-    socket = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
       socket.addEventListener('open', resolve, { once: true });
       socket.addEventListener('error', reject, { once: true });
@@ -163,7 +155,12 @@ async function collect(url, flags, port) {
     }
     return data;
   } finally {
-    cleanup();
+    try {
+      socket?.close();
+    } catch {
+      // 关闭失败无所谓：这个后端的结论已经拿到了。
+    }
+    await session.stop();
   }
 }
 
@@ -180,8 +177,7 @@ let failed = false;
 
 for (let index = 0; index < BACKENDS.length; index += 1) {
   const entry = BACKENDS[index];
-  const url = buildUrl(options.url, entry.backend);
-  const data = await collect(url, entry.flags, 9500 + index);
+  const data = await collect(index);
   results.push({ backend: entry.backend, data });
 
   const reported = data.exampleBackend ?? '(none)';

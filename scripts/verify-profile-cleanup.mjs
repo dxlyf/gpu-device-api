@@ -10,6 +10,9 @@
  * - 没有 pid 的老目录：够旧才回收，太新就留着（无法证明它没在用）。
  * - 不是本工具前缀的目录 → 一个字节都不许碰。
  *
+ * 三个前缀（headless / shot / parity）都要覆盖：任何一个是「清扫盲区」，
+ * 它就会像历史事故那样悄悄堆到几十 GB。
+ *
  * 所有目录都建在系统临时目录下的沙盒里（`%TEMP%/gpu-device-api-sweep-test-*`），
  * 跑完自己清掉，不会碰真实的 profile。
  *
@@ -23,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   PROFILE_PREFIX_HEADLESS,
+  PROFILE_PREFIX_PARITY,
   PROFILE_PREFIX_SHOT,
   isProcessAlive,
   profileOwnerPid,
@@ -70,6 +74,9 @@ try {
     dead: makeProfile(sandbox, `${PROFILE_PREFIX_HEADLESS}${dead}-DeadOwner`),
     legacyOld: makeProfile(sandbox, `${PROFILE_PREFIX_SHOT}LegacyOld`, { ageMs: 24 * HOUR }),
     legacyFresh: makeProfile(sandbox, `${PROFILE_PREFIX_SHOT}LegacyFresh`),
+    // parity 前缀单独立项：它曾经是清扫盲区（verify-texture-parity 自己漏自己的）。
+    parityLive: makeProfile(sandbox, `${PROFILE_PREFIX_PARITY}${livePid}-LiveOwner`),
+    parityDead: makeProfile(sandbox, `${PROFILE_PREFIX_PARITY}${dead}-DeadOwner`),
     foreign: makeProfile(sandbox, 'not-gpu-device-api-profile'),
   };
 
@@ -78,6 +85,7 @@ try {
   check('死的 pid 判定已死', isProcessAlive(dead) === false, `pid=${dead}`);
   check('老格式名字解析不出 pid', profileOwnerPid(cases.legacyOld.name) === null);
   check('新格式名字解析出 pid', profileOwnerPid(cases.dead.name) === dead);
+  check('parity 前缀也解析得出 pid', profileOwnerPid(cases.parityDead.name) === dead);
 
   const report = sweepStaleProfiles({ dir: sandbox, staleAgeMs: 6 * HOUR });
   const removed = new Set(report.removed.map((entry) => entry.name));
@@ -92,19 +100,25 @@ try {
   };
 
   console.log('[verify-profile-cleanup] 清扫结果');
-  check('扫描到 4 个本工具目录（外来的不算）', report.scanned === 4, `scanned=${report.scanned}`);
+  check('扫描到 6 个本工具目录（外来的不算）', report.scanned === 6, `scanned=${report.scanned}`);
   check('回收了「所有者已死」的目录', removed.has(cases.dead.name));
   check('回收了「够旧的老目录」', removed.has(cases.legacyOld.name));
   check('保留了「所有者还活着」的目录', !removed.has(cases.live.name) && exists(cases.live.name), keptReasons.get(cases.live.name));
   check('保留了「太新且没有 pid」的老目录', !removed.has(cases.legacyFresh.name) && exists(cases.legacyFresh.name), keptReasons.get(cases.legacyFresh.name));
+  check('parity 前缀：所有者已死 → 回收', removed.has(cases.parityDead.name) && !exists(cases.parityDead.name));
+  check('parity 前缀：所有者还活着 → 保留', !removed.has(cases.parityLive.name) && exists(cases.parityLive.name), keptReasons.get(cases.parityLive.name));
   check('完全没碰不是本工具前缀的目录', exists(cases.foreign.name) && !removed.has(cases.foreign.name));
-  check('报告的释放字节数与实际内容一致', report.removedBytes === cases.dead.bytes + cases.legacyOld.bytes, `removedBytes=${report.removedBytes}`);
+  check(
+    '报告的释放字节数与实际内容一致',
+    report.removedBytes === cases.dead.bytes + cases.legacyOld.bytes + cases.parityDead.bytes,
+    `removedBytes=${report.removedBytes}`,
+  );
   check('被回收的目录确实从磁盘上消失', !exists(cases.dead.name) && !exists(cases.legacyOld.name));
 
   console.log('[verify-profile-cleanup] 再扫一次应当无事可做');
   const second = sweepStaleProfiles({ dir: sandbox, staleAgeMs: 6 * HOUR });
   check('第二次清扫回收 0 个', second.removed.length === 0, `removed=${second.removed.length}`);
-  check('第二次清扫仍不碰外来目录与活目录', exists(cases.foreign.name) && exists(cases.live.name));
+  check('第二次清扫仍不碰外来目录与活目录', exists(cases.foreign.name) && exists(cases.live.name) && exists(cases.parityLive.name));
 } finally {
   rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

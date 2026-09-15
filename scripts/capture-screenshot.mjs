@@ -64,7 +64,7 @@ const label = '[gpu-device-api] capture-screenshot:';
 const log = (message) => console.error(message);
 
 // 启动时先清扫：上一次被掐断（或删失败）的运行留下的 profile。
-// 只认本工具自己的两个前缀；所有者进程还活着的目录一律跳过（并行运行的另一个调用）。
+// 只认本工具自己的三个前缀；所有者进程还活着的目录一律跳过（并行运行的另一个调用）。
 const sweep = sweepStaleProfiles();
 if (sweep.scanned > 0) log(`${label} 启动清扫：${formatSweepReport(sweep)}。`);
 for (const kept of noteworthyKeptProfiles(sweep)) log(`${label} 清扫跳过 — ${describeKeptProfile(kept)}`);
