@@ -11,3 +11,4 @@ examples/*.png
 !.tmp-probe/
 .tmp-2a/
 .tmp-2b/
+.tmp-04/

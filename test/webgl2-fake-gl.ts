@@ -55,6 +55,13 @@ export const GL = {
   QUERY_RESULT: 0x8866,
   QUERY_RESULT_AVAILABLE: 0x8867,
   NONE: 0,
+  UNPACK_ALIGNMENT: 0x0cf5,
+  UNPACK_ROW_LENGTH: 0x0cf2,
+  UNPACK_IMAGE_HEIGHT: 0x806e,
+  UNPACK_SKIP_ROWS: 0x0cf3,
+  UNPACK_SKIP_PIXELS: 0x0cf4,
+  UNPACK_SKIP_IMAGES: 0x806d,
+  PACK_ALIGNMENT: 0x0d05,
   TEXTURE_COMPARE_MODE: 0x884c,
   TEXTURE_COMPARE_FUNC: 0x884d,
   COMPARE_REF_TO_TEXTURE: 0x884e,
@@ -78,6 +85,13 @@ export interface FakeWebGL2Options {
    * （`FRAMEBUFFER_INCOMPLETE_MULTISAMPLE`）。有了这个开关才能精确模拟那种情形。
    */
   incompleteOnLatestFramebufferOnly?: boolean;
+  /**
+   * `getContextAttributes()` 的返回值。
+   *
+   * GL context 的 `alpha` / `premultipliedAlpha` / `antialias` / `depth` 都是**创建时**定下的，
+   * `configure()` 改不了 —— 所以画布路径必须读回来对照，这个开关用来模拟不同的 context。
+   */
+  contextAttributes?: WebGLContextAttributes;
 }
 
 export interface FakeWebGL2 {
@@ -86,6 +100,8 @@ export interface FakeWebGL2 {
   readonly calls: string[];
   /** 记下最后一次 `blitFramebuffer` 的参数（没有则为 null）。 */
   lastBlit: readonly number[] | null;
+  /** 与 `gl` 一起被造出来的假 canvas（方便把同一个 canvas 交给 device 与 canvasContext）。 */
+  readonly canvasOfDevice: HTMLCanvasElement;
   readonly counters: {
     buffers: number;
     textures: number;
@@ -128,6 +144,7 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
     gl: null as unknown as WebGL2RenderingContext,
     calls,
     lastBlit: null,
+    canvasOfDevice: createFakeCanvas().canvas,
     counters: {
       buffers: 0,
       textures: 0,
@@ -149,6 +166,10 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
   let boundDrawFramebuffer: unknown = null;
   let boundRenderbuffer: unknown = null;
   let latestFramebuffer: unknown = null;
+  /** 当前绑定的纹理（按目标记），用来把 `texSubImage3D` 归到某张纹理上。 */
+  const boundTextures = new Map<number, unknown>();
+  /** 当前的像素解包参数（`UNPACK_*`），供 `texSubImage3D` 的记录使用。 */
+  const unpack = { rowLength: 0, imageHeight: 0, alignment: 4 };
 
   const gl = {
     ...GL,
@@ -161,13 +182,56 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
       return texture;
     },
     deleteTexture: (texture: unknown) => record(`deleteTexture:${nameOf(texture)}`),
-    bindTexture: (target: number, texture: unknown) => record(`bindTexture:${target}:${nameOf(texture)}`),
+    bindTexture: (target: number, texture: unknown) => {
+      boundTextures.set(target, texture);
+      record(`bindTexture:${target}:${nameOf(texture)}`);
+    },
     activeTexture: (unit: number) => record(`activeTexture:${unit}`),
     texStorage2D: (target: number, levels: number) => record(`texStorage2D:${target}:${levels}`),
     texStorage3D: (target: number, levels: number) => record(`texStorage3D:${target}:${levels}`),
     texStorage2DMultisample: (target: number, samples: number) =>
       record(`texStorage2DMultisample:${target}:${samples}`),
     texParameteri: (target: number, pname: number) => record(`texParameteri:${target}:${pname}`),
+    pixelStorei: (pname: number, value: number) => {
+      if (pname === GL.UNPACK_ROW_LENGTH) unpack.rowLength = value;
+      else if (pname === GL.UNPACK_IMAGE_HEIGHT) unpack.imageHeight = value;
+      else if (pname === GL.UNPACK_ALIGNMENT) unpack.alignment = value;
+      record(`pixelStorei:${pname}:${value}`);
+    },
+    texSubImage3D: (
+      target: number,
+      level: number,
+      x: number,
+      y: number,
+      z: number,
+      width: number,
+      height: number,
+      depth: number,
+      format: number,
+      type: number,
+      data: ArrayBufferView,
+    ) =>
+      record(
+        `texSubImage3D:${nameOf(boundTextures.get(target))}:level=${level}:xyz=${x},${y},${z}:` +
+          `size=${width}x${height}x${depth}:format=${format}:type=${type}:` +
+          `rowLength=${unpack.rowLength}:imageHeight=${unpack.imageHeight}:` +
+          `alignment=${unpack.alignment}:bytes=${data.byteLength}`,
+      ),
+    texSubImage2D: (
+      target: number,
+      level: number,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      format: number,
+      type: number,
+      data: ArrayBufferView,
+    ) =>
+      record(
+        `texSubImage2D:${nameOf(boundTextures.get(target))}:level=${level}:xy=${x},${y}:` +
+          `size=${width}x${height}:format=${format}:type=${type}:bytes=${data.byteLength}`,
+      ),
 
     /* ---- buffer -------------------------------------------------------------------------- */
     createBuffer: () => {
@@ -290,6 +354,19 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
     /* ---- 其它（渲染通道会用到，这里只需要存在） --------------------------------------------- */
     getError: () => GL.NO_ERROR,
     getExtension: () => null,
+    getContextAttributes: () => ({
+      alpha: true,
+      depth: true,
+      stencil: false,
+      antialias: true,
+      premultipliedAlpha: true,
+      preserveDrawingBuffer: false,
+      desynchronized: false,
+      powerPreference: 'default',
+      failIfMajorPerformanceCaveat: false,
+      xrCompatible: false,
+      ...(options.contextAttributes ?? {}),
+    }),
     viewport: (x: number, y: number, width: number, height: number) =>
       record(`viewport:${x},${y},${width},${height}`),
     scissor: (x: number, y: number, width: number, height: number) =>
