@@ -66,6 +66,30 @@ import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2Texture } from '../resources/WebGL2Texture.js';
 import type { WebGL2TextureView } from '../resources/WebGL2TextureView.js';
 
+/**
+ * 清屏用的共享暂存数组（#35）。
+ *
+ * 为什么可以共享：`clearBufferfv` 会**同步**把数组内容拷进 GL，调用返回之后这块数组
+ * 与 GPU 状态再无关系，所以「每次清屏 new 一块」是纯粹的白付 —— 而每个渲染通道建立时
+ * 都要清一次屏（多附件时每附件一次），长期运行就是每帧几块到十几块小数组。
+ *
+ * 唯一的使用纪律：只在本文件与 `WebGL2RenderPassEncoder` 的清屏代码里**临时写入后立刻调用**，
+ * 不要跨调用保存它，也不要把它交给用户代码（那样才会出现别名问题）。
+ * 这两块数组与 2a 的共享零缓冲（`WebGL2CommandEncoder.clearBuffer`）是同一个思路。
+ */
+export const CLEAR_COLOR_SCRATCH: Float32Array = new Float32Array(4);
+/** 一维深度清屏值（`clearBufferfv(DEPTH, 0, ...)` 只取第一个元素）。 */
+export const CLEAR_DEPTH_SCRATCH: Float32Array = new Float32Array(1);
+
+/** 把 `[r, g, b, a]` 写进共享的颜色暂存数组并返回它（避免每次清屏都分配）。 */
+export function writeClearColor(r: number, g: number, b: number, a: number): Float32Array {
+  CLEAR_COLOR_SCRATCH[0] = r;
+  CLEAR_COLOR_SCRATCH[1] = g;
+  CLEAR_COLOR_SCRATCH[2] = b;
+  CLEAR_COLOR_SCRATCH[3] = a;
+  return CLEAR_COLOR_SCRATCH;
+}
+
 export interface WebGL2RenderTargetOptions {
   gl: WebGL2RenderingContext;
   state: GlStateCache;
@@ -327,7 +351,8 @@ export class WebGL2RenderTarget implements RenderTarget {
       this.state.setScissor(false, 0, 0, this._width, this._height);
       if (clear.loadOp !== 'load') {
         const [r, g, b, a] = resolveClearColor(clear.clearColor);
-        const values = new Float32Array([r, g, b, a]);
+        // 复用共享暂存数组（`clearBufferfv` 立刻拷贝，多附件因此可以共用同一块）。
+        const values = writeClearColor(r, g, b, a);
         for (let index = 0; index < this.colorTextures.length; index++) {
           gl.clearBufferfv(gl.COLOR, index, values);
         }
@@ -340,7 +365,8 @@ export class WebGL2RenderTarget implements RenderTarget {
         if (format.stencil) {
           gl.clearBufferfi(gl.DEPTH_STENCIL, 0, clear.clearDepth ?? 1, clear.clearStencil ?? 0);
         } else {
-          gl.clearBufferfv(gl.DEPTH, 0, new Float32Array([clear.clearDepth ?? 1]));
+          CLEAR_DEPTH_SCRATCH[0] = clear.clearDepth ?? 1;
+          gl.clearBufferfv(gl.DEPTH, 0, CLEAR_DEPTH_SCRATCH);
         }
         this.state.invalidate();
       }

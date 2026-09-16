@@ -21,6 +21,46 @@ export interface UniformBufferBinding {
 }
 
 /**
+ * 混合状态里**参与去重比较**的全部分量（GL 枚举），与 `ResolvedRenderState.blend` 同形。
+ *
+ * 它同时是 {@link GlStateCache.setBlend} 去重键的字段清单：下面的 {@link UncomparedBlendField}
+ * 用 `keyof` 对它做编译期穷尽检查，所以「加了一个字段却忘了比较」不可能编译通过。
+ */
+export interface GlBlendState {
+  readonly colorSrc: number;
+  readonly colorDst: number;
+  readonly colorOp: number;
+  readonly alphaSrc: number;
+  readonly alphaDst: number;
+  readonly alphaOp: number;
+}
+
+/**
+ * 编译期穷尽检查：{@link GlBlendState} 里**没有**参与 {@link GlStateCache.setBlend} 比较的字段。
+ *
+ * 必须是空集（`never`）。给 `GlBlendState`（以及别名为它的 `ResolvedBlendState`）加字段时，
+ * 只要忘了在 `setBlend` 里比较，这里的类型就不再是 `never`，
+ * {@link assertAllBlendFieldsCompared} 的调用会立刻编译失败。
+ *
+ * 为什么值得加这道编译期闸门：漏一个字段 = 状态被误判成「没变」而漏下发，症状是
+ * 「换条管线之后画面偶尔不对」，没有异常也没有日志，只有像素是错的。
+ */
+type UncomparedBlendField = Exclude<
+  keyof GlBlendState,
+  'colorSrc' | 'colorDst' | 'colorOp' | 'alphaSrc' | 'alphaDst' | 'alphaOp'
+>;
+
+/**
+ * 只用来承载编译期检查：类型参数必须满足 `never`，`UncomparedBlendField` 非空时调用不成立。
+ * 函数体永远不执行（模块求值阶段调用一次，什么也不做）。
+ */
+function assertAllBlendFieldsCompared<T extends never>(): T | null {
+  return null;
+}
+
+assertAllBlendFieldsCompared<UncomparedBlendField>();
+
+/**
  * GL 枚举表示的单面模板状态：比较函数 + 三种操作。
  *
  * 正面与背面各有一份 —— GLES 3.0 的 `stencilFuncSeparate` / `stencilOpSeparate` 本来就支持
@@ -70,7 +110,21 @@ export class GlStateCache {
   private copyWriteBuffer: WebGLBuffer | null = null;
   private indexBuffer: WebGLBuffer | null = null;
 
-  private blendSignature: string | null = null;
+  /**
+   * 上一次真正下发的混合状态。
+   *
+   * `blendEnabled === null` 表示**未知**（从未下发过）；`false` 表示已下发 `disable(BLEND)`。
+   * 关闭时下面六个分量**不再有意义**（GL 在 `BLEND` 关闭期间不会读它们），所以比较时跳过；
+   * 重新打开时 `enabled` 一定与上一次不同，于是会完整重下发 `enable` + `blendFuncSeparate` +
+   * `blendEquationSeparate` —— 与改前用 `'0'` / `'1:...'` 两条不同签名得到的语义完全一致。
+   */
+  private blendEnabled: boolean | null = null;
+  private blendColorSrc = 0;
+  private blendColorDst = 0;
+  private blendColorOp = 0;
+  private blendAlphaSrc = 0;
+  private blendAlphaDst = 0;
+  private blendAlphaOp = 0;
   private blendConstant: [number, number, number, number] | null = null;
   private colorMask: [boolean, boolean, boolean, boolean] | null = null;
 
@@ -150,7 +204,13 @@ export class GlStateCache {
     this.copyReadBuffer = null;
     this.copyWriteBuffer = null;
     this.indexBuffer = null;
-    this.blendSignature = null;
+    this.blendEnabled = null;
+    this.blendColorSrc = 0;
+    this.blendColorDst = 0;
+    this.blendColorOp = 0;
+    this.blendAlphaSrc = 0;
+    this.blendAlphaDst = 0;
+    this.blendAlphaOp = 0;
     this.blendConstant = null;
     this.colorMask = null;
     this.depthEnabled = null;
@@ -423,7 +483,16 @@ export class GlStateCache {
 
   /**
    * 设置混合状态。参数是 GL 枚举（由 `glEnumMap` 翻译得到）。
-   * 用一条签名字符串做比较，避免为每个字段单独维护缓存。
+   *
+   * 去重（#31）：把各分量**逐个按数字比较**，而不是每次拼一条签名字符串。
+   * 改前每次调用都要构造 `1:c:s:o:as:ad:ao` 这条模板字符串（7 段拼接 + 一次字符串比较），
+   * 而混合状态是**变体不变量** —— 同一条管线连画几千次时这是纯粹的白付；现在每次调用
+   * 只是 7 次数字/布尔比较，零分配。
+   *
+   * 正确性比性能重要得多：**判据必须覆盖每一个参与下发的字段**。漏一个就会出现
+   * 「状态被误判成没变 → 漏下发 → 随机画面错误」。这件事由编译期闸门兜住
+   * （见 {@link UncomparedBlendField}）：给 {@link GlBlendState} 加字段而忘了在这里比较，
+   * 代码直接编译不过。
    */
   setBlend(
     enabled: boolean,
@@ -434,10 +503,18 @@ export class GlStateCache {
     alphaDst: number,
     alphaOp: number,
   ): void {
-    const signature = enabled
-      ? `1:${colorSrc}:${colorDst}:${colorOp}:${alphaSrc}:${alphaDst}:${alphaOp}`
-      : '0';
-    if (this.blendSignature === signature) return;
+    if (
+      this.blendEnabled === enabled &&
+      (!enabled ||
+        (this.blendColorSrc === colorSrc &&
+          this.blendColorDst === colorDst &&
+          this.blendColorOp === colorOp &&
+          this.blendAlphaSrc === alphaSrc &&
+          this.blendAlphaDst === alphaDst &&
+          this.blendAlphaOp === alphaOp))
+    ) {
+      return;
+    }
     const gl = this.gl;
     if (enabled) {
       gl.enable(gl.BLEND);
@@ -446,7 +523,14 @@ export class GlStateCache {
     } else {
       gl.disable(gl.BLEND);
     }
-    this.blendSignature = signature;
+    // 存快照（六个数字），不持有调用方的对象引用：解析结果是共享的变体对象，不能被这里绑住。
+    this.blendEnabled = enabled;
+    this.blendColorSrc = colorSrc;
+    this.blendColorDst = colorDst;
+    this.blendColorOp = colorOp;
+    this.blendAlphaSrc = alphaSrc;
+    this.blendAlphaDst = alphaDst;
+    this.blendAlphaOp = alphaOp;
   }
 
   setBlendConstant(color: readonly [number, number, number, number]): void {

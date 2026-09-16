@@ -13,6 +13,7 @@
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { validateVertexBufferLayout, vertexBufferLayoutsKey } from '../../core/pipeline/VertexLayout.js';
+import { createPipelineCache } from '../../core/pipeline/PipelineCache.js';
 import type { VertexBufferLayout } from '../../core/pipeline/VertexLayout.js';
 import type {
   RenderPipeline,
@@ -50,8 +51,8 @@ export interface ResolvedVariant {
    * 否则会拿描述里的旧布局去建 VAO，属性指针就全错了。
    */
   readonly vertexLayouts: readonly VertexBufferLayout[];
-  /** 该形态下已经建好的 VAO，键里含顶点缓冲组合。 */
-  readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
+  /** 该形态下已经建好的 VAO，键里含顶点缓冲组合；有上限的 LRU（见 {@link VertexArrayStore}）。 */
+  readonly vertexArrays: VertexArrayStore;
   /**
    * 最近一次 VAO 查询的结果（一次只记一条）。
    *
@@ -61,6 +62,37 @@ export interface ResolvedVariant {
    */
   vertexArrayLookup: { revision: number; vertexArray: WebGLVertexArrayObject } | null;
 }
+
+/**
+ * VAO 缓存需要的容器能力。
+ *
+ * 真正的实现是 core 的 LRU（`createPipelineCache`，带上限 + 最近使用刷新，见 {@link resolveVariant}）。
+ * 类型写成结构化的而不是直接写 `PipelineCache<WebGLVertexArrayObject>`：这里只用到
+ * 「按键取值 / 存值 / 报大小 / 遍历 / 清空」这几个操作，写成结构化形式后测试里的替身
+ * （例如 `new Map()`）也能满足（`values()` 用 `Iterable` 是因为 `Map.values()` 是迭代器、
+ * `PipelineCache.values()` 是数组，两者都满足）。
+ */
+export interface VertexArrayStore {
+  get(key: string): WebGLVertexArrayObject | undefined;
+  set(key: string, value: WebGLVertexArrayObject): unknown;
+  has(key: string): boolean;
+  delete(key: string): boolean;
+  clear(): void;
+  readonly size: number;
+  values(): Iterable<WebGLVertexArrayObject>;
+}
+
+/**
+ * 每个管线变体缓存的 VAO 上限。
+ *
+ * 为什么必须有上限（#33）：这个缓存键里含**顶点缓冲对象与索引缓冲**，长期运行的程序
+ * （例如每帧换一块顶点缓冲的粒子系统）会让条目数无限增长，而每个 VAO 都占着驱动侧的状态对象。
+ * 复用 `createPipelineCache` 的 LRU 之后，最坏情况是「多建几个 VAO」，不会再无界增长。
+ *
+ * 取 64 的理由与 `FramebufferCache` 的默认上限一致：正常场景里「一条管线 × 一个渲染目标形态」
+ * 同时用到的顶点布局组合远少于此，而 64 个 VAO 的状态开销可以忽略。
+ */
+export const DEFAULT_VERTEX_ARRAY_CACHE_LIMIT = 64;
 
 /** 一个顶点缓冲槽的绑定内容。 */
 export interface VertexBufferBinding {
@@ -74,6 +106,11 @@ export interface WebGL2RenderPipelineOptions {
   gl: WebGL2RenderingContext;
   state: GlStateCache;
   limits: { maxVertexAttributes: number; maxVertexBufferArrayStride: number };
+  /**
+   * 每个变体的 VAO 缓存上限（LRU）。默认 {@link DEFAULT_VERTEX_ARRAY_CACHE_LIMIT}。
+   * 必须是 `>= 1` 的整数 —— 见 {@link WebGL2RenderPipeline.evictVertexArray} 的安全性论证（第 2 条）。
+   */
+  vertexArrayCacheLimit?: number;
   /**
    * 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
    * （见 `WebGL2Device.untrack`）。不传时为空操作，管线仍可独立使用。
@@ -90,6 +127,8 @@ export class WebGL2RenderPipeline implements RenderPipeline {
   private readonly gl: WebGL2RenderingContext;
   private readonly state: GlStateCache;
   private readonly limits: WebGL2RenderPipelineOptions['limits'];
+  /** 每个变体的 VAO 缓存上限（构造时校验过，一定 `>= 1`）。 */
+  private readonly vertexArrayCacheLimit: number;
   private readonly onDispose: ((pipeline: WebGL2RenderPipeline) => void) | null;
   private readonly program: CompiledProgram;
   private readonly plan: WebGLBindingPlan | null;
@@ -111,6 +150,15 @@ export class WebGL2RenderPipeline implements RenderPipeline {
     }
 
     this.label = descriptor.label ?? nextId('renderPipeline');
+    const cacheLimit = options.vertexArrayCacheLimit ?? DEFAULT_VERTEX_ARRAY_CACHE_LIMIT;
+    // 上限 0 会让「刚建好、正绑着的那个 VAO」在自己插入时就被淘汰（见 evictVertexArray 第 2 条），
+    // 所以这里明确拦下，而不是让那种情况悄悄发生。
+    if (!Number.isInteger(cacheLimit) || cacheLimit < 1) {
+      throw new ValidationError(
+        `[gpu-device-api] vertexArrayCacheLimit 必须是 >= 1 的整数，实际是 ${String(cacheLimit)}。`,
+      );
+    }
+    this.vertexArrayCacheLimit = cacheLimit;
     this.descriptor = descriptor;
     this.layout = layout;
     this.vertexLayouts = descriptor.vertex.buffers ? [...descriptor.vertex.buffers] : null;
@@ -195,11 +243,47 @@ export class WebGL2RenderPipeline implements RenderPipeline {
       depthFormat,
       sampleCount,
       vertexLayouts,
-      vertexArrays: new Map(),
+      /*
+       * 带上限的 LRU（#33）：改前这里是裸 `Map`，只 `set` 从不淘汰。
+       *
+       * 回调里引用的 `resolved` 在对象字面量求值时还没绑定，但这个回调只可能在
+       * `acquireVertexArray()` 之后触发（那时 `resolved` 早已初始化），所以是安全的。
+       */
+      vertexArrays: createPipelineCache<WebGLVertexArrayObject>(this.vertexArrayCacheLimit, (vertexArray) => {
+        this.evictVertexArray(resolved, vertexArray);
+      }),
       vertexArrayLookup: null,
     };
     this.variantCache.set(key, resolved);
     return resolved;
+  }
+
+  /**
+   * LRU 淘汰一个 VAO 时的收尾（#33）。
+   *
+   * ## 为什么「淘汰一个正在使用的 VAO」不会让后续 draw 用错绑定点（安全性论证）
+   *
+   * 1. GLES 3.0 里 `deleteVertexArray` 删除**当前绑定**的 VAO 会把该绑定点复位
+   *    （绑定变成「没有 VAO」，默认 VAO 生效）。所以真正的危险不是删除本身，
+   *    而是「删除之后还有谁以为它还绑着」—— 那会让后续 draw 跳过重新绑定。
+   * 2. 淘汰只发生在 `PipelineCache.set()` 里，而 `acquireVertexArray()` 的顺序一定是
+   *    **先** `state.bindVertexArray(新建的 VAO)`（`gl.createVertexArray()` 之后立刻绑、
+   *    再录属性和索引缓冲）、**后** `variant.vertexArrays.set(...)`。LRU 淘汰的是 `Map` 里
+   *    最旧的那个，刚插入的排在队尾；在构造时已强制 `limit >= 1` 的前提下，
+   *    被淘汰的**永远不是**当前绑定的那个。最坏情况只是「多建一个 VAO」。
+   * 3. 会残留「以为还绑着」的地方只有两处，都在下面处理掉了：
+   *    - {@link ResolvedVariant.vertexArrayLookup}：这条快速路径**绕过**缓存表直接返回上次的 VAO，
+   *      被淘汰后它可能仍指着已删除的对象 —— 必须清掉，否则下一次同版本的 draw 会拿它去绑定。
+   *    - `GlStateCache.vertexArray`：状态缓存里的「当前绑定」记录。GL 的删除已经解绑，
+   *      缓存若不同步就会谎称「还绑着」，后续 draw 会跳过 `bindVertexArray`（不会报错，只是画错）。
+   * 4. 被淘汰的键下次 `acquireVertexArray()` 会未命中并重建一个新对象，而 `bindVertexArray()`
+   *    是按对象身份比较的，新旧不同 → 一定重新下发。所以「淘汰正在使用的 VAO」是安全的。
+   */
+  private evictVertexArray(variant: ResolvedVariant, vertexArray: WebGLVertexArrayObject): void {
+    const lookup = variant.vertexArrayLookup;
+    if (lookup !== null && lookup.vertexArray === vertexArray) variant.vertexArrayLookup = null;
+    if (this.state.currentVertexArray === vertexArray) this.state.bindVertexArray(null);
+    this.gl.deleteVertexArray(vertexArray);
   }
 
   /** core 接口要求的 `resolve`；WebGL2 下它只做一次形态缓存查询。 */
@@ -351,7 +435,9 @@ export class WebGL2RenderPipeline implements RenderPipeline {
     // program 由 ProgramCache 统一持有（可能被多条管线共享），这里只释放本管线独占的 VAO。
     for (const variant of this.variantCache.values()) {
       for (const vertexArray of variant.vertexArrays.values()) {
-        this.gl.deleteVertexArray(vertexArray);
+        // 走同一套收尾（而不是直接 deleteVertexArray）：被删的那一个可能正是当前绑定的 VAO，
+        // GL 会把它解绑，必须让状态缓存同步，否则释放之后紧接着的 draw 会以为还绑着它。
+        this.evictVertexArray(variant, vertexArray);
       }
       variant.vertexArrays.clear();
       // 快速路径的记忆指向的 VAO 刚被删掉，必须一起清，否则下次 draw 会拿到已删除的对象。

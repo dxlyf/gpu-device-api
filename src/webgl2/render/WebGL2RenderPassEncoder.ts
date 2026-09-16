@@ -49,10 +49,29 @@ import type {
   VertexBufferBinding,
 } from '../pipeline/WebGL2RenderPipeline.js';
 import type { RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
-import { webgl2RenderTargetOfView } from './WebGL2RenderTarget.js';
+import { webgl2RenderTargetOfView, CLEAR_DEPTH_SCRATCH, writeClearColor } from './WebGL2RenderTarget.js';
 import type { WebGL2RenderTarget } from './WebGL2RenderTarget.js';
 import { isDefaultFramebufferView } from '../WebGL2CanvasContext.js';
 import type { FramebufferCache } from './framebuffer-cache.js';
+
+/**
+ * 两个解析后的清屏颜色是否相同（#35，取代原来的 `JSON.stringify` 比较）。
+ *
+ * 逐分量按数值比较；`NaN` 视为相等 —— 改前的字符串比较里 `JSON.stringify(NaN)` 也是 `'null'`，
+ * 两个 `NaN` 同样会被判成一致，这里保持同样的结论。`-0` 与 `0` 用 `===` 也判相等，
+ * 与 `JSON.stringify(-0) === '0'` 一致。
+ */
+function sameClearColor(
+  a: readonly [number, number, number, number],
+  b: readonly [number, number, number, number],
+): boolean {
+  for (let index = 0; index < 4; index += 1) {
+    const left = a[index];
+    const right = b[index];
+    if (left !== right && !(Number.isNaN(left) && Number.isNaN(right))) return false;
+  }
+  return true;
+}
 
 /**
  * 动态槽位列表的兜底常量：`dynamicBlocksByGroup` 里每个 group 都有条目，理论上取不到空，
@@ -531,6 +550,20 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
    * 清屏参数从附件列表归并而来：GL 的 `clearBuffer*` 对同一帧的所有颜色附件用同一个颜色
    * （见 `WebGL2RenderTarget.bind`），所以这里要求各附件的 `loadOp` / `clearValue` 一致，
    * 不一致就明确报错，而不是悄悄只按第一个附件清屏。
+   *
+   * 比较用**解析后的 RGBA 分量**，不再拼 `JSON.stringify`（#35）：改前每次比较要构造两条
+   * JSON 字符串，而且判据是「字面量形状」——`'#ff0000'` 与 `0xff0000`、`[1,0,0]` 这几种写法
+   * 指向同一个颜色却会被判成「不一致」而报错。清屏真正用的值是 `resolveClearColor` 的结果，
+   * 所以按那个结果逐分量比较才是正确的等价关系。
+   *
+   * 逐字段等价性（含 `undefined`）：
+   * - 「第一个**有值**的附件说了算」这条改前的判据（`clearValue === undefined`）原样保留 ——
+   *   前导的缺省值不会被当成一个待比较的颜色，而是继续看后面的附件。
+   * - 缺省值解析出来是 `[0, 0, 0, 1]`（默认黑），所以「缺省 vs 显式黑色」不再报错，
+   *   而「缺省 vs 显式红」照样报错。前者是有意的放宽（两者的清屏结果本来就相同），
+   *   后者与改前一致。
+   * - `NaN` 分量视为相等：改前的字符串比较里 `JSON.stringify(NaN)` 也是 `'null'`，
+   *   两个 `NaN` 同样会被判成一致。
    */
   private beginMultisampleTargetPass(
     descriptor: RenderPassDescriptor,
@@ -538,6 +571,8 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
   ): void {
     let loadOp: LoadOp = 'clear';
     let clearValue: Color | undefined;
+    /** `clearValue` 解析出来的 RGBA；`null` 表示还没有确定下来的颜色。 */
+    let resolvedClear: [number, number, number, number] | null = null;
     for (const attachment of descriptor.colorAttachments) {
       if (!attachment) continue;
       const attachmentLoadOp = attachment.loadOp ?? 'clear';
@@ -545,8 +580,14 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
         loadOp = 'load';
         continue;
       }
-      if (clearValue === undefined) clearValue = attachment.clearValue;
-      else if (JSON.stringify(clearValue) !== JSON.stringify(attachment.clearValue)) {
+      // 与改前逐字相同的判据：第一个**有值**的附件决定整帧的清除颜色。
+      if (clearValue === undefined) {
+        clearValue = attachment.clearValue;
+        if (clearValue !== undefined) resolvedClear = resolveClearColor(clearValue);
+        continue;
+      }
+      const resolved = resolveClearColor(attachment.clearValue);
+      if (resolvedClear === null || !sameClearColor(resolvedClear, resolved)) {
         throw new ValidationError(
           `[gpu-device-api] 渲染通道「${this.label}」给多个颜色附件指定了不同的 clearValue，` +
             '而 WebGL2 的清屏对整帧只有一个颜色。请让它们一致（或改用 sampleCount = 1 的目标）。',
@@ -799,7 +840,9 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
     attachments.forEach((attachment, index) => {
       if (!attachment || attachment.loadOp === 'load') return;
       const [r, g, b, a] = resolveClearColor(attachment.clearValue);
-      gl.clearBufferfv(gl.COLOR, index, new Float32Array([r, g, b, a]));
+      // 复用共享暂存数组（#35）：改前每个附件都 `new Float32Array([r, g, b, a])`。
+      // `clearBufferfv` 会立刻拷贝内容，所以下一次写入不会影响已经下发的清屏。
+      gl.clearBufferfv(gl.COLOR, index, writeClearColor(r, g, b, a));
     });
 
     const depthStencil = descriptor.depthStencilAttachment;
@@ -813,7 +856,8 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
       if (hasStencil) {
         gl.clearBufferfi(gl.DEPTH_STENCIL, 0, depth, stencilValue);
       } else {
-        gl.clearBufferfv(gl.DEPTH, 0, new Float32Array([depth]));
+        CLEAR_DEPTH_SCRATCH[0] = depth;
+        gl.clearBufferfv(gl.DEPTH, 0, CLEAR_DEPTH_SCRATCH);
       }
     }
     this.state.invalidate();

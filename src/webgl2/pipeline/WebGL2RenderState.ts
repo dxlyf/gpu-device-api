@@ -28,16 +28,16 @@ import {
   GL_FRONT_FACES,
   GL_STENCIL_OPS,
 } from '../utils/glEnumMap.js';
-import type { GlStateCache, GlStencilFaceState } from '../utils/glStateCache.js';
+import type { GlBlendState, GlStateCache, GlStencilFaceState } from '../utils/glStateCache.js';
 
-export interface ResolvedBlendState {
-  colorSrc: number;
-  colorDst: number;
-  colorOp: number;
-  alphaSrc: number;
-  alphaDst: number;
-  alphaOp: number;
-}
+/**
+ * 解析好的混合分量（GL 枚举）。
+ *
+ * 直接别名到 {@link GlBlendState}（`GlStateCache.setBlend` 的去重键用的同一份字段清单），
+ * 于是「解析结果」与「缓存比较的字段」在类型上是同一件事：往解析结果里加一个字段，
+ * `GlStateCache.setBlend` 的编译期穷尽检查会立刻报错，不会被静默漏掉。
+ */
+export type ResolvedBlendState = GlBlendState;
 
 export interface ResolvedRenderState {
   depthTest: boolean;
