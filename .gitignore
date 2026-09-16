@@ -23,3 +23,6 @@ examples/*.png
 # （上面 `.tmp-02/probe/` 那行）其实并不生效。批 07 因此不假装它生效：
 # 探针页留在磁盘上供复核，入库的证据是 `test/error-scopes.test.ts`（改动前 33 条运行时失败）。
 .tmp-07/
+# 批 01 的临时产物目录：`dist` 重建前后的文件哈希清单（用来证明「重建真的改变了产物」）、
+# 浏览器验证的 JSON/stdout 抓取。证据本体在提交信息与 `docs/backend-limits.md` 里。
+.tmp-01/

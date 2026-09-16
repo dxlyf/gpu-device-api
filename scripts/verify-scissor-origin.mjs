@@ -213,16 +213,14 @@ function parseSegments(signature) {
   return segments.length === 0 ? null : segments;
 }
 
-/** scissor 之后应当只剩「一个颜色段 + 一段黑」；返回那个颜色段（全屏签名没有黑，返回 null）。 */
-function litSegment(signature) {
-  const segments = parseSegments(signature);
-  if (!segments) return null;
-  const lit = segments.filter((segment) => segment.code !== 'K');
-  const dark = segments.filter((segment) => segment.code === 'K');
-  return lit.length === 1 && dark.length === 1 ? lit[0] : null;
-}
-
-/** 全屏基准里「离附件第 0 行近」与「远」的两个色段。 */
+/**
+ * 全屏基准签名里按「附件行号从小到大」排好的两个色段（`near` = 离附件第 0 行近的那一段）。
+ *
+ * 注意：`near` / `far` 只是**附件行号**意义上的两端，**不是**「图像上半 / 下半」——
+ * 图像的上下由投影有没有被翻决定（这正是本探针要讲的那件事）。所以判据里只允许把
+ * `Raw` 与 `Helper` 互相比对（同一个附件里两者落在相反两半），**不能**假定 `Raw` 一定
+ * 落在 `near` 上：在「不翻投影」的 WebGL2 附件里 `Raw` 恰恰落在 `far` 上。
+ */
 function endsOf(signature) {
   const segments = parseSegments(signature);
   if (!segments) return null;
@@ -230,6 +228,34 @@ function endsOf(signature) {
   if (colored.length !== 2) return null;
   const near = colored[0].from < colored[1].from ? colored[0] : colored[1];
   return { near, far: near === colored[0] ? colored[1] : colored[0] };
+}
+
+/**
+ * scissor 之后被**放行并上色**的那一段（附件行号区间）。
+ *
+ * 全屏签名里红绿两段都是「非黑」，而 scissor 只会放行其中一段，所以判据是「非黑段恰好
+ * 一段」。**不能**要求「一段非黑 + 一段黑」：被放行的那半如果本来就是红/绿，黑的那半会
+ * 直接消失（例如 WebGPU 上 `textureFlipped` 的 scissor 结果就是 `G32R32`，没有黑段）。
+ */
+function litSegment(signature) {
+  const segments = parseSegments(signature);
+  if (!segments) return null;
+  const lit = segments.filter((segment) => segment.code !== 'K');
+  return lit.length === 1 ? lit[0] : null;
+}
+
+/** 两个行号区间是不是同一段（附件行号意义上）。 */
+function sameSpan(a, b) {
+  return Boolean(a) && Boolean(b) && a.code === b.code && a.from === b.from && a.to === b.to;
+}
+
+/** 「保留的那一段」是图像上半还是下半 —— 由它是不是**红**那半决定（红 = 图像上半）。 */
+function keptHalf(signature) {
+  const kept = litSegment(signature);
+  if (!kept) return null;
+  if (kept.code === 'R') return 'top';
+  if (kept.code === 'G') return 'bottom';
+  return null;
 }
 
 /**
@@ -246,7 +272,10 @@ function crossCheck(runs) {
       run.code === 0 && run.data.scissorResult === 'ok',
       `${run.backend}: 页面没有给出 scissorResult=ok（${run.data.scissorError ?? '无错误信息'}）。`,
     );
-    for (const group of GROUPS.filter((entry) => !entry.canvas)) {
+    for (const group of GROUPS) {
+      // canvas 通道在 WebGPU 上**结构性地**读不回来（交换链没有 COPY_SRC），所以只要求
+      // 「能读回的通道给出全屏基准」——否则这条检查会把「后端如实说不实测」当成失败。
+      if (group.canvas && run.data[`${group.prefix}FullMeasured`] !== 'true') continue;
       check(
         run.data[`${group.prefix}FullMeasured`] === 'true',
         `${run.backend}: ${group.title} 的全屏基准没有读回。`,
@@ -276,7 +305,7 @@ function crossCheck(runs) {
   }
 
   /* 2. 每个通道两条结论，都用**该通道自己的全屏基准**当参照（不硬编码行号）：
-   *    (a) 「不转换」放行的必须是**离附件第 0 行近的那一段**（`(0,0,W,H/2)` 选中的那一端）；
+   *    (a) 「不转换」放行的必须是该基准**靠附件第 0 行**的那一段（`(0,0,W,H/2)` 选中的那一端）；
    *    (b) helper 之后放行的必须与 `imageOrigin` 自洽：`'bottomLeft'` 要翻到另一段，
    *        `'topLeft'` 是恒等、读数与 (a) 相同。
    *
@@ -290,6 +319,9 @@ function crossCheck(runs) {
       const helper = litSegment(d[`${group.prefix}HelperRows`]);
       const origin = d[`${group.prefix}HelperOrigin`];
       if (!ends || !raw || !helper) {
+        // canvas 通道在 WebGPU 上**结构性地**无读数（交换链没有 COPY_SRC）。页面必须如实
+        // 报成「不实测」，所以这里**不算失败**；第 6/7 条会单独把「不得谎报成实测」钉住。
+        if (group.canvas && d[`${group.prefix}Measured`] !== 'true') continue;
         check(
           false,
           `${run.backend} ${group.title}：读数不成形（基准=${d[`${group.prefix}FullRows`]} ` +
@@ -298,36 +330,40 @@ function crossCheck(runs) {
         continue;
       }
       check(
-        raw.code === ends.near.code && raw.from === ends.near.from && raw.to === ends.near.to,
+        sameSpan(raw, ends.near),
         `${run.backend} ${group.title} 不转换：应当落在离附件第 0 行近的那一段 ` +
           `${ends.near.code}@[${ends.near.from},${ends.near.to})，实测 ${raw.code}@[${raw.from},${raw.to})。`,
       );
       const target = origin === 'bottomLeft' ? ends.far : ends.near;
       check(
-        helper.code === target.code && helper.from === target.from && helper.to === target.to,
+        sameSpan(helper, target),
         `${run.backend} ${group.title} helper 之后（imageOrigin=${origin}）：应当落在 ` +
           `${target.code}@[${target.from},${target.to})，实测 ${helper.code}@[${helper.from},${helper.to})。`,
       );
     }
   }
 
-  /* 3. 同一条「不转换」，在 WebGL2 的两条离屏通道上落在**相反**的两半（这就是那条不自洽）；
-   *    在 WebGPU 上两条通道落在**同一半**（WebGPU 没有「翻不翻投影」之外的变量，两种写法
-   *    确实给出同一端 —— 这也是为什么「不转换」在 WebGPU 上看起来「一直是对的」）。 */
-  const glPlain = litSegment(gl.texturePlainRawRows);
-  const glFlipped = litSegment(gl.textureFlippedRawRows);
-  const gpuPlain = litSegment(gpu.texturePlainRawRows);
-  const gpuFlipped = litSegment(gpu.textureFlippedRawRows);
-  check(
-    glPlain && glFlipped && glPlain.from !== glFlipped.from,
-    `WebGL2：不转换在「不翻投影 / 翻投影」两条离屏通道上应当落在相反的两半，` +
-      `实测 ${gl.texturePlainRawRows} vs ${gl.textureFlippedRawRows}。`,
-  );
-  check(
-    gpuPlain && gpuFlipped && gpuPlain.from === gpuFlipped.from,
-    `WebGPU：不转换在两条离屏通道上应当落在同一半，` +
-      `实测 ${gpu.texturePlainRawRows} vs ${gpu.textureFlippedRawRows}。`,
-  );
+  /* 3. 「不转换」在同一个后端的两条离屏通道上保留**相反**的图像半区 —— **两个后端都一样**。
+   *
+   *    为什么两个后端都相反、道理却不同：WebGL2 的两条离屏通道把图像存成上下颠倒的
+   *    （投影翻不翻），WebGPU 的两条通道则是**图像内容**本身就上下颠倒（同一套行序，
+   *    画面被投影翻了）。两种情况的结果都是「同一条 `(0,0,W,H/2)` 保留相反的一半」。
+   *
+   *    判据必须用**图像半区**（`keptHalf`，由「保留的是红还是绿」给出），**不能**用附件行号
+   *    (`from`)：两条通道的附件行序本来就不同，行号不同并不说明图像半区不同。
+   *    （改前这里假定「WebGPU 两条通道保留同一半」——那是未跑过浏览器的猜测，实测不成立。） */
+  for (const [name, d] of [
+    ['WebGL2', gl],
+    ['WebGPU', gpu],
+  ]) {
+    const plain = keptHalf(d.texturePlainRawRows);
+    const flipped = keptHalf(d.textureFlippedRawRows);
+    check(
+      plain !== null && flipped !== null && plain !== flipped,
+      `${name}：不转换在「不翻投影 / 翻投影」两条离屏通道上应当保留**相反**的图像半区，` +
+        `实测 不翻=${d.texturePlainRawRows}（${plain}） vs 翻过=${d.textureFlippedRawRows}（${flipped}）。`,
+    );
+  }
 
   /* 4. helper 的矩形必须与 `imageOrigin` 自洽：topLeft = 恒等（y=0），bottomLeft = 翻到 y = H - h。
    *    这是「一处正确写法」的机械判据，与具体通道无关。 */
@@ -372,9 +408,54 @@ function crossCheck(runs) {
   /* 6. canvas 通道（仅 WebGL2 可实测）：不转换与 helper 落在相反的两半。 */
   check(gl.canvasRawMeasured === 'true', 'WebGL2 应当报出 canvas 通道的实测读数。');
 
-  /* 7. WebGPU 的 canvas 交换链读不回来，页面必须如实说不实测。 */
+  /* 7. WebGPU 的 canvas 交换链读不回来，页面必须如实说不实测。
+   *    判据是「没有实测读数」本身（`canvasRawMeasured` 缺失），**不是** `gpuCanvasMeasured`
+   *    —— 后者在页面里被写成了「本后端是不是 webgpu」，与「有没有实测」无关
+   *    （见页面里 `gpuCanvasMeasured` 的注释）。 */
   check(gpu.gpuCanvasMeasured === 'false', 'WebGPU 的 canvas 不该被报告成实测。');
   check(gpu.canvasRawMeasured !== 'true', 'WebGPU 不该报出 canvas 通道的实测读数。');
+  check(
+    (gpu.canvasRawMeasured ?? 'false') === 'false',
+    'WebGPU 的 canvas 通道必须完全没有实测读数（现状：' + (gpu.canvasRawMeasured ?? '(缺失)') + '）。',
+  );
+
+  /* 8. 跨后端对照 —— 就是本探针要回答的两个问题，读数与判据都打出来：
+   *    · **不转换**（Raw）：两个后端在「离屏、不翻投影」这条通道上保留**相反**的图像半区
+   *      —— 这是「不能从单条路径反推规则」的实测证据；
+   *    · **helper 之后**（Helper）：两个后端是否覆盖**同一**图像区域 —— 这是 helper 存在的理由。
+   *
+   *    canvas 通道不参与：WebGPU 交换链读不回来，无法对照（页面已如实上报）。
+   *
+   *    ⚠️ 实测结论（2026-09-16，本机 SwiftShader + WebGPU）：
+   *    helper 并没有让两个后端覆盖同一区域 —— 两个后端同一个「不翻投影」离屏附件的图像朝向
+   *    本身就是相反的（WebGL2 `rowOrder=bottomUp` / WebGPU `topLeft`），而 helper 只是把
+   *    「左上原点矩形」换算成**附件原生坐标**，同一个 `imageOrigin` 在朝向相反的两个附件上
+   *    必然保留相反的图像半区。所以这两条断言当前会**失败**，这里保留失败而不是放宽判据：
+   *    它如实反映了 helper 的能力边界（调用方必须按**该附件**的朝向传 `imageOrigin`，
+   *    同一条代码在两个后端上不可能用同一个值）。 */
+  for (const group of GROUPS.filter((entry) => !entry.canvas)) {
+    const glRawHalf = keptHalf(gl[`${group.prefix}RawRows`]);
+    const gpuRawHalf = keptHalf(gpu[`${group.prefix}RawRows`]);
+    const glHelperHalf = keptHalf(gl[`${group.prefix}HelperRows`]);
+    const gpuHelperHalf = keptHalf(gpu[`${group.prefix}HelperRows`]);
+    console.log(
+      `\n[cross] ${group.title}\n` +
+        `  Raw    : webgl2 保留图像${glRawHalf ?? '?'}  /  webgpu 保留图像${gpuRawHalf ?? '?'}  => ` +
+        `${glRawHalf && gpuRawHalf && glRawHalf !== gpuRawHalf ? '相反（预期）' : '相同（可疑）'}\n` +
+        `  Helper : webgl2 保留图像${glHelperHalf ?? '?'}  /  webgpu 保留图像${gpuHelperHalf ?? '?'}  => ` +
+        `${glHelperHalf && gpuHelperHalf && glHelperHalf === gpuHelperHalf ? '同一区域（预期）' : '相反（与 helper 的意图不符，见脚本注释）'}`,
+    );
+    check(
+      glRawHalf !== null && gpuRawHalf !== null && glRawHalf !== gpuRawHalf,
+      `${group.title}：不转换时两个后端应当保留**相反**的图像半区，` +
+        `实测 webgl2=${glRawHalf ?? '?'} webgpu=${gpuRawHalf ?? '?'}。`,
+    );
+    check(
+      glHelperHalf !== null && gpuHelperHalf !== null && glHelperHalf === gpuHelperHalf,
+      `${group.title}：helper 之后两个后端应当覆盖**同一**图像区域，` +
+        `实测 webgl2=${glHelperHalf ?? '?'} webgpu=${gpuHelperHalf ?? '?'}。`,
+    );
+  }
 }
 
 /* ------------------------------------------------------------------------------------------------ */

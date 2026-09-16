@@ -28,9 +28,10 @@
  * - 画面顶落在**低**行号 → `'topLeft'`（helper 恒等）；
  * - 画面顶落在**高**行号 → `'bottomLeft'`（helper 做 `y' = H - (y + h)`）。
  *
- * 本页三条通道的实测取值：canvas 通道 = `'bottomLeft'`；离屏不翻投影 = `'topLeft'`；
- * 离屏翻投影（gfx 的 `rowOrder: 'unified'` 默认行为）= `'bottomLeft'`。**同一个后端里
+ * 本页三条通道的实测取值：canvas 通道 = `'bottomLeft'`；离屏不翻投影 = `'bottomLeft'`；
+ * 离屏翻投影（gfx 的 `rowOrder: 'unified'` 默认行为）= `'topLeft'`。**同一个后端里
  * canvas 与离屏取值相反**，这正是不能从单条路径反推规则的原因。
+ * （改前这里把「离屏不翻投影」误写成 `'topLeft'`，与 `imageOriginOf()` 的实现和实测读数都相反。）
  *
  * ## 一个决定性的对照：把离屏纹理 1:1 blit 到 canvas
  *
@@ -299,7 +300,16 @@ async function main(): Promise<void> {
   for (const [key, result] of results) {
     writeProbe(key, result, references.get(key.replace(/(Full|Raw|Helper)$/, '')) ?? '');
   }
-  setData('gpuCanvasMeasured', String(backend === 'webgpu'));
+  /*
+   * 语义必须是「canvas 通道**有没有实测读数**」，不是「本后端是不是 webgpu」。
+   *
+   * 改前的写法是 `String(backend === 'webgpu')` —— 那正好把含义写反了：WebGPU 上交换链
+   * 读不回主机（见文件头），所以 canvas 通道**恰恰没有**实测；写成 `true` 会让「如实上报」
+   * 这条自我约束失效，也让 `scripts/verify-scissor-origin.mjs` 的对应断言必然失败。
+   * 本页从来没有给 canvas 通道写 `canvas*Measured`（那由 `writeProbe` 按实测结果写），
+   * 所以这里恒为 `'false'`；两个枚举值本身只是**规范期望**，一并如实标注。
+   */
+  setData('gpuCanvasMeasured', 'false');
   setData('gpuCanvasExpectedRaw', 'top');
   setData('gpuCanvasExpectedHelper', 'top');
 

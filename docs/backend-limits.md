@@ -284,10 +284,12 @@ GL 自己会把掩码与 `2^s - 1` 相与，所以传 `0xffffffff` 与传 `0xff`
 （两个面各自独立、引用值单值、掩码单值）。仍然只能表达不了的只有深度侧的
 `depthBiasClamp`（见 `glStateCache.setDepthTest()` 的注释）。
 
-## 七、两后端行为对齐的四条契约（0.4.0 起）
+## 七、两后端行为对齐的四条契约 + 两条能力边界（0.4.0 起）
 
-这一节记录**同一份代码在两个后端上表现必须相同**的四件事。它们在 0.4.0 之前都**不一致**，
-而且不一致的方向都是「一边静默、一边报错」或者「两边都静默」—— 属于最难排查的那一类。
+这一节记录**同一份代码在两个后端上表现必须相同**的四条契约（`1.`～`4.`），
+以及两条**能力边界**（`5.`、`6.` —— 它们不是「对齐」而是「如实暴露」，见本节末尾）。
+四条契约在 0.4.0 之前都**不一致**，而且不一致的方向都是「一边静默、一边报错」或者
+「两边都静默」—— 属于最难排查的那一类。
 每一条都写明选定的语义与理由（回归测试见 `test/webgl2-consistency-06.test.ts`）。
 
 | # | 契约 | 对应项 |
@@ -297,8 +299,8 @@ GL 自己会把掩码与 `2^s - 1` 相与，所以传 `0xffffffff` 与传 `0xff`
 | 3 | `clearBuffer` / `writeBuffer` 的校验两后端完全一致 | `#15` |
 | 4 | `target` 与**非空** `colorAttachments` 不能同时给 | `#19` |
 
-另有两条**能力边界**（不是「对齐」而是「如实暴露」）：`limits.maxTextureDimension1D = 0`（`#18`）
-与立方体贴图 view 明确不可用（`#17`），见本节末尾。
+另有两条**能力边界**（不是「对齐」而是「如实暴露」）：`limits.maxTextureDimension1D = 0`（`#18`，
+见下面 `5.`）与立方体贴图 view 明确不可用（`#17`，见下面 `6.`）。
 
 ### 1. 上一个 pass 还开着时，`beginRenderPass` / `finish()` **隐式结束**它（`#12`）
 
@@ -357,7 +359,7 @@ WebGL2 的 `SCISSOR_TEST` 与矩形都是**上下文状态**、会跨 pass 保�
 （顺带评估过把 `colorAttachments` 改成可选：那是公开 API 的放宽，会让
 `{ target, colorAttachments: [] }` 这种写法失去唯一的规范形式，本批**没做**。）
 
-### 4. `limits.maxTextureDimension1D` 在 WebGL2 上如实为 `0`（`#18`）
+### 5. `limits.maxTextureDimension1D` 在 WebGL2 上如实为 `0`（`#18`）
 
 WebGL2（GLES 3.0）**没有** 1D 纹理，所以该 limit 报 `0`，含义与 WebGPU 专有的那些
 storage / compute limit 在 WebGL2 上报 `0` 一致：**这个后端没有该能力**。
@@ -370,7 +372,7 @@ storage / compute limit 在 WebGL2 上报 `0` 一致：**这个后端没有该�
 `sampler2D` 与 `sampler1D` 是两个不同的着色器类型，本层没有「把 2D 纹理按 1D 采样」的表达方式。
 请改用 `{ width: n, height: 1 }` 的 2D 纹理，或切到 WebGPU。
 
-### 附：立方体贴图（`cube` / `cube-array` view）在 WebGL2 上明确不可用（`#17`）
+### 6. 附：立方体贴图（`cube` / `cube-array` view）在 WebGL2 上明确不可用（`#17`）
 
 `texture.createView({ dimension: 'cube' | 'cube-array' })` 在 WebGL2 后端抛
 `ValidationError`，消息里写明根因与替代方案。
@@ -386,5 +388,52 @@ cube 维度，所以「建一张 cube 纹理再建 cube view」这条退路同�
 > 改前：这两种维度会掉进 `WebGL2TextureView` 那条通用的「维度与纹理不一致」校验，
 > 消息说的是「你把纹理的维度配错了」，**根因没被说出来** —— 调用方会去改纹理的
 > `depthOrArrayLayers` / `dimension`（怎么改都还是错），而不是换方案。
+
+## 八、`setViewport` / `setScissorRect` 的 Y 原点（`#1`）
+
+core 层**如实透传**，不做任何转换：`gl.viewport` / `gl.scissor` 的原点在**左下**，
+`setViewport` / `setScissorRect`（WebGPU 形状）的原点在**左上**。所以同一个矩形在两个后端
+落在**相反**的一半上 —— 这是最容易踩的跨后端差异。换算交给公开 helper
+`toNativeScissorRect` / `toNativeViewportRect`（`src/core/render/ScissorOrigin.ts`）。
+
+**为什么不能靠一个常量搞定**：难点不是「两个后端不同」，而是**同一个后端内部还不自洽** ——
+同一个后端里，canvas 通道与离屏通道、以及离屏通道「投影翻没翻」都会改变附件的图像朝向。
+两个后端**同一个「不翻投影」离屏附件的图像朝向本身就是相反的**（WebGL2 `rowOrder='bottomUp'`、
+WebGPU `'topLeft'`，见第五节），所以 helper 的 `imageOrigin` 必须按**该附件**如实传，
+**同一条代码不可能靠一个常量在两个后端上同时正确**。
+
+### 实测（两个后端，无头 Chrome）
+
+`examples/scissor-origin.html` + `scripts/verify-scissor-origin.mjs`（`--use-angle=swiftshader` /
+`--enable-unsafe-webgpu`，附件 64×64，画面基准 = canvas 上半红、下半绿，由真实合成截图锚定）：
+
+| 通道 | 不转换 `(0,0,64,32)` 保留的图像半区 | 该传的 `imageOrigin` | helper 之后保留 |
+| --- | --- | --- | --- |
+| WebGL2 canvas | 图像**下半**（`G32K32`） | `'bottomLeft'` | 图像**上半**（`K32R32`） |
+| WebGL2 离屏，**没翻**投影 | 图像**下半**（`G32K32`） | `'bottomLeft'` | 图像**上半**（`K32R32`） |
+| WebGL2 离屏，**翻了**投影 | 图像**上半**（`R32K32`） | `'topLeft'` | 图像**上半**（恒等） |
+| WebGPU 离屏，**没翻**投影 | 图像**上半**（`R32K32`） | `'bottomLeft'` | 图像**下半**（`K32G32`） |
+| WebGPU 离屏，**翻了**投影 | 图像**下半**（`G32K32`） | `'topLeft'` | 图像**下半**（恒等） |
+
+（`R` 红 = 图像上半，`G` 绿 = 图像下半，`K` 黑 = 被裁掉；读数是附件自己的纹素行序。
+WebGPU 的 canvas 交换链没有 `COPY_SRC`，**读不回主机**，所以 canvas 组合只有 WebGL2 有实测；
+页面用 `data-gpuCanvasExpected*` 如实标注那是**规范期望**而不是实测。）
+
+### 两条结论
+
+1. **不转换时两个后端相反**：在「离屏、不翻投影」这条通道上，`(0,0,64,32)` 在 WebGL2 上保留
+   图像**下半**、在 WebGPU 上保留图像**上半** —— 这就是「不能从单条路径反推规则」的实测证据。
+2. **helper 只做坐标换算，不做跨后端归一**：上表的第 2、4 行（都是 `'bottomLeft'`）保留了
+   **相反**的图像半区；第 3、5 行（都是 `'topLeft'`）同理。所以 `toNativeScissorRect` 修正的是
+   「左上原点 → 附件原生坐标」这一步，**不**负责让两个后端落到同一图像区域。要让两个后端给出
+   同一图像半区，调用方必须传**该后端该通道**对应的 `imageOrigin`（可用附件自己的
+   `rowOrder` 判断），或改走「离屏时显式翻投影」这条统一路径（第五节 / gfx 的默认行为）。
+
+> 补测说明：`toNativeScissorRect` / `toNativeViewportRect` 的代码提交（`8cc5f4c`）里如实写着
+> 「因环境内存不足未能跑浏览器验证」，上述读数是环境恢复后补跑的实测结果，回填于本次提交。
+> 补测同时暴露了三个此前未验证的问题（探针页 `gpuCanvasMeasured` 语义写反、校验脚本用
+> 「离屏第 0 行」当「图像上半」的判据、脚本按 canvas 键名读 WebGPU 的空读数），已在
+> `scripts/verify-scissor-origin.mjs` 与 `examples/scissor-origin.ts` 中一并修正；
+> 结论 2 那两条断言**当前如实失败**，没有被放宽。
 
 

@@ -8,32 +8,38 @@
  * 原点在**左上**，core 层如实透传、不做任何转换（见 `RenderPassEncoder` 上的说明）。于是同一个
  * 矩形在两个后端落在**相反**的一半上，这是最容易踩的跨后端差异。
  *
- * 但真正让它难写对的不是「两个后端不同」，而是**同一个后端内部还不自洽**。实测（无头 Chrome，
- * `examples/scissor-origin.html` + `scripts/verify-scissor-origin.mjs`；画面基准由真实合成截图
- * 锚定：canvas 上半红、下半绿）：
+ * 但真正让它难写对的不是「两个后端不同」，而是**同一个后端内部还不自洽**。以下读数全部来自
+ * 无头 Chrome 实跑（`examples/scissor-origin.html` + `scripts/verify-scissor-origin.mjs`，
+ * `--use-angle=swiftshader` / `--enable-unsafe-webgpu`；画面基准由真实合成截图锚定：
+ * canvas 上半红、下半绿），是加了 helper 之后仍然成立的现状：
  *
- * | 通道 | 附件第 0 行是画面的 | 不转换 `(0,0,W,H/2)` 落在 | 该传的 `imageOrigin` |
- * | --- | --- | --- | --- |
- * | WebGL2 canvas | 底端 | 画面**下半** | `'bottomLeft'`（要翻） |
- * | WebGL2 离屏，**没翻**投影 | 底端 | 画面**下半** | `'bottomLeft'`（要翻） |
- * | WebGL2 离屏，**翻了**投影（gfx 默认） | 顶端 | 画面**上半** | `'topLeft'`（恒等） |
- * | WebGPU（任意附件） | 顶端 | 画面**上半** | `'topLeft'`（恒等） |
+ * | 通道 | 不转换 `(0,0,W,H/2)` 保留的图像半区 | 该传的 `imageOrigin` |
+ * | --- | --- | --- |
+ * | WebGL2 canvas | 图像**下半** | `'bottomLeft'`（要翻） |
+ * | WebGL2 离屏，**没翻**投影 | 图像**下半** | `'bottomLeft'`（要翻） |
+ * | WebGL2 离屏，**翻了**投影（gfx 默认） | 图像**上半** | `'topLeft'`（恒等） |
+ * | WebGPU（任意附件） | 图像**上半** | `'topLeft'`（恒等） |
  *
- * 第三行是关键：`gfx` 的 `Renderer` 默认给「渲染进纹理」的通道把相机投影在裁剪空间 Y 取反
- * （`mat4.flipClipY`），画面因此在附件里上下颠倒，**第 0 行反而成了画面顶端**。所以
+ * 第二、三行是关键：`gfx` 的 `Renderer` 默认给「渲染进纹理」的通道把相机投影在裁剪空间 Y 取反
+ * （`mat4.flipClipY`），于是**同一条 WebGL2 离屏路径**，翻不翻投影会给出两种相反的图像朝向。
+ * 所以
  *
- * - **不要从某一条渲染路径反推规则**：「WebGL2 就要翻」在离屏通道上是错的，「不转换就对了」
- *   在 canvas 通道上也是错的；
- * - `imageOrigin` 描述的是**这个附件**（第 0 行对应图像的哪一端），不是后端，甚至不是通道 ——
- *   同一条 WebGL2 离屏路径，翻不翻投影会给出两种取值。必须由调用方按当前通道如实告诉本函数；
- * - 两条路径用同一个函数、同一个「左上原点」的矩形，写出来的代码才是可移植的。
+ * - **不要从某一条渲染路径反推规则**：「WebGL2 就要翻」在翻过投影的离屏通道上是错的，
+ *   「不转换就对了」在 canvas 通道和没翻投影的离屏通道上也是错的；
+ * - `imageOrigin` 描述的是**这个附件**（第 0 行对应图像的哪一端），不是后端，甚至不是通道；
+ * - **两个后端的 `imageOrigin` 取值不是同一套参照系**：`rowOrder` 如实上报
+ *   （WebGL2 离屏 = `'bottomUp'`、WebGPU = `'topLeft'`），同一个 `imageOrigin` 值在
+ *   朝向相反的两个附件上会保留**相反**的图像半区。实测：本函数的 `'bottomLeft'` 在
+ *   WebGL2 离屏上保留图像**下半**、在 WebGPU 离屏上保留图像**上半**。调用方必须按
+ *   **该附件**的朝向传值；同一条代码不可能靠一个常量在两个后端上同时正确。
  *
  * ## 换算规则
  *
  * - `imageOrigin === 'topLeft'`（附件第 0 行就是图像顶端）：恒等，`y' = y`；
  * - `imageOrigin === 'bottomLeft'`（附件第 0 行是图像底端）：`y' = attachmentHeight - (y + height)`。
  *
- * 可执行证据见 `examples/scissor-origin.html`（两个后端各画一次并读回像素）。
+ * 可执行证据见 `examples/scissor-origin.html`（两个后端各画一次并读回像素）；
+ * 回填结论见 `docs/backend-limits.md` 的 scissor / viewport 条目。
  */
 
 /** 附件里第 0 行对应**图像**的哪一端；`setScissorRect` / `setViewport` 的 Y 要不要翻转由它决定。 */
