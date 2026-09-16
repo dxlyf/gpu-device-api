@@ -11,6 +11,7 @@ import {
   fullMipLevelCount,
   mipLevelExtent,
   resolveTextureSize,
+  type TextureSize,
 } from '../src/core/resources/Texture.js';
 import { ValidationError } from '../src/core/errors/index.js';
 
@@ -81,7 +82,19 @@ describe('mipLevelExtent', () => {
     expect(mipLevelExtent(1, 12)).toEqual({ width: 1, height: 1, depthOrArrayLayers: 1 });
   });
 
-  it('层数不参与减半', () => {
+  it('2d / 2d-array：depthOrArrayLayers 是数组层数，不参与减半', () => {
+    // 有意改变行为（批 12）：`depthOrArrayLayers` 的含义由 `dimension` 决定 ——
+    // `3d` 的 depth 要减半，`2d` 的数组层数不减半。这条断言改动前**没有**传 `dimension`，
+    // 钉的是「helper 只有一个语义」这件事，而那个语义对 `3d` 是错的。
+    // 现在它显式声明 `'2d'`（下面第一条），并保留「缺省即 `'2d'`」这一条对照。
+    // 3D 的减半覆盖在同文件的 `3d：depth 逐级减半`，逐级与规范比对的穷举覆盖在
+    // `test/mip-level-extent-3d.test.ts`（该文件是批 12 的复现证据，改动前 5 用 4 失败）。
+    expect(mipLevelExtent({ width: 8, height: 8, depthOrArrayLayers: 6 }, 2, '2d')).toEqual({
+      width: 2,
+      height: 2,
+      depthOrArrayLayers: 6,
+    });
+    // 缺省 `dimension` 就是 `'2d'`，与 WebGPU `GPUTextureDescriptor.dimension` 的缺省一致。
     expect(mipLevelExtent({ width: 8, height: 8, depthOrArrayLayers: 6 }, 2)).toEqual({
       width: 2,
       height: 2,
@@ -89,9 +102,32 @@ describe('mipLevelExtent', () => {
     });
   });
 
+  it('3d：depth 逐级减半（改动前这一条会得到 6 与 6）', () => {
+    // 规范：`depth = max(1, depth >> level)`。改动前 helper 把 depth 当层数，两级都返回 6。
+    expect(mipLevelExtent({ width: 8, height: 8, depthOrArrayLayers: 6 }, 1, '3d')).toEqual({
+      width: 4,
+      height: 4,
+      depthOrArrayLayers: 3,
+    });
+    expect(mipLevelExtent({ width: 8, height: 8, depthOrArrayLayers: 6 }, 2, '3d')).toEqual({
+      width: 2,
+      height: 2,
+      depthOrArrayLayers: 1, // 6 >> 2 = 1，下限也是 1
+    });
+  });
+
   it('非法 level 抛带前缀的错误', () => {
     expect(() => mipLevelExtent(8, -1)).toThrowError(ValidationError);
     expect(() => mipLevelExtent(8, -1)).toThrowError(/^\[gpu-device-api\] mipLevelExtent/);
     expect(() => mipLevelExtent(8, 1.5)).toThrowError(/non-negative integer/);
+  });
+
+  it('非法 dimension 抛带前缀的错误（不静默按 2d 处理）', () => {
+    // JS 调用方可能传本库没有的值：`"2d-array"` 是 `TextureViewDimension` 的值，
+    // texture 的 2d-array 在本库里写作 `dimension: '2d'` + `depthOrArrayLayers > 1`。
+    // 若静默当成 2d，3D 的 depth 就会被算错 —— 所以必须报错。
+    const lenient = mipLevelExtent as (size: TextureSize, level: number, dimension: string) => unknown;
+    expect(() => lenient(8, 0, '2d-array')).toThrowError(ValidationError);
+    expect(() => lenient(8, 0, '2d-array')).toThrowError(/dimension must be "1d", "2d" or "3d"/);
   });
 });
