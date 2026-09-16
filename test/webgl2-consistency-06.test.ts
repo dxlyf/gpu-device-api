@@ -496,6 +496,7 @@ describe('#15 writeBuffer 的元素对齐与范围：两后端同一批非法输
   const cases: WriteCase[] = [
     { label: 'dataOffset 不是元素大小的倍数', dataOffset: 2 },
     { label: 'size 不是元素大小的倍数', size: 6 },
+    { label: 'bufferOffset 不是 4 的倍数', bufferOffset: 2, size: 4 },
     { label: '超出 buffer 末尾', bufferOffset: 12, size: 8 },
   ];
 

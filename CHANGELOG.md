@@ -81,6 +81,7 @@
 | `#14` 全 `load` 的 pass | 上一个 pass 的 scissor 仍生效（缓存还声称已关） | 每个 pass 开始时 scissor 复位成「整个附件、关闭」 |
 | `#15` `clearBuffer` 的 4 对齐 / 范围 | 只有 WebGPU 校验，**WebGL2 静默接受** | 两后端同一批非法输入抛**同一个错**（消息逐字相同） |
 | `#15` `writeBuffer` 的元素对齐 | 只有 WebGPU 校验 | 同上（WebGL2 补齐；WebGPU 顺带补上范围校验） |
+| `#15` `writeBuffer` 的 `bufferOffset` 4 对齐 | WebGL2 靠补齐**多写**了几个 0 字节，WebGPU 抛错 | 两后端都抛同一个错 |
 | `#16` disposed 设备 | WebGPU 抛 `ValidationError`、WebGL2 抛 `DeviceLostError` | 两后端都抛 `DeviceLostError`（`reason: 'destroyed'`） |
 | `#17` `cube` / `cube-array` view | WebGL2 报的是误导性的「维度不一致」 | 单独识别，写明根因与替代方案 |
 | `#18` `maxTextureDimension1D` | WebGL2 报 2D 上限（2048），而创建 1D 纹理会抛错 | WebGL2 如实报 `0` |

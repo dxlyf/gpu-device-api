@@ -290,6 +290,16 @@ GL 自己会把掩码与 `2^s - 1` 相与，所以传 `0xffffffff` 与传 `0xff`
 而且不一致的方向都是「一边静默、一边报错」或者「两边都静默」—— 属于最难排查的那一类。
 每一条都写明选定的语义与理由（回归测试见 `test/webgl2-consistency-06.test.ts`）。
 
+| # | 契约 | 对应项 |
+| --- | --- | --- |
+| 1 | 上一个 pass 还开着时 `beginRenderPass` / `finish()` 隐式结束它 | `#12` |
+| 2 | 每个 pass 开始时 scissor 复位成「整个附件、关闭」 | `#14` |
+| 3 | `clearBuffer` / `writeBuffer` 的校验两后端完全一致 | `#15` |
+| 4 | `target` 与**非空** `colorAttachments` 不能同时给 | `#19` |
+
+另有两条**能力边界**（不是「对齐」而是「如实暴露」）：`limits.maxTextureDimension1D = 0`（`#18`）
+与立方体贴图 view 明确不可用（`#17`），见本节末尾。
+
 ### 1. 上一个 pass 还开着时，`beginRenderPass` / `finish()` **隐式结束**它（`#12`）
 
 两个后端与 WebGPU 原生语义一致：开始新通道、或 `finish()` 时，前一个没 `end()` 的通道会被
@@ -323,7 +333,20 @@ WebGL2 的 `SCISSOR_TEST` 与矩形都是**上下文状态**、会跨 pass 保�
 > 本 pass 颜色与深度**都是** `load`」这条缝里，上一个 pass 的矩形继续生效，而
 > `end()` 的 `invalidate()` 让状态缓存**声称** scissor 是关的（缓存与驱动不一致）。
 
-### 3. `target` 与**非空** `colorAttachments` 不能同时给（`#19`）
+### 3. `Queue.writeBuffer` 的校验在两个后端完全一致（`#15`）
+
+`clearBuffer` 的 `offset` / `size` 4 对齐与范围、`writeBuffer` 的 `bufferOffset` 4 对齐、
+`dataOffset` / `size` 的元素大小对齐与范围，**两个后端做同一组检查、抛同样的 `ValidationError`**
+（消息逐字相同）。
+
+> 改前：`clearBuffer` 的那几条只有 WebGPU 有（WebGL2 是 `size` 为 0 / 负数时**连一次调用都不发**、
+> 超范围时让驱动记一条 `INVALID_VALID`，而本后端默认不查 GL 错误）；`writeBuffer` 的元素对齐
+> 也只有 WebGPU 有（WebGL2 会把「起点落在元素中间」的视图照样上传）。
+> 最隐蔽的是 `bufferOffset`：WebGL2 会把数据补齐到 4 的倍数，于是
+> `writeBuffer(buf, 2, new Float32Array(1))` 在 WebGL2 上「成功」但真的写进了 `[2, 6)`
+>（多两个 0 字节），WebGPU 则直接抛错。
+
+### 4. `target` 与**非空** `colorAttachments` 不能同时给（`#19`）
 
 两个后端都抛 `ValidationError`。用 `target` 时 `colorAttachments` 写 `[]`（该字段仍是必填的）。
 

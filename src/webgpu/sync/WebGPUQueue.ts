@@ -71,6 +71,19 @@ export class WebGPUQueue implements Queue {
           `超出了 buffer「${buffer.label}」的 ${buffer.size} 字节。`,
       );
     }
+    /*
+     * `bufferOffset` 必须是 4 的倍数（`#15`）。
+     *
+     * 原生 WebGPU 也会拒绝，但那是**编入命令、提交之后**才看得到的异步校验错误，
+     * 消息里也没有本库的上下文与 buffer label；而且 WebGL2 侧原来对非 4 对齐的 offset
+     * 是「补齐后再写」（多写几个 0 字节），两端表现完全不同。
+     * 提到这里显式做，两个后端对同一批非法输入给出同一个 `ValidationError`。
+     */
+    if (bufferOffset % 4 !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] Queue.writeBuffer: bufferOffset (${bufferOffset}) must be a multiple of 4.`,
+      );
+    }
     // DataView 没有「元素」概念，按字节计；TypedArray 用它的 BYTES_PER_ELEMENT。
     const bytesPerElement =
       data instanceof DataView

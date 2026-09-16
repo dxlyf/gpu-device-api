@@ -81,6 +81,20 @@ export class WebGL2Queue implements Queue {
           `超出了 buffer「${target.label}」的 ${target.size} 字节。`,
       );
     }
+    /*
+     * `bufferOffset` 必须是 4 的倍数（`#15`，与 `WebGPUQueue` 一致）。
+     *
+     * 这一条比「元素对齐」更隐蔽：`paddedCopy()` 会把数据补齐到 4 的倍数，
+     * 于是 `writeBuffer(buf, 2, new Float32Array(1))` 在本后端会**成功**，
+     * 但真的写进 buffer 的是 `[offset 2, offset 6)`（多写了两字节的 0），
+     * 而 WebGPU 侧会因为 `bufferOffset % 4 !== 0` 直接抛错 ——
+     * 两端「能不能跑」与「写了几个字节」都不一样。
+     */
+    if (bufferOffset % 4 !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] Queue.writeBuffer: bufferOffset (${bufferOffset}) must be a multiple of 4.`,
+      );
+    }
     // DataView 没有「元素」概念，按字节计；TypedArray 用它的 BYTES_PER_ELEMENT。
     const bytesPerElement = typedArrayElementSize(data);
     if (dataOffset % bytesPerElement !== 0 || bytes % bytesPerElement !== 0) {
