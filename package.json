@@ -5,13 +5,25 @@
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
-  "main": "./dist/gpu-device-api.js",
-  "module": "./dist/gpu-device-api.js",
-  "types": "./dist/types/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/types/index.d.ts",
-      "import": "./dist/gpu-device-api.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./webgl2": {
+      "types": "./dist/webgl2.d.ts",
+      "import": "./dist/webgl2.js"
+    },
+    "./webgpu": {
+      "types": "./dist/webgpu.d.ts",
+      "import": "./dist/webgpu.js"
     }
   },
   "files": [
@@ -40,7 +52,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
+    "build": "node scripts/build.mjs",
     "build:demo": "vite build --config vite.demo.config.ts",
     "preview": "vite preview --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit",

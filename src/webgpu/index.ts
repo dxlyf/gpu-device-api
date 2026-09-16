@@ -109,7 +109,11 @@ export {
 } from './pipeline/WebGPUComputePipeline.js';
 export { WebGPURenderState, DEFAULT_STRIP_INDEX_FORMAT } from './pipeline/WebGPURenderState.js';
 export {
-  PipelineCache,
+  // 名字与 core 的 `PipelineCache`（接口，`src/core/pipeline/PipelineCache.ts`）冲突：
+  // core 那个是「LRU 缓存的接口」，这个是 WebGPU 后端包装它的**类**（带 resolve / onEvict）。
+  // 子入口 `/webgpu` 同时导出 core 与 WebGPU，两者同名会让 `export *` 歧义（TS2308），
+  // 所以按后端限定改名 —— 这也与本目录「后端类一律加 WebGPU 前缀」的约定一致。
+  PipelineCache as WebGPUPipelineCache,
   computePipelineCacheKey,
   createWgpuPipelineCache,
   describeVertexLayouts,

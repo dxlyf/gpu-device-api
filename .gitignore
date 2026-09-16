@@ -39,7 +39,12 @@ examples/*.png
 !.tmp-14/
 .tmp-14/libdist/
 .tmp-14/libmodules/
+# A/B 构建对比产物（同一份源码 + 新旧构建方式的逐字节比对）与它用的包消费方探针目录
+.tmp-14/abtest/
+.tmp-14/pkg-consumer/
 .tmp-14/snapshot/
+# tsc 试跑产物（`.tmp-14/tsconfig.tscout.json` 的输出，用来校验模块树可消费性）
+.tmp-14/tscout/
 .tmp-14/*.log
 # 测量输出（内嵌完整产物代码，体积大且可重跑）与一次性的源码快照都不入库
 .tmp-14/*.json

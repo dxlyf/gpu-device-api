@@ -7,7 +7,9 @@
     "baseUrl": ".",
     "paths": {
       "@dxyl/gpu-device-api": ["../src/index.ts"],
-      "@dxyl/gpu-device-api/webgl2": ["./subentry/webgl2.ts"]
+      "@dxyl/gpu-device-api/core": ["../src/core.ts"],
+      "@dxyl/gpu-device-api/webgl2": ["../src/webgl2.ts"],
+      "@dxyl/gpu-device-api/webgpu": ["../src/webgpu.ts"]
     }
   },
   "include": ["consumers/**/*.ts", "subentry/**/*.ts", "types-shim.d.ts"]

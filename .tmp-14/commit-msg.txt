@@ -1,0 +1,44 @@
+批 14 第二步（路 A）：库构建改为 tsc 输出模块树，新增 /core /webgl2 /webgpu 子入口
+
+## 第一步测量结论（负结果，三种打包器一致）
+单文件 ESM + sideEffects:false 下，**只用 WebGL2 的消费方与「两个后端都要」的消费方
+产物体积逐字节相同**（差值 -2 字节，就是 'webgl2' / 'auto' 那处字符串），
+且产物里 WebGPUAdapter / WebGPUDevice / WebGPURenderPassEncoder 等完整符号全部在位：
+rollup 585003/585001、esbuild 291738/291736、vite 479421/479419（minified）。
+根因是 src/factories/default-registry.ts 静态 import 了两个后端的 Adapter，
+backend:'webgl2' 是运行时字符串 => 打包器摇不掉。故第一步判定：树摇不够用，进入第二步。
+
+## 第二步：tsc 模块树（用户/负责人选定的路 A）
+- tsconfig.build.json：noEmit:false + outDir:dist + rootDir:src，一次产出
+  每源文件一个 .js/.d.ts/.map（不再有 dist/types/**，也不再 emitDeclarationOnly）。
+- 新入口平铺在 src 根下：src/core.ts、src/webgl2.ts、src/webgpu.ts（+ 原 src/index.ts），
+  因此产物是 dist/core.js、dist/webgl2.js、dist/webgpu.js —— **没有 entries/ 目录**。
+- package.json：exports 只增不改（"." 仍在），新增 ./core ./webgl2 ./webgpu；
+  main/module/types 指向 ./dist/index.js / ./dist/index.d.ts。
+- scripts/build.mjs：只做「清空 dist -> tsc -p tsconfig.build.json -> postbuild」。
+  不再有 vite build；vite.config.ts 只保留 dev server（server.watch.ignored 原样未动）。
+- scripts/postbuild.mjs：@webgpu/types reference 改成一个**固定的 4 项小列表**（不遍历生成）。
+- 硬前提已全量校验（.tmp-14/verify-emit.mjs）：552 条相对说明符、0 条缺失、0 条非 .js 结尾；
+  四个入口都能被 Node 真实 import => tsc 产物是可直接消费的 ESM，无需说明符重写/生成脚本。
+
+## 第二步复测（同一份冻结快照，minified）
+esbuild 291738 -> 167843 B（gzip 81464 -> 49539，-39.2%）；vite 479421 -> 269541；
+rollup 585003 -> 327957；三个打包器的子入口产物里 WebGPU 符号**全部消失**。
+只用枚举时 /core 入口剩余 411 B。主入口内容未变：同一份源码用新旧构建形状产出
+**逐字节相同**（sha256 746d9e92...94691，865867 B）—— 见 .tmp-14/ab-main-entry.mjs。
+
+## 公开面变化
+新增三个子入口（只增不改）。为消除子入口 re-export 的 TS2308 歧义，两处**后端索引**改名：
+src/webgl2/index.ts: TextureSampleType -> GlTextureSampleType（与 core 的同名类型不是一回事）
+src/webgpu/index.ts: PipelineCache -> WebGPUPipelineCache（core 那个是接口，这个是类）。
+这两个模块**不在主入口的公开面上**（src/index.ts 不导出任何后端），仓库内无引用，故无影响。
+
+## 验证
+tsc --noEmit 0 错误；vitest 47 文件 / 744 用例全过（+7 条 dist 用例在 dist 重建后自动生效）；
+12 条像素闸门（5 条锁定基线 x 两后端 + rtt）逐字命中：instancing 68,30,39/distinct=12、
+depth pass/255,0,0,255、index 46,29,12、batch batchLit=true/drawcalls=125、landscape ok/8。
+
+## dist
+未提交。路 A 会把 dist 形态从「1 个 bundle + dist/types/**」改成「178 .js + 178 .d.ts + 356 .map」，
+需要负责人发布前重建；本批运行 pnpm run build 验证构建可跑通后已清理，
+当前 git status --porcelain -- dist 为空。

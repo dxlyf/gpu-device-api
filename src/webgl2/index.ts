@@ -98,7 +98,12 @@ export {
   glFormatIsAttachment,
   sampleTypeMatchesFormat,
   type GlTextureFormatInfo,
-  type TextureSampleType,
+  // 名字与 core 的 `TextureSampleType`（`src/core/binding/BindingTypes.ts`）冲突，
+  // 但两者**不是一回事**：GL 侧没有 `unfilterable-float`，而 core 侧没有额外的 `depth` 之外的差异 ——
+  // 它们只是恰好同名。子入口 `/webgl2` 同时导出 core 与 WebGL2，若都叫这个名字，
+  // `export *` 会歧义（TS2308）。这个名字只在本后端内部与 `glFormatMap` 有关，
+  // 所以在这里按后端限定改名，避免把两个不同的类型混成一个。
+  type TextureSampleType as GlTextureSampleType,
 } from './utils/glFormatMap.js';
 export {
   WEBGL2_SYNTHETIC_LIMITS,

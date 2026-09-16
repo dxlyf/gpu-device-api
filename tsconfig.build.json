@@ -2,11 +2,16 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
     "declaration": true,
-    "emitDeclarationOnly": true,
     "declarationMap": true,
-    "outDir": "dist/types",
-    "rootDir": "src"
+    "sourceMap": true,
+    // 产物是「每个源文件一个 ESM 模块」，所以不做任何打包：
+    // 源码里所有相对 import 都带显式 `.js` 扩展名（`node .tmp-14/verify-emit.mjs` 全量校验），
+    // 于是 tsc 输出的 `.js` **直接可被 Node / 浏览器 / 打包器消费**，无需任何后处理。
+    "module": "ESNext",
+    "moduleResolution": "bundler"
   },
   "include": ["src"]
 }
