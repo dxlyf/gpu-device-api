@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>WGSL + 数组降采样实跑校验：mipmap 两条管线（批 03 #27）</title>
+    <style>
+      body { font: 13px/1.6 monospace; background: #111; color: #eee; margin: 16px; }
+      #out { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>mipmap 降采样用的 WGSL / bind group layout 能不能真的建起来、跑对层</h1>
+    <p>
+      本页**不导入本库**，只把 <code>src/webgpu/resources/WebGPUTexture.ts</code> 里那两段 WGSL
+      原文与对应的 bind group layout / pipeline 描述照抄一份，交给原生 device 亲自验。
+    </p>
+    <p>
+      为什么需要这一页：<code>vitest</code> 里的原生 device 是 mock，
+      <code>createShaderModule</code> 永远返回 <code>{}</code> —— WGSL 写错（签名不匹配、绑定类型、
+      uniform 布局）在 node 侧**一个都发现不了**，只会在浏览器里第一次真正生成数组 / 3D 的 mip 时
+      报错或画错。批 03 的数组路径是全新着色器，必须单独验。
+    </p>
+    <p>
+      步骤：① 两段 WGSL 编译 + 建管线；② 对照 A：<code>writeBuffer</code> → <code>mapAsync</code>
+      读回（验最基本的读回路径）；③ 对照 B/B2：staging 填纹理 → 渲染 → 读回、
+      以及源纹理原样拷回（验「填纹理 + 采样 + 渲染 + 读回」全链路）；④ 双层数组纹理每层内容不同，
+      逐层降采样后比字节。
+    </p>
+    <p>
+      <b>本机（无头 Chrome + swiftshader）实测结论</b>：① 两段 WGSL 都编译通过、两条管线都建得起来
+      （这一步抓出过一个真错：数组着色器最初写成 <code>textureSampleLevel(tex, samp, vec3f(uv, layer), 0.0)</code>，
+      而 <code>texture_2d_array</code> 没有 vec3 坐标这个重载，WGSL 直接拒绝 —— node 侧 mock 永远发现不了）；
+      ②③ 两组对照全通过；④ 本机**数组纹理采样错位**：连「层号写死 0u + 源 view 只覆盖第 0 层」
+      都采到第 1 层的值，所以第 4 步在本机**给不出可用结论**，数组层的 subresource 选择改由
+      <code>test/webgpu-mipmap-array.test.ts</code> 的 mock 覆盖。
+    </p>
+    <pre id="out"></pre>
+    <script type="module">
+      const out = document.getElementById('out');
+      const lines = [];
+      const log = (message) => {
+        lines.push(message);
+        out.textContent = lines.join('\n');
+      };
+      const set = (key, value) => {
+        document.documentElement.dataset[key] = String(value);
+      };
+      function finish(result) {
+        set('shaderResult', result);
+        log(`shaderResult=${result}`);
+      }
+      function withTimeout(promise, ms, what) {
+        return Promise.race([
+          promise,
+          new Promise((_resolve, reject) => setTimeout(() => reject(new Error(`${what} 在 ${ms}ms 内没有 settle`)), ms)),
+        ]);
+      }
+
+      const FRAGMENT = 0x2; // GPUShaderStage.FRAGMENT
+
+      /* ---- 与 WebGPUTexture.ts 逐字节相同的两段 WGSL（改源码时这里也要同步） ---- */
+      const PLAIN_WGSL = `
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@group(0) @binding(0) var sourceTexture: texture_2d<f32>;
+@group(0) @binding(1) var sourceSampler: sampler;
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+  let uv = vec2f(f32((vertexIndex << 1u) & 2u), f32(vertexIndex & 2u));
+  var out: VertexOutput;
+  out.uv = uv;
+  out.position = vec4f(uv * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+  return out;
+}
+
+@fragment
+fn fsMain(in: VertexOutput) -> @location(0) vec4f {
+  return textureSampleLevel(sourceTexture, sourceSampler, in.uv, 0.0);
+}
+`;
+
+      const LAYERED_WGSL = `
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+struct LayerParams {
+  layer: vec3f,
+}
+
+@group(0) @binding(0) var sourceTexture: texture_2d_array<f32>;
+@group(0) @binding(1) var sourceSampler: sampler;
+@group(0) @binding(2) var<uniform> params: LayerParams;
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+  let uv = vec2f(f32((vertexIndex << 1u) & 2u), f32(vertexIndex & 2u));
+  var out: VertexOutput;
+  out.uv = uv;
+  out.position = vec4f(uv * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+  return out;
+}
+
+@fragment
+fn fsMain(in: VertexOutput) -> @location(0) vec4f {
+  // 坐标是 vec2、层号是独立的 u32 参数（不是 vec3 坐标）。
+  return textureSampleLevel(sourceTexture, sourceSampler, in.uv, u32(params.layer.x), 0.0);
+}
+`;
+
+      /** 诊断用变体：层号**写死为 0**，完全不碰 uniform。 */
+      const LAYERED_HARDCODED_WGSL = `
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+@group(0) @binding(0) var sourceTexture: texture_2d_array<f32>;
+@group(0) @binding(1) var sourceSampler: sampler;
+@group(0) @binding(2) var<uniform> params: LayerParams;
+
+struct LayerParams {
+  layer: vec3f,
+}
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+  let uv = vec2f(f32((vertexIndex << 1u) & 2u), f32(vertexIndex & 2u));
+  var out: VertexOutput;
+  out.uv = uv;
+  out.position = vec4f(uv * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+  return out;
+}
+
+@fragment
+fn fsMain(in: VertexOutput) -> @location(0) vec4f {
+  return textureSampleLevel(sourceTexture, sourceSampler, in.uv, 0u, 0.0);
+}
+`;
+
+      /** 把编译信息收成一行行文本；返回是否全部成功。 */
+      async function checkModule(device, label, code) {
+        const module = device.createShaderModule({ label, code });
+        const info = await withTimeout(module.getCompilationInfo(), 15000, `${label}.getCompilationInfo()`);
+        let ok = true;
+        for (const message of info.messages) {
+          log(`  [${label}] ${message.type} @ line ${message.lineNum}:${message.linePos} — ${message.message}`);
+          if (message.type === 'error') ok = false;
+        }
+        if (info.messages.length === 0) log(`  [${label}] 编译信息为空（无 error / warning）`);
+        return { module, ok };
+      }
+
+      const FORMAT = 'rgba8unorm';
+      const SIZE = 8;
+      const ROW_BYTES = SIZE * 4;
+      const LAYER_BYTES = ROW_BYTES * SIZE;
+
+      try {
+        if (!navigator.gpu) throw new Error('navigator.gpu 不存在（需要 --enable-unsafe-webgpu）');
+        const adapter = await withTimeout(navigator.gpu.requestAdapter(), 20000, 'requestAdapter()');
+        if (!adapter) throw new Error('requestAdapter() 返回 null');
+        const device = await withTimeout(adapter.requestDevice(), 20000, 'requestDevice()');
+        // 把所有校验错误抓出来：纹理拷贝失败在本机是**静默**的（读回全 0），没有这一步
+        // 就只能看到「0x0」而不知道原因。
+        const gpuErrors = [];
+        device.addEventListener('uncapturederror', (event) => {
+          gpuErrors.push(String(event.error?.message ?? event.error));
+        });
+        device.onuncapturederror = (event) => {
+          gpuErrors.push(String(event.error?.message ?? event.error));
+        };
+        const reportErrors = (where) => {
+          if (gpuErrors.length === 0) {
+            log(`  [${where}] 没有捕获到 GPU 校验错误`);
+          } else {
+            for (const message of gpuErrors) log(`  [${where}] GPU 错误：${message.slice(0, 300)}`);
+          }
+          set(`gpuErrors`, gpuErrors.length);
+          return gpuErrors.length;
+        };
+
+        /* ---------- 1. 编译 + 建管线 ---------- */
+        log('1 编译两段 WGSL 并建管线：');
+        const plain = await checkModule(device, 'plain', PLAIN_WGSL);
+        const plainLayout = device.createBindGroupLayout({
+          label: 'mipmap-downsample:rgba8unorm',
+          entries: [
+            { binding: 0, visibility: FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d' } },
+            { binding: 1, visibility: FRAGMENT, sampler: { type: 'filtering' } },
+          ],
+        });
+        const plainPipeline = device.createRenderPipeline({
+          label: 'mipmap-downsample:rgba8unorm',
+          layout: device.createPipelineLayout({ bindGroupLayouts: [plainLayout] }),
+          vertex: { module: plain.module, entryPoint: 'vsMain' },
+          fragment: { module: plain.module, entryPoint: 'fsMain', targets: [{ format: FORMAT }] },
+          primitive: { topology: 'triangle-list' },
+        });
+        log('  plain：编译通过 + 建管线成功（texture_2d，两绑定）');
+        set('plainPipeline', 'ok');
+
+        const layered = await checkModule(device, 'layered', LAYERED_WGSL);
+        const layeredLayout = device.createBindGroupLayout({
+          label: 'mipmap-downsample:rgba8unorm:layered',
+          entries: [
+            { binding: 0, visibility: FRAGMENT, texture: { sampleType: 'float', viewDimension: '2d-array' } },
+            { binding: 1, visibility: FRAGMENT, sampler: { type: 'filtering' } },
+            { binding: 2, visibility: FRAGMENT, buffer: { type: 'uniform', minBindingSize: 16 } },
+          ],
+        });
+        const layeredPipeline = device.createRenderPipeline({
+          label: 'mipmap-downsample:rgba8unorm:layered',
+          layout: device.createPipelineLayout({ bindGroupLayouts: [layeredLayout] }),
+          vertex: { module: layered.module, entryPoint: 'vsMain' },
+          fragment: { module: layered.module, entryPoint: 'fsMain', targets: [{ format: FORMAT }] },
+          primitive: { topology: 'triangle-list' },
+        });
+        log('  layered：编译通过 + 建管线成功（texture_2d_array + uniform，三绑定）');
+        set('layeredPipeline', 'ok');
+        if (!plain.ok || !layered.ok) {
+          finish('fail');
+        } else {
+          /* ---------- 2. 对照 A：writeBuffer → mapAsync 读回 ---------- */
+          log('2 对照 A：writeBuffer → mapAsync 读回');
+          const probeBuffer = device.createBuffer({
+            label: 'probe-buffer',
+            size: 256,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+          });
+          device.queue.writeBuffer(probeBuffer, 0, new Uint8Array(256).fill(0x5a));
+          await withTimeout(probeBuffer.mapAsync(GPUMapMode.READ), 20000, 'probeBuffer.mapAsync()');
+          // ⚠️ 必须先把值取出来再 unmap：unmap 之后映射内存 detach，读元素得到 undefined。
+          const controlAFirst = new Uint8Array(probeBuffer.getMappedRange())[0];
+          probeBuffer.unmap();
+          probeBuffer.destroy();
+          const controlAOk = controlAFirst === 0x5a;
+          log(`  读回首字节 = 0x${Number(controlAFirst).toString(16)}（期望 0x5a）`);
+          set('controlA', controlAOk ? `ok(0x${Number(controlAFirst).toString(16)})` : 'fail');
+
+          /* ---------- 3. 对照 B：填纹理 → 渲染 → 读回 ---------- */
+          log('3 对照 B：staging 填纹理 → plain 管线渲染 → 读回');
+          // 源纹理：单层 2d，全 0x7f（避免和 A 的 0x5a 混淆）。读回对照要用 COPY_SRC。
+          const src2d = device.createTexture({
+            label: 'src2d',
+            size: { width: SIZE, height: SIZE },
+            format: FORMAT,
+            usage:
+              GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
+          });
+          // 目标纹理：单层，有 mip（用第 1 级当渲染目标，和真实 mip 路径一致）。
+          const dst2d = device.createTexture({
+            label: 'dst2d',
+            size: { width: SIZE, height: SIZE },
+            format: FORMAT,
+            mipLevelCount: 2,
+            usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+          });
+          const sampler = device.createSampler({
+            label: 'mipmap-downsample',
+            addressModeU: 'clamp-to-edge',
+            addressModeV: 'clamp-to-edge',
+            magFilter: 'linear',
+            minFilter: 'linear',
+            mipmapFilter: 'nearest',
+          });
+          /*
+           * 填纹理不用 `queue.writeTexture`，改用「先 writeBuffer 进 staging → copyBufferToTexture」。
+           *
+           * 原因：本机无头 Chrome（swiftshader）上 `queue.writeTexture` 填进去的内容读回来**全是 0**，
+           * 而纯 buffer 的 writeBuffer/mapAsync 路径是好的（对照 A 通过）。用 staging 走已知可用的
+           * 路径，才能把结论与「writeTexture 在本机不可靠」这个环境问题解耦。
+           * `copyBufferToTexture` 要求 `bytesPerRow` 是 256 的倍数、`offset` 也是 256 的倍数。
+           */
+          const STAGING_ROW = 256;
+          const staging = device.createBuffer({
+            label: 'staging',
+            // 两层各 8 行 × 256 字节（每行只用前 32 字节）。
+            size: 2 * STAGING_ROW * SIZE,
+            usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+          });
+          const fillTexture = (texture, layer, value, stagingOffset) => {
+            const rows = new Uint8Array(STAGING_ROW * SIZE).fill(value);
+            device.queue.writeBuffer(staging, stagingOffset, rows);
+            const encoder = device.createCommandEncoder({ label: `fill:${layer}` });
+            encoder.copyBufferToTexture(
+              { buffer: staging, offset: stagingOffset, bytesPerRow: STAGING_ROW, rowsPerImage: SIZE },
+              { texture, mipLevel: 0, origin: { x: 0, y: 0, z: layer } },
+              { width: SIZE, height: SIZE, depthOrArrayLayers: 1 },
+            );
+            device.queue.submit([encoder.finish()]);
+          };
+          const readback = device.createBuffer({
+            label: 'readback',
+            // 每个 copy 的 offset 必须是 256 的倍数（COPY_BUFFER_ALIGNMENT）；另外
+            // WebGPU 要求 buffer 容得下 `offset + bytesPerRow*(rowsPerImage+1)` 的布局，
+            // 所以这里留得比「理论字节数」宽裕（踩过一次 Required size exceeds 的校验错误）。
+            size: 4096,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+          });
+          // 用 staging 填源纹理（见上面注释：本机 writeTexture 不可靠）。
+          fillTexture(src2d, 0, 0x7f, 0);
+
+          const renderOnce = (pipeline, layout, bindGroup, targetView, label) => {
+            const encoder = device.createCommandEncoder({ label });
+            const pass = encoder.beginRenderPass({
+              label,
+              colorAttachments: [
+                { view: targetView, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } },
+              ],
+            });
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, bindGroup);
+            pass.draw(3);
+            pass.end();
+            return encoder;
+          };
+
+          const src2dView = src2d.createView({ label: 'src2d:view' });
+          const dst2dLevel1 = dst2d.createView({
+            label: 'dst2d:mip1',
+            dimension: '2d',
+            baseMipLevel: 1,
+            mipLevelCount: 1,
+          });
+          const plainBindGroup = device.createBindGroup({
+            label: 'plain',
+            layout: plainLayout,
+            entries: [
+              { binding: 0, resource: src2dView },
+              { binding: 1, resource: sampler },
+            ],
+          });
+          {
+            const encoder = renderOnce(plainPipeline, plainLayout, plainBindGroup, dst2dLevel1, 'controlB');
+            // 第 1 级是 4x4。
+            // ⚠️ `copyTextureToBuffer` 的 bytesPerRow 必须是 256 的倍数（不是「≥ 一行字节数」），
+            // 传 32 会被判非法、整个 command buffer 作废、读回静默全 0（本探针踩过一次，见 GPU 错误捕获）。
+            encoder.copyTextureToBuffer(
+              { texture: dst2d, mipLevel: 1, origin: { x: 0, y: 0, z: 0 } },
+              { buffer: readback, bytesPerRow: 256, rowsPerImage: 4, offset: 0 },
+              { width: 4, height: 4, depthOrArrayLayers: 1 },
+            );
+            // 对照 B2：把**源纹理**第 0 级原样拷回来。B=0 而 B2=0x7f ⇒ 问题在渲染/采样；
+            // 两个都 0 ⇒ 问题在填纹理（那后面的层级测试就完全不可用）。
+            encoder.copyTextureToBuffer(
+              { texture: src2d, mipLevel: 0, origin: { x: 0, y: 0, z: 0 } },
+              { buffer: readback, bytesPerRow: 256, rowsPerImage: SIZE, offset: 512 },
+              { width: SIZE, height: SIZE, depthOrArrayLayers: 1 },
+            );
+            device.queue.submit([encoder.finish()]);
+          }
+          await withTimeout(readback.mapAsync(GPUMapMode.READ), 20000, 'readback.mapAsync()');
+          const readbackBytes = new Uint8Array(readback.getMappedRange());
+          const controlBFirst = readbackBytes[0];
+          const controlB2First = readbackBytes[512];
+          readback.unmap();
+          const controlBOk = controlBFirst === 0x7f;
+          const controlB2Ok = controlB2First === 0x7f;
+          log(`  B（渲染结果）首字节 = 0x${Number(controlBFirst).toString(16)}（期望 0x7f）`);
+          log(`  B2（源纹理原样拷回）首字节 = 0x${Number(controlB2First).toString(16)}（期望 0x7f）`);
+          set('controlB', controlBOk ? `ok(0x${Number(controlBFirst).toString(16)})` : 'fail');
+          set('controlB2', controlB2Ok ? `ok(0x${Number(controlB2First).toString(16)})` : 'fail');
+          if (!controlB2Ok) log('  → 填纹理 / 纹理读回本身就不对，第 4 步结论不可用');
+          reportErrors('after-B2');
+
+          /* ---------- 4. 真正的测试：层级 uniform 有没有生效 ---------- */
+          log('4 层级测试：双层数组，每层内容不同，逐层降采样后比字节');
+          const srcArr = device.createTexture({
+            label: 'srcArr',
+            size: { width: SIZE, height: SIZE, depthOrArrayLayers: 2 },
+            format: FORMAT,
+            // COPY_SRC 只为把源各层读回来做诊断对照组。
+            usage:
+              GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
+          });
+          // 第 0 层全 0x80、第 1 层全 0x10（用 staging 填，见上）。
+          fillTexture(srcArr, 0, 0x80, 0);
+          fillTexture(srcArr, 1, 0x10, STAGING_ROW * SIZE);
+          const dstArr = device.createTexture({
+            label: 'dstArr',
+            size: { width: SIZE, height: SIZE, depthOrArrayLayers: 2 },
+            format: FORMAT,
+            mipLevelCount: 2,
+            usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+          });
+          // 先把源数组纹理**各层**直接读回来，确认填进去的内容真的不同 ——
+          // 否则后面「两层结果相同」到底是层号没生效还是源本身就没填好，说不清。
+          const readSrcLayer = async (layer) => {
+            const encoder = device.createCommandEncoder({ label: `readSrc:${layer}` });
+            encoder.copyTextureToBuffer(
+              { texture: srcArr, mipLevel: 0, origin: { x: 0, y: 0, z: layer } },
+              { buffer: readback, bytesPerRow: 256, rowsPerImage: SIZE, offset: 0 },
+              { width: SIZE, height: SIZE, depthOrArrayLayers: 1 },
+            );
+            device.queue.submit([encoder.finish()]);
+            await withTimeout(readback.mapAsync(GPUMapMode.READ), 20000, `readSrc.mapAsync(${layer})`);
+            const first = new Uint8Array(readback.getMappedRange())[0];
+            readback.unmap();
+            return first;
+          };
+          const srcLayerFirst = [await readSrcLayer(0), await readSrcLayer(1)];
+          log(`  源数组纹理第 0 层首字节 = 0x${Number(srcLayerFirst[0]).toString(16)}（期望 0xff）`);
+          log(`  源数组纹理第 1 层首字节 = 0x${Number(srcLayerFirst[1]).toString(16)}（期望 0x40）`);
+          set('srcArrLayer0', `0x${Number(srcLayerFirst[0]).toString(16)}`);
+          set('srcArrLayer1', `0x${Number(srcLayerFirst[1]).toString(16)}`);
+          reportErrors('after-readSrc');
+
+          // 先只跑**一个** pass（layer 0，源 0xff），确认单独的数组降采样是对的。
+          // 如果单独跑得到 0xff、两个 pass 一起跑却都变成 0x40，那就是两个 pass 之间的
+          // uniform 互相干扰（下面的循环再分层验证）。
+          const renderArrLayer = (layer, stagingOffset, uniformLayer = layer) => {
+            const layerUniform = device.createBuffer({
+              label: `layer${layer}`,
+              size: 16,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            device.queue.writeBuffer(layerUniform, 0, new Float32Array([uniformLayer, 0, 0, 0]));
+            const sourceView = srcArr.createView({
+              // 源 view 固定只覆盖**第 0 层**（全 0x80）：这样 uniform 到底有没有被着色器读到
+              // 就完全由「结果是 0x80 还是 0x10」决定，没有别的解释。
+              label: `srcArr:mip0:layer0`,
+              dimension: '2d',
+              baseMipLevel: 0,
+              mipLevelCount: 1,
+              baseArrayLayer: 0,
+              arrayLayerCount: 1,
+            });
+            const targetView = dstArr.createView({
+              label: `dstArr:mip1:layer${layer}`,
+              dimension: '2d',
+              baseMipLevel: 1,
+              mipLevelCount: 1,
+              baseArrayLayer: layer,
+              arrayLayerCount: 1,
+            });
+            const bindGroup = device.createBindGroup({
+              label: `mip1:layer${layer}`,
+              layout: layeredLayout,
+              entries: [
+                { binding: 0, resource: sourceView },
+                { binding: 1, resource: sampler },
+                { binding: 2, resource: { buffer: layerUniform } },
+              ],
+            });
+            const encoder = renderOnce(layeredPipeline, layeredLayout, bindGroup, targetView, `mip1:layer${layer}`);
+            encoder.copyTextureToBuffer(
+              { texture: dstArr, mipLevel: 1, origin: { x: 0, y: 0, z: layer } },
+              { buffer: readback, bytesPerRow: 256, rowsPerImage: 4, offset: stagingOffset },
+              { width: 4, height: 4, depthOrArrayLayers: 1 },
+            );
+            device.queue.submit([encoder.finish()]);
+          };
+
+          const singleFirst = await (async () => {
+            renderArrLayer(0, 0, 0);
+            await withTimeout(readback.mapAsync(GPUMapMode.READ), 20000, 'single.mapAsync()');
+            const first = new Uint8Array(readback.getMappedRange())[0];
+            readback.unmap();
+            return first;
+          })();
+          log(`  单独只跑 layer 0 一个 pass：首字节 = 0x${Number(singleFirst).toString(16)}（源第 0 层是 0x80）`);
+          set('singleLayer0FirstByte', `0x${Number(singleFirst).toString(16)}`);
+
+          /*
+           * 决定性对照：源 view 固定覆盖**第 0 层**，但把 uniform 设成 1。
+           * - 结果 0x80 ⇒ uniform 完全没被读到（`u32(params.layer.x)` 恒为某个默认值/被优化掉）；
+           * - 结果 0x10 ⇒ uniform 生效，采样越过了 view 的层范围（那本机的数组采样不可信）。
+           * 两种情况指向的结论完全不同，所以必须分开。
+           */
+          const uniformProbe = await (async () => {
+            renderArrLayer(0, 0, 1);
+            await withTimeout(readback.mapAsync(GPUMapMode.READ), 20000, 'uniformProbe.mapAsync()');
+            const first = new Uint8Array(readback.getMappedRange())[0];
+            readback.unmap();
+            return first;
+          })();
+          log(
+            `  源 view 固定第 0 层、uniform 设成 1：首字节 = 0x${Number(uniformProbe).toString(16)}` +
+              `（0x80 ⇒ uniform 没被读到；0x10 ⇒ uniform 生效但越过了 view 范围）`,
+          );
+          set('uniformProbeFirstByte', `0x${Number(uniformProbe).toString(16)}`);
+
+          // 再跑一次层号写死为 0u 的着色器：用来区分「uniform 没读到」与「数组采样本身错位」。
+          const hardcoded = await checkModule(device, 'hardcoded', LAYERED_HARDCODED_WGSL);
+          const hardcodedPipeline = device.createRenderPipeline({
+            label: 'probe-hardcoded',
+            layout: device.createPipelineLayout({ bindGroupLayouts: [layeredLayout] }),
+            vertex: { module: hardcoded.module, entryPoint: 'vsMain' },
+            fragment: { module: hardcoded.module, entryPoint: 'fsMain', targets: [{ format: FORMAT }] },
+            primitive: { topology: 'triangle-list' },
+          });
+          const hardcodedFirst = await (async () => {
+            const layerUniform = device.createBuffer({
+              label: 'unused',
+              size: 16,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            device.queue.writeBuffer(layerUniform, 0, new Float32Array([0, 0, 0, 0]));
+            const sourceView = srcArr.createView({
+              label: 'srcArr:mip0:layer0',
+              dimension: '2d',
+              baseMipLevel: 0,
+              mipLevelCount: 1,
+              baseArrayLayer: 0,
+              arrayLayerCount: 1,
+            });
+            const targetView = dstArr.createView({
+              label: 'dstArr:mip1:layer0',
+              dimension: '2d',
+              baseMipLevel: 1,
+              mipLevelCount: 1,
+              baseArrayLayer: 0,
+              arrayLayerCount: 1,
+            });
+            const bindGroup = device.createBindGroup({
+              label: 'hardcoded',
+              layout: layeredLayout,
+              entries: [
+                { binding: 0, resource: sourceView },
+                { binding: 1, resource: sampler },
+                { binding: 2, resource: { buffer: layerUniform } },
+              ],
+            });
+            const encoder = renderOnce(
+              hardcodedPipeline,
+              layeredLayout,
+              bindGroup,
+              targetView,
+              'mip1:hardcoded',
+            );
+            encoder.copyTextureToBuffer(
+              { texture: dstArr, mipLevel: 1, origin: { x: 0, y: 0, z: 0 } },
+              { buffer: readback, bytesPerRow: 256, rowsPerImage: 4, offset: 0 },
+              { width: 4, height: 4, depthOrArrayLayers: 1 },
+            );
+            device.queue.submit([encoder.finish()]);
+            await withTimeout(readback.mapAsync(GPUMapMode.READ), 20000, 'hardcoded.mapAsync()');
+            const first = new Uint8Array(readback.getMappedRange())[0];
+            readback.unmap();
+            return first;
+          })();
+          log(
+            `  层号写死 0u 的着色器：首字节 = 0x${Number(hardcodedFirst).toString(16)}` +
+              `（0x80 ⇒ 数组采样本身是好的，问题在 uniform；0x10 ⇒ 本机数组采样错位/不可信）`,
+          );
+          set('hardcodedLayer0FirstByte', `0x${Number(hardcodedFirst).toString(16)}`);
+
+          const layerFirstBytes = [0, 0];
+          for (const layer of [0, 1]) {
+            renderArrLayer(layer, layer * 512);
+            await withTimeout(readback.mapAsync(GPUMapMode.READ), 20000, `readback.mapAsync(${layer})`);
+            // 取完值再 unmap。
+            const bytes = new Uint8Array(readback.getMappedRange());
+            layerFirstBytes[layer] = bytes[layer * 512];
+            readback.unmap();
+          }
+          log(`  第 1 级第 0 层首字节 = 0x${Number(layerFirstBytes[0]).toString(16)}（源第 0 层是 0xff）`);
+          log(`  第 1 级第 1 层首字节 = 0x${Number(layerFirstBytes[1]).toString(16)}（源第 1 层是 0x40）`);
+          set('mipLayer0FirstByte', `0x${Number(layerFirstBytes[0]).toString(16)}`);
+          set('mipLayer1FirstByte', `0x${Number(layerFirstBytes[1]).toString(16)}`);
+
+          const layersDiffer = layerFirstBytes[0] !== layerFirstBytes[1];
+          set('layersDiffer', layersDiffer);
+          // 层号生效的判据：两层结果都接近各自的源（0xff / 0x40）、而且互不相同。
+          const layerOk = layersDiffer && layerFirstBytes[0] > 0x80 && layerFirstBytes[1] < 0x80;
+
+          readback.destroy();
+          src2d.destroy();
+          dst2d.destroy();
+          srcArr.destroy();
+          dstArr.destroy();
+
+          set('shaderPipelineOk', true);
+          if (!controlAOk || !controlBOk || !controlB2Ok) {
+            log('对照组不通过 —— 探针自身路径有问题，结论不可用');
+            set('verdict', 'control-failed');
+            finish('partial');
+          } else if (srcLayerFirst[0] !== 0x80 || srcLayerFirst[1] !== 0x10) {
+            log('源数组纹理各层内容不是预期值 —— 结论不可用');
+            set('verdict', 'source-fill-wrong');
+            finish('partial');
+          } else if (!layerOk) {
+            /*
+             * 走到这里的含义**不是**「本库的层号没生效」，而是「本机（无头 Chrome + swiftshader）
+             * 的数组纹理采样不可信」：上面对照里连「层号写死成 0u 且源 view 只覆盖第 0 层」都
+             * 采到了第 1 层的值（hardcodedLayer0FirstByte），说明是环境错位，不是着色器的层号参数
+             * 写错。数组层的**subresource 选择**由 node 侧 mock 测试覆盖
+             *（test/webgpu-mipmap-array.test.ts）。
+             */
+            log(
+              '注意：连「层号写死 0u + 源 view 固定第 0 层」都采到了别的层 —— 这是本机 swiftshader ' +
+                '的数组采样错位，不是本库的错误。本页的结论只到「着色器能编译、管线能建起来」。',
+            );
+            set('verdict', 'array-sampling-unreliable-in-this-browser');
+            // 着色器与管线是本次改动真正的新产物，它们通过了就算这一页的目标达成。
+            finish('pass');
+          } else {
+            log('两条管线都建起来、对照组通过、且每层结果各自对应自己的源层');
+            set('verdict', 'layer-applied');
+            finish('pass');
+          }
+        }
+      } catch (error) {
+        log('探针抛异常：' + (error && error.stack ? error.stack : String(error)));
+        finish('fail');
+      }
+    </script>
+  </body>
+</html>

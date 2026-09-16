@@ -523,13 +523,17 @@ fn fsMain(in: VertexOutput) -> @location(0) vec4f {
 `;
 
 /**
- * 数组 / 3D mip 降采样用的着色器：与上面逐字节相同，只多一个**层级 uniform**。
+ * 数组 / 3D mip 降采样用的着色器：与上面几乎相同，只是换成 `texture_2d_array` 并多一个**层级 uniform**。
  *
- * 为什么必须显式传层号：`texture_2d_array<f32>` 的 `textureSampleLevel(..., vec2f uv, level)`
- * 重载**默认采第 0 层**，没有「当前附件层」这种隐式绑定（WGSL 的 `@builtin(layer)` 只在顶点
- * 阶段可用，片元阶段不能拿来当附件层）。如果不传层号，数组的每一层都会拿到第 0 层的内容 ——
- * GPU 不报任何错，只是画面全错。这是本特性最容易犯的静默错误，所以层号走 uniform 显式传进
- * 片元着色器。
+ * 为什么必须显式传层号：`texture_2d_array<f32>` 没有「当前附件层」这种隐式绑定，采样时必须给出
+ * `array_index`，否则只能采第 0 层 —— 数组的每一层都会拿到第 0 层的内容，GPU 不报任何错，只是画面
+ * 全错。这是本特性最容易犯的静默错误，所以层号走 uniform 显式传进片元着色器。
+ *
+ * ⚠️ 注意签名：`texture_2d_array` **没有**「vec3 坐标」这个重载，必须写成
+ * `textureSampleLevel(tex, samp, vec2f uv, arrayIndex, level)` —— 坐标是 vec2、层号单独一个
+ * 参数。写成 `vec3f(uv, layer)` 会被 WGSL 拒绝：`no matching call to 'textureSampleLevel(
+ * texture_2d_array<f32>, sampler, vec3<f32>, abstract-float)'`（本机无头 Chrome 实测报过这个错，
+ * 见 `examples/native-mipmap-shader-probe.html`）。
  *
  * uniform 的 `x` 就是「本层要从源纹理的哪一层采样」（见 `WebGPUTexture.acquireMipPass`）；
  * `y` / `z` 留作扩展（目前恒为 0）。
@@ -559,8 +563,8 @@ fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 @fragment
 fn fsMain(in: VertexOutput) -> @location(0) vec4f {
-  let coord = vec3f(in.uv, params.layer.x);
-  return textureSampleLevel(sourceTexture, sourceSampler, coord, 0.0);
+  // 坐标是 vec2、层号是独立的 u32 参数（不是 vec3 坐标）。
+  return textureSampleLevel(sourceTexture, sourceSampler, in.uv, u32(params.layer.x), 0.0);
 }
 `;
 
