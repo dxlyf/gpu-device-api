@@ -176,6 +176,157 @@
     `#17` 的 cube view 结论基于 GLES 3.0 的纹理目标模型与本后端的实现方式，
     没有在真实驱动上尝试「用 `TEXTURE_2D_ARRAY` 当 `samplerCube`」这种不合法组合去反证。
 
+### 新增（外部纹理、swizzle、映射状态、数组 / 3D mip、错误作用域等）
+
+本版的新增能力来自三个批次：批 `02`（`06c120d`，七项小 API）、批 `03`（`896bcb7` + `83d81ad`，
+映射状态与 WebGPU 数组 / 3D mip）、批 `07`（`04a336f`，错误作用域）。每条尽量给出实测依据；
+批 `02` 的原生探针页是 `api-surface.html`（只读、未入库，其数值结论由该批汇报记录），
+批 `03` 的两张探针页 `examples/native-mapstate-probe.html` 与
+`examples/native-mipmap-shader-probe.html` **已入库、可复现**（结论也写在页面里）。
+
+- **`Device.importExternalTexture()`（`#22`）**：`core` 新增 `ExternalTexture` 接口。
+  - WebGPU 转发原生 `GPUDevice.importExternalTexture`；实现没有这个方法时给出**带替代方案的
+    报错**（不假装有）；`colorSpace` 明确报错（规范的 descriptor 没有这个字段）。
+  - **WebGL2 明确报错 + 替代方案**（改用 `copyExternalImageToTexture`）。原生探针实测：
+    `gl.importExternalTexture === undefined`，且 `OES_EGL_image_external` /
+    `OES_EGL_image_external_essl3` / `WEBGL_external_texture` **三个扩展全为 `null`** ——
+    GLES 3.0 上没有任何等价物。
+  - 接口文档写明**过期语义**（一帧有效、每帧重新导入），并如实列出本库只在三处校验：
+    `expired` 透传查询、绑定进 bind group 时检查、以及**不假装能拦**「已绑定 bind group 里的
+    过期句柄」。`device.features.has('external-texture')` 在 WebGPU 上按「原生有没有这个方法」
+    上报（它不是 `requiredFeatures` 里的 feature），WebGL2 上恒为 `false`。
+  - `WebGPUBindGroup` 的 `{ source }` 路径改走 `asGPUExternalTexture`（escape hatch 仍可用），
+    过期时给出可定位的报错。
+
+- **`TextureViewDescriptor.swizzle`（`#23`）—— 按实测的真实形状实现**
+  - `core` 新增 `TextureSwizzleString` 模板字面量类型、`assertTextureSwizzle()`，以及只读的
+    `TextureView.swizzle`（实际生效值，未指定时为 `'rgba'`）。
+  - **一处规格漂移的实测**：真实 Chrome 接受的是**长度 4 的字符串**（`'rgba'` / `'r001'`），
+    **不是**早期提案的 `{ r, g, b, a }` 对象 —— 探针实测传对象会被原生拒绝：
+    `TypeError: Swizzle ('[object Object]') must be exactly a four-character string.`；
+    `@webgpu/types@0.1.72` 里也是 `swizzle?: string`。本库按**字符串**实现，
+    非法形态在**解析阶段**（`createView`）抛 `ValidationError`。
+  - 默认值与原生的对照：**未指定时 descriptor 里是 `undefined`（不是 `'rgba'`）**，后端因此
+    **一个字段都不多传**给原生 —— 「没写 swizzle」的调用形状与改动前逐字段相同（回归断言是
+    逐字段快照 + `'swizzle' in descriptor === false`）。`swizzle` 也进了 view 缓存 key，
+    否则 `createView({ swizzle })` 会命中此前无参调用的缓存条目而**静默不生效**。
+  - WebGPU 只在显式给了值时才传 `createView`；**WebGL2 只放行 `'rgba'` 与省略**，其它值明确
+    报错 + 替代方案（着色器里做通道选择 / 切 WebGPU）—— canvas 帧纹理那条手写 view 路径也
+    一并拦下，否则会出现「普通纹理报错、canvas 静默忽略」。
+
+- **`Queue.copyExternalImageToTexture` 的两个选项（`#25`）**：新增第 5 个参数
+  `CopyExternalImageOptions`（`premultipliedAlpha`，默认 `true`；`colorSpace`，默认 `'srgb'`；
+  默认值取自 WebGPU 的 IDL）。
+  - 实现方式是「**未指定就不下发这个字段**」，由原生填自己的默认值 —— 调用形状与改动前
+    逐字段相同，也彻底消除了「本库默认值与原生默认值漂移」的可能（这两个字段在原生的
+    **destination** 上，不是 source）。
+  - WebGL2：`premultipliedAlpha` 走 `UNPACK_PREMULTIPLY_ALPHA_WEBGL`，且与
+    `UNPACK_FLIP_Y_WEBGL` **成对复原为 0**（否则会污染从不设置这两个开关的 `writeTexture` /
+    `copyBufferToTexture` 路径）；**非 srgb 的 `colorSpace` 在任何 GL 调用之前明确报错**
+    （GL 表达不了「转成哪个空间」，报错不留半截状态）。
+
+- **`Device.createFence`（`#26`）**：`core` 的 `Device` 上声明为**可选成员**（`createFence?()`），
+  第三方实现不必提供。
+  - WebGL2：既有的 `gl.fenceSync` / `clientWaitSync` 实现被提到接口上（行为不变）。
+  - **WebGPU 不实现，也不假装**：探针实测 `device.createFence === undefined` —— 原生 WebGPU
+    没有 fence 对象，`onSubmittedWorkDone()` 不等价；本库没有造一个 promise 壳
+    （`WebGPUFence` 保留为工具类，仅供需要时显式使用）。
+
+- **`GPUInternalError` 独立类型（`#28`）**：`core` 新增 `GPUInternalError`
+  （`code: 'INTERNAL_ERROR'`、`name` 同名）并从 `errors` 导出；`toGpuError()` 的原生
+  `GPUInternalError` 分支返回它（此前折成基类 `GpuError`）。断言覆盖 `instanceof` /
+  `constructor.name` / `code` / `message` 前缀 / `toString()`，以及三类原生错误互不吞掉。
+
+- **`RenderPipelineDescriptor.layout` 接受 `BindGroupLayout`（`#39`，公开 API 放宽）**
+  - `layout` 现在是 `PipelineLayout | BindGroupLayout | readonly BindGroupLayout[] | 'auto'`；
+    既有写法（`'auto'` / `PipelineLayout` / 省略）的类型与行为都没变。数组的**下标即 bind group
+    index**；**空数组明确报错**（原生会静默当成「没有布局」）。
+  - 两个后端走**同一条**归一化 helper（`core` 的 `resolvePipelineLayoutLike()`）：WebGPU 侧
+    合成的 `GPUPipelineLayout` **由管线负责释放**（调用方拿不到它的引用，留在设备里就是泄漏）；
+    WebGL2 侧合成的绑定计划与手写 `createPipelineLayout()` 完全相同，也随管线释放。
+  - 背景：此前要复用同一份 `BindGroupLayout`，必须手写
+    `createPipelineLayout({ bindGroupLayouts: [layout] })` 包装 —— 本仓库的示例就是这么绕的
+    （`examples/msaa-offscreen.ts`）。
+  - ⚠️ WebGL2 侧的管线创建路径**没有真实跑通**（只有归一化测试与代码论证），见「已知限制」。
+
+- **`asByteView()`（`#40`）**：`core/resources/Buffer.ts` 新增
+  `asByteView(range: MappedRange): Uint8Array` —— `Uint8Array` 原样返回、`ArrayBuffer` 建视图，
+  **两种情况都返回视图、永不拷贝**。
+  - 它存在的理由是一个真实陷阱：`getMappedRange()` 返回 `ArrayBuffer | Uint8Array`，而
+    `new Uint8Array(部分范围)` 是**逐元素拷贝**，写入会**静默丢失** —— 等于把 `#3` 刚修好的
+    「静默丢写入」在调用方那里重现一层。测试既钉住陷阱本身（写入后假原生 buffer 的
+    「GPU 侧内存」仍是 0），也钉住「`asByteView` 的写入真的到达 buffer」。
+  - **没有改** `getMappedRange()` 的返回类型（会破坏既有用法）。
+
+- **缓冲映射状态（`#24`，批 `03`）**：`BufferDescriptor.mappedAtCreation` 与只读的
+  `Buffer.mapState`（三态 `unmapped` / `pending` / `mapped`）；`mapped` 改为由 `mapState`
+  **派生**，状态成为唯一真相。
+  - **原生探针实测**（`examples/native-mapstate-probe.html`，无头 Chrome + SwiftShader，
+    结论写在页面里、可复现）：普通创建 `unmapped` → 刚调用 `mapAsync` 未 settle 时 `pending`
+    → await 之后 `mapped` → `unmap()` 之后 `unmapped`；`destroy()` 之后原生仍报 `unmapped`；
+    pending 期间 `getMappedRange()` 抛 `DOMException`（本库提前拦成 `ValidationError`）；
+    已映射时再 `mapAsync` 抛 `DOMException`；已销毁 buffer 的 `mapAsync` 抛 `DOMException`；
+    `mappedAtCreation: true` **创建即 `mapped`**、`getMappedRange(0, size)` 返回 `ArrayBuffer`、
+    同一段范围再取一次抛 `DOMException`（重叠）、**没 `unmap` 就 `destroy()` 不抛**。
+    探针里刻意用 `usage: COPY_SRC`（**不含** `MAP_WRITE`）配 `mappedAtCreation`，
+    实测这条组合合法。
+  - 附带一条实测：**这个 Chrome 的 `GPUBuffer.mapAsync()` resolve 的是 `undefined`**（不是
+    `ArrayBuffer`），所以「`await mapAsync` 拿到内存」在两代实现上不可移植 —— 本库一律走
+    `getMappedRange()`。
+  - WebGL2 用**影子缓冲**模拟（创建时即分配影子并置为 `mapped`，`unmap` 时整段上传）；GL 侧
+    没有 `pending` 窗口，状态只有两态，但对外行为对齐。两个后端一致：`mappedAtCreation` 之后
+    没 `unmap` 就 `destroy()` 都不抛、状态都回到 `unmapped`，且**都不把被放弃的那次写入静默
+    上传**（WebGL2 在 `destroy()` 时对被放弃的写法发一条 `warn`）。视图语义完全不变：
+    `getMappedRange` 仍返回视图（非拷贝）、同段重复取同一块内存、`unmap` 后 detached。
+  - 回归：`test/buffer-map-state.test.ts`（14 例）。
+
+- **WebGPU 数组 / 3D mip（`#27`，批 `03`）**：`WebGPUTexture.generateMipmaps()` 现在支持
+  `2d-array` 与 `3d`。此前有一道硬闸（`dimension !== '2d' || depthOrArrayLayers !== 1` 直接抛
+  「only single-layer 2d textures are supported」）。**这不是「两后端能力互补」，而是
+  WebGL2 一直能做、WebGPU 被本库拦下**：ES 3.0 的 `glGenerateMipmap` 本就接受 `TEXTURE_3D` /
+  `TEXTURE_2D_ARRAY`（每层独立滤波）。
+  - 缓存键从「级号」扩维为 `"<级>:<层>"` 复合键 —— 键漏字段会让第 2 层命中第 1 层的 view /
+    bind group，**跨层串味且 GPU 不报错**（与 `#32` 同一类教训）。2d-array 逐层独立
+    （源层 = 目标层）；3d 深度逐级减半（`max(1, depth >> level)`，目标第 s 片取源第 2s 片，
+    z 方向不做面积平均 —— 见「已知限制」的近似说明）；单层 2d 路径逐字段不变（原两绑定管线、
+    只建一条管线），数组 / 3D 用一条三绑定管线（多一个层级 uniform，按需创建）。
+  - 层级必须由 uniform 显式传给片元着色器：`texture_2d_array` 的 `textureSampleLevel` 默认采
+    第 0 层，不传就会「每层都拿第 0 层」，GPU 不报错但画面全错。
+  - **修复过程中抓到的真错**：数组 WGSL 最初写成
+    `textureSampleLevel(tex, samp, vec3f(uv, layer), 0.0)`，而 `texture_2d_array` **没有 vec3
+    坐标重载** —— 原生 WGSL 编译器直接拒绝（正确写法是 `(tex, samp, uv, u32(layer), 0.0)`）。
+    **这道错会通过全部单测**：node 侧 mock 的 `createShaderModule` 永远返回 `{}`、
+    `createRenderPipeline` 也不校验；它是被新增的原生探针页
+    `examples/native-mipmap-shader-probe.html` 抓出来的（见「已知限制」的探针方法论）。
+  - 回归：`test/webgpu-mipmap-array.test.ts`（12 例，直接断言 `(级, 层)` 缓存键集合与每个 pass
+    的目标 / 源 subresource 签名互不相同）—— 这只证明「下发给 GPU 的 subresource 选择是对的」，
+    **证明不了真实采样值**（像素级结果没验成，见「已知限制」）。
+
+- **错误作用域（`#20`，批 `07`）**
+  - **`Device.pushErrorScope(filter)`** 返回 `ErrorScopeHandle`（`filter` / `label` / `active` /
+    `filterMatched` / `errors` / `pop()`）；**`Device.popErrorScope()`** 返回
+    `Promise<GpuError | null>`，其中 `null` **只表示「作用域内无错」**。两者都是必需成员
+    （与既有 `create*` 同档）。
+  - `filter` 与原生 `GPUErrorFilter` **同名**（`'validation'` / `'out-of-memory'` / `'internal'`）。
+    **未配对的 `pop` 是拒绝（reject），不是 `null`** —— 「没有作用域」与「作用域内无错」必须
+    区分；设备在作用域还没 `pop` 时被 `dispose()` 也一样**拒绝**（返回 `null` 等于撒谎说
+    「没有错误」）。非法 `filter` 与未配对的 `pop` 在两个后端给出**逐字相同**的消息
+    （两后端共用同一个校验函数与同一条文案）。
+  - 设计动机：此前调用方**无法以编程方式**知道 `create*` / 命令录制是否非法，只能靠 `onError`
+    或异步回调 —— 属「不可用」而非「不够好」。
+  - WebGPU 侧原生转发 `GPUDevice.pushErrorScope` / `popErrorScope`，错误经 `toGpuError` 翻译；
+    实现没有暴露这两个方法时如实报错并建议改用 `onError`。
+  - WebGL2 侧用 `gl.getError()` 轮询做等价物（新增 `src/webgl2/utils/glErrorScope.ts`），
+    并如实写明做不到的事（四条限制见「已知限制」）。与既有 debug `getError()` 轮询的冲突用
+    「**收敛成唯一读取点**」解决：debug 轮询与作用域都从 `WebGL2Device.drainGlErrors()` 拿结果，
+    读到什么就同时给两边记账，不再出现「先跑的读走错误、后跑的误报无错」；debug 通道的消息与
+    `code: 'GL_ERROR'` 保持**逐字不变**（那是机器可读的既有契约）。**默认零开销**：不 push
+    作用域且 debug 关闭时一次 `gl.getError()` 都不读（`device.glErrorReadCount` 可断言）。
+  - **端到端实测**（未入库的端到端探针页 `library-error-scope-e2e.html`，两后端）：作用域抓到
+    `ValidationError`、空作用域为 `null`、**错误之后渲染仍然真的执行**（离屏目标像素
+    `255,0,0,255` → `0,255,0,255`）。
+  - 回归：`test/error-scopes.test.ts`（42 条）。
+
 ### 工程与文档（CI 与发布流程从无到有，附仓库清理）
 
 - **新增 CI：本仓库的第一道自动防线（`0794e7a`）**
@@ -220,6 +371,12 @@
 - 五条锁定像素基线两后端**逐字命中**，另有 `rtt-orientation`(core) 与 `stencil` 两后端通过。
 - `tsc --noEmit` 0 错误；`vitest run` **36 文件 / 557 用例全过**（本批新增 2 个测试文件、42 条用例）。
   （这是**本批合入当时**的数字；后续批次继续增长，见上面「一致性对齐」那一节的标注。）
+- **本版（0.4.0）截至开发末期的本地实测总数**：`tsc --noEmit` 0 错误；`vitest run`
+  **44 文件 / 715 用例全过**。逐批增长为 36 / 557（批 `04`）→ 39 / 591（批 `05`）→
+  40 / 613（批 `06`）→ 41 / 646（批 `02`）→ 43 / 673（批 `03`）→ **44 / 715**（批 `07`）。
+  数字来源是各批提交信息，末值见批 `07` 的 `04a336f`（其后的 `db5dfd0` 只改注释）；
+  44 文件 / 715 用例已于本次整理时在本机复跑核实（`Test Files 44 passed (44)`、
+  `Tests 715 passed (715)`，exit 0）。
 - ⚠️ 本节原有的两条未验证点（`#9` 深度读回只在本机 ANGLE/SwiftShader 上实测、
   `alphaToCoverageEnabled` 只有调用级验证）**已并入下面「已知限制（如实标注）」** ——
   那里还集中了其余批次如实标注的限制，并区分了「实测」「仅调用级」「未确证 / 推理」。
