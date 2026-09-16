@@ -14,6 +14,254 @@
 
 ---
 
+## [0.5.0] - 2026-09-16
+
+本版目标：**把发布形态改成「模块树 + 单文件包」并存，并收尾一批语义错误**。按依赖顺序，
+0.4.0 遗留的三条已知限制（`#11.3`、3D 的 `depth`、以及「单文件 bundle + `dist/types/**`」
+这套打包形态）在本版被逐条处置；另外评估了 `WEBGL_multi_draw` 并决定**不做**。
+本版没有新增渲染能力，收益集中在「打包」与「修错」。
+
+### 破坏性变更（一）：批 `10` / 批 `12` 的语义修正
+
+改动的都是**公开类型或公开 helper 的语义**：密集写法与 `'2d'` 调用方的行为逐字不变，
+但「依赖旧语义」的代码会得到不同结果 —— 其中两处旧行为**本来就是错的**。
+
+- **WebGPU `RenderPipelineVariant.colorFormats` 从密集列表改为逐位置（批 `10`，`56d0729` 证据 / `6e6bb84` 实现）**
+  - **原来**：只收非空附件、按顺序压紧（`[null, a]` → `['rgba8unorm']`）。位置信息因此丢失：
+    `src/webgpu/pipeline/PipelineCache.ts` 的变体键只按压缩后的列表拼。批 `05` 实测
+    `[a, null]` 与 `[null, a]` 推出**同一个键** `rgba8unorm|1|none`、
+    `createRenderPipeline` 只被调用 **1** 次、两条布局共用**同一条原生管线**，
+    空位后面的 targets 整体前移一位。
+  - **现在**：下标即 fragment output location，**空位写 `null`** 占位
+    （`RenderPipelineVariant.colorFormats` / `RenderPipelineDescriptor.colorFormats` 的类型变成
+    `readonly (TextureFormat | null)[]`）。键函数 `colorFormatsKey()` 把空位拼成 `none`；
+    密集列表的键与改动前**逐字相同**（`['a','b']` 仍是 `a,b`），所以既有键不重排。
+  - **为什么**：原生 WebGPU 的 `colorTargets` 本身就是**逐位置**的，密集列表根本没有能力表达
+    「第 1 个附件有、第 0 个没有」。批 `05` 的临时处置是「空位后面还有非空附件」直接报错；
+    本版把变体改成逐位置并**撤掉那条报错**。
+  - 实测：`test/webgpu-mrt-positional-formats.test.ts` 改前 15 用 **14 失败**（`56d0729`）、
+    改后 **16 用 16 通过**；`[a]` / `[a, null]` / `[null, a]` / `[a, a]` 现在建出 **4** 条互不相同的
+    原生管线，键分别是 `rgba8unorm|1|none` / `rgba8unorm,none|1|none` / `none,rgba8unorm|1|none` /
+    `rgba8unorm,rgba8unorm|1|none`。原生探针（`.tmp-10/mrt-positional-probe.ts`，Chrome + Intel
+    gen-9，只读）：`[a,null]` + targets `[{fmt},null]` 接受（location 0 = `255,0,0,255`）、
+    `[null,b]` + `[null,{fmt}]` 接受（location 1 = `0,255,0,255`）、
+    `[a,null,c]` + `[{fmt},null,{fmt}]` 接受（t0 = `255,0,0,255`、t2 = `0,0,255,255`）。
+    端到端两后端逐像素（`.tmp-10/mrt-parity-probe.ts`，走公开 core API）：
+    `mrtParityPixels` **逐字相同**且等于期望值，WebGL2 与 WebGPU 各一份。
+  - **这一条就是 0.4.0「已知限制」第 6 条的完整修法**。0.4.0 原文写的是
+    「WebGPU 侧『`null` 之后的附件』目前只明确报错，完整修法……**已推迟**」——
+    **本版修复**：`[null, a]`、`[a, null]`、`[a, null, c]` 现在都可表达且落点正确，
+    不再报错（`test/webgpu-mrt-null-slots.test.ts` 里批 `05` 那几条「中间空位报错」的断言
+    按「不再报错且落点正确」改写；尾部空位那条的期望值从 `['rgba8unorm']` 改成
+    `['rgba8unorm', null]`，因为逐位置之后尾部空位也占位）。
+
+- **`mipLevelExtent` 对 3D 纹理的 `depth` 现在逐级减半（批 `12`，`c835a8b` 证据 / `02d544a` 实现）**
+  - **原来**：把 `depthOrArrayLayers` 一律当作「数组层数、**不减半**」，`dimension` 甚至不在签名里。
+    WebGPU 的规定按 `dimension` 分三支：`"1d"` 的 depth 恒为 1；`"2d"` 原样返回层数；
+    `"3d"` 是 `max(1, depth >> level)`。`2d` 与 `3d` 共用描述符里同一个 `depthOrArrayLayers`
+    字段，只能靠 `dimension` 区分。
+  - **现在**：新增可选参数 `mipLevelExtent(size, level, dimension: TextureDimension = '2d')`；
+    `'3d'` 走规范公式 `max(1, depth >> level)`，缺省 `'2d'` 与 WebGPU 自身
+    `GPUTextureDescriptor.dimension` 的缺省一致 —— 所以**不是**「把两种语义糊进一个默认值」：
+    `'2d'` 下 `depthOrArrayLayers` 仍原样返回，现存调用方**逐字不变**。
+    顺带把 `dimension` 纳入校验：传本库没有的值（例如 JS 调用方传 `"2d-array"`）抛
+    `[gpu-device-api] mipLevelExtent: dimension must be "1d", "2d" or "3d"`，
+    而不是静默按 2d 算错 3D 的 depth（只新增错误路径，`level` 的错误消息与行为不变）。
+  - **为什么**：旧行为**对 3D 就是错的**。0.4.0「已知限制」第 16 条原文：
+    「`mipLevelExtent` 对 3D 的 `depth` 处理仍不符合 WebGPU 规范……该导出 helper 本身对 3D
+    会算错 —— 推迟（派工书 `.tmp-briefs/12-*.md`）」，并注明批 `03` 的实现**绕开了这个 helper**
+    （`WebGPUTexture.ts` 内的 `layerCountAtLevel` 自己算），所以 `#27` 的运行路径不受影响。
+  - 实测：`test/mip-level-extent-3d.test.ts`（复现测试，**一行没改**）改前 5 用 **4 失败**、改后
+    **5 用 5 通过**（同一条断言由失败转通过）。首个偏差在 `3d {8,8,6}` 的第 1 级 —— 实测 depth
+    **6**、规范要求 **3**。穷举扫描（12 组尺寸 × 0..8 级 × 1d/2d/3d）与测试内独立写出的规范实现比对：
+    改动前存在偏差、改动后为 0；`test/core-texture.test.ts` 新增「3d：depth 逐级减半」
+    （8×8×6 的第 1 级 depth=3、第 2 级 depth=1，改动前两级都是 6），并把原来那条
+    「层数不参与减半」的断言显式传 `'2d'` 写清归属（没有放宽任何断言）。
+  - 顺带如实记下**没有改**的一处：`fullMipLevelCount` 仍一律取 `max(w, h, d)`，对带数组层的 `2d`
+    会**高估**（对 `3d` 本来就是对的）。口径与这处高估已写进它的 TSDoc，本版不顺手改。
+
+### 破坏性变更（二）：发布形态（批 `14` + `15`，`245da1a` / `92d58e1`）
+
+这是本版对使用方**唯一需要动手**的一类改动。`dist/` 的形态、`package.json` 的入口字段、
+以及「模块说明符指向哪里」都变了。
+
+- **`dist/` 从「单个 bundle + `dist/types/**`」变成「模块树 + 单文件包」（批 `14`）**
+  - **原来**：`dist/gpu-device-api.js` 一个单文件 ESM（699,359 B / gzip 211,649 B）
+    + `dist/types/**` 350 个 `.d.ts`（+ `.map`）＝ 352 个文件，类型声明与 `.js` **不同目录**。
+  - **现在**：`tsc -p tsconfig.build.json` 输出**每源文件一个 `.js` + 同级 `.d.ts` + `.map`**，
+    四个入口平铺在 `dist/` 根下（`index.js` / `core.js` / `webgl2.js` / `webgpu.js` 各自 1.1~1.7 KB，
+    只做 re-export）；类型声明位置从 `dist/types/**` 变成 `dist/**`（与 `.js` 同级）。
+  - **使用方要改什么**：**模块说明符指向文件**。
+    `dist/types/index.d.ts` → `dist/index.d.ts`；分文件 `import` 同此道理
+    （0.4.0 及以前「用打包器直接吃 `dist/types/**` 里的单文件声明」的写法要改）。
+    走 `import { … } from '@dxyl/gpu-device-api'` 的**打包器用户基本无感** ——
+    `module` / `types` / `exports["."].import` 仍指向模块树入口。
+  - 数字（`.tmp-14/RESULT.md`）：文件数 352 → **712**（178 `.js` + 178 `.d.ts` + 356 `.map`）、
+    总字节 ~2.77 MB → **3,179,749 B**；`node .tmp-14/verify-emit.mjs dist`：
+    **178** 个 `.js`、**552** 条相对说明符、**0 缺失**、0 非 `.js` 结尾。
+    主入口内容**未变**：同一份冻结快照用新旧两种构建形状产出的主入口产物
+    **逐字节相同**（865,867 B、sha256 `746d9e92…94691`，`.tmp-14/ab-main-entry.mjs`）。
+
+- **`package.json` 入口字段改指向，并新增 `./core` `./webgl2` `./webgpu` 三个子入口（批 `14` + `15`）**
+  - **原来**：`main` / `module` / `types` 指向单文件 bundle 与 `dist/types/index.d.ts`，没有子入口。
+  - **现在**：`main` / `unpkg` / `jsdelivr` → `./dist/gpu-device-api.umd.cjs`；
+    `module` / `types` → `./dist/index.js` / `./dist/index.d.ts`；
+    `exports["."] = { types, import: ./dist/index.js, require: ./dist/gpu-device-api.umd.cjs }`；
+    新增 `./core` → `./dist/core.js` + `./dist/core.d.ts`、`./webgl2`、`./webgpu` 同形
+    （都指向**模块树**，**没有**为子入口出 UMD）。
+  - **使用方要改什么**：`require()` 用户现在拿到 **UMD 单文件包**（`main` 与
+    `exports["."].require` 都指它）；`import` 用户仍走模块树。想减小体积的消费方改用子入口
+    （见下面「一次评估后决定不做的事」里的数字）。`exports["."]` 同时提供 `require` 条件，
+    Node 与打包器按各自条件解析。
+  - **UMD 必须落在 `.cjs`（实测，非推断）**：同一份字节 `require('…umd.cjs')` → **251** 个导出，
+    `require('…umd.js')` → **0** 个导出且**不报错**（`"type":"module"` 下被当 ESM，
+    Node 24 静默给空命名空间，只留 `globalThis.GPUDeviceAPI` 副作用）——
+    所以这不是风格问题，是把文件名钉死的问题（`.tmp-15/umd-cjs-vs-js.mjs`）。
+
+- **子入口带来两处改名（只增不改，不在主入口公开面上）**：为消除子入口 re-export 的 TS2308
+  歧义，`src/webgl2/index.ts` 的 `TextureSampleType` → `GlTextureSampleType`、
+  `src/webgpu/index.ts` 的 `PipelineCache` → `WebGPUPipelineCache`（与 core 的同名类型不是一回事）。
+  这两个模块**不在主入口的公开面上**（`src/index.ts` 不导出任何后端），仓库内无引用。
+  主入口的导出面**未收窄**。
+
+### 新增：UMD / ES 单文件包（批 `15`，`92d58e1`）
+
+模块树 + 类型声明交给 `tsc`，**CDN 直引 / `<script>` / 无打包器场景**交给 `vite`：
+
+- `dist/gpu-device-api.umd.cjs`（**417,598 B** / gzip 124,766）—— 传统 `<script src>` 直接可用，
+  挂 `window.GPUDeviceAPI`；也是 `require()` 的落点。
+- `dist/gpu-device-api.es.js`（**701,578 B** / gzip 212,421）—— `<script type="module">` 直接引。
+  Vite 的 lib 模式对 `es` 格式刻意保留空白（`resolveEsbuildTranspileOptions()` 里
+  `isEsLibBuild` 分支写死 `minifyWhitespace: false`），所以它是 17,519 行 / 685 KiB；
+  UMD 是完整压缩（279 行 / 407 KiB）。这不是配置没生效。
+- **真实浏览器实测**（`.tmp-15/browser/*.html`，无头 Chrome + SwiftShader，页面由本地
+  vite dev server 经 HTTP 提供）：传统 `<script src="…umd.cjs">` 下 `window.GPUDeviceAPI`
+  有 **251** 个导出、`createDeviceWithAdapter` 建出真的 `WebGL2RenderingContext`
+  （`WebGL 2.0 (OpenGL ES 3.0 Chromium)`）并建出 buffer，`umdResult=ok`；
+  `<script type="module">` 直接 `import` ES 单文件同样 `ok`。两者注册表里 `webgpu` 与 `webgl2` 都在
+  —— 主入口**不导出** `WebGL2Adapter` / `WebGPUAdapter`，所以这一条是用
+  `createDefaultBackendRegistry().get(kind)` 与 `detectBackend().probes` 证明的，不是看导出名。
+
+### 工程与文档
+
+- **`scripts/build.mjs` 删除，`build` 改为直接串 `vite` + `tsc`**（用户明确要求）：
+  `"build": "vite build && tsc -p tsconfig.build.json && node scripts/postbuild.mjs"`。
+  **顺序不能反**：`vite build` 按 `emptyOutDir: true` **清空整个 `dist/`** 后写下两个单文件包，
+  紧随的 `tsc` **只写自己的文件、不删目录**，两者文件名不重叠 ⇒ 互不覆盖；反过来先 `tsc`
+  再 `vite`，刚生成的模块树会被 `emptyOutDir` 删掉。批 `14` 那个只做编排的 `scripts/build.mjs` 因此不再需要。
+- **`vite.config.ts` 里那段函数式 `server.watch.ignored`（忽略 `.tmpdir` / `.tmp-`）保留** ——
+  它丢了会让 dev server 在 Windows 上 `EBUSY` 崩，本会话**已复现两次**。
+- **`scripts/postbuild.mjs` 为什么保留（附对照实验）**：它**不是**编排器，只做一件事 ——
+  在 **4 个入口**的 `.d.ts` 首行插 `/// <reference types="@webgpu/types" />`。
+  根因：`lib.dom.d.ts` 里**没有** `GPUDevice` 的声明，而 `@webgpu/types` 不是 `@types/*` 包，
+  TypeScript 不会自动加载它。对照实验（`.tmp-15/postbuild-experiment.mjs`）：消费方只
+  `import type { Device }` 再取 `device.native`、`types: []`、`skipLibCheck: false` ——
+  **带** reference ⇒ `tsc` exit 0、**0 条错误**；**不带** ⇒ exit 2、
+  `core/Device.d.ts(152,22): error TS2552: Cannot find name 'GPUDevice'`。
+- **`sourcemap` 只在单文件包这一处关掉（`vite.config.ts` 的 `sourcemap: false`）**，
+  `tsconfig.build.json` 的 `sourceMap` / `declarationMap` 保持 `true` 不动 ⇒ 模块树仍有
+  **356** 个 `.map`。取舍的数字：两份单文件包 map 合计 **4,094,526 B / gzip 1,155,304 B**，
+  占带 map 版 `dist` 的 **49%**、占 npm tarball 增量的 **93%**（92.8%）；真正需要断点调试的是
+  模块树（消费方经自己的打包器走那条路），而单文件包面向 CDN 直引，塞 map 是纯负重。
+  关掉后 npm tarball **2,410,524 B → 1,252,641 B**（718 条目），只比 0.4.0 的 tarball
+  （**1,165,739 B**）多 **86,902 B（+7.5%）**，却多出两个可直接 `<script>` / `import` 的单文件包。
+- **批 `09` 的 CI 现在会检查「重建后 `dist` 与提交的 `dist` 一致」**：`.github/workflows/ci.yml`
+  的最后一步是 `git status --porcelain -- dist` 必须为空（`dist` 是**被跟踪**的），
+  用来机械拦住「改了 `src` 却没重建 `dist`」。本版把 `dist` 换成模块树 + 单文件包形态，
+  因此**需要在同一提交里重建并提交 `dist`**，否则这一步会红 —— 这与 0.4.0 那节记录的
+  「产出未提交」状态不同，是有意的收口。
+
+### 一次评估后决定不做的事：批 `13` 的 `WEBGL_multi_draw`（否定结论）
+
+评估结论是**本版不实现**，依据如下（证据：`1337e6f` 的 `examples/webgl-multi-draw-probe.*`）：
+
+- **扩展可用，且是规范签名**：无头 Chrome 152 下，默认 GL（ANGLE Intel UHD Graphics D3D11，
+  **真 GPU**）与 SwiftShader 两个 WebGL2 后端的 `getExtension('WEBGL_multi_draw')` 都 **non-null**；
+  四个方法 `fn.length` 实测 = **6/7/8/9**（即带 offset 的规范签名，`callNotes` 为空、没有走回退）。
+  别名 `WEBGL_multi_draw_instanced` / `_instanced_arrays` / `EXT_multi_draw` / `MOZ_WEBGL_multi_draw`
+  **全为 `null`**。
+- **收益真实，但随 drawcount 急剧衰减**：drawcall 确实从 10000 掉到 **1**，但持续吞吐
+  在 arrays@1000 是 **≈106x**（0.94 → 0.0089 ms/帧），到 **arrays@10000 仅 ≈4.6x**
+  （32.8 → 7.12）；elements@10000 ≈2.9x、instanced@10000 ≈2.9x。折算到每 sub-draw 成本：
+  N=1000 约 **9ns**、N=10000 约 **0.7~1.2 µs** —— 驱动侧仍按 sub-draw 计成本。
+- **正确性逐字节一致**：离屏 FBO 256×256 RGBA8 + `readPixels` 全字节比对，
+  arrays / elements / instanced / instanced-elements 四个入口 @256 以及 arrays @10000
+  都是 **差异 0/262144 字节、最大通道差 0、`glError = NO_ERROR`**；
+  对照证明比对**有分辨力**（倒序绘制差 110,055~110,418 字节、空图差 195,840 字节）。
+  另有真实合成截图逐字节相同（三组 single vs multi 均 100.00%、平均通道差 0.00）。
+- **`SwiftShader` 的性能数字不可用**（同配置 min 0.42 / 中位 207 / max 249 ms，噪声极大），
+  只作可用性与一致性证据；性能结论来自硬件 D3D11。
+- **不做的三个理由**：收益随 drawcount 急剧衰减（上面的数字）＋ 该路径 **WebGL2-only**
+  （WebGPU 无等价物，本库「一次编写、两个后端都能跑」的定位会因此破一个口）
+  ＋ 合并的前提是「状态完全相同、只有参数不同」，**漏判一个状态就是静默画错**
+  （与 0.4.0 那批「不报错、只是结果不对」的缺陷同类，代价高于收益）。
+
+### 验证状态（如实标注）
+
+- `tsc --noEmit`：**0 错误**。
+- `vitest run`：**48 文件 / 751 用例全过、0 跳过**（`dist` **重建后**的最终形态，
+  `test/entry-surface-dist.test.ts` 的 **7** 条强制校验从 `skip` 变为真跑并通过）。
+  未重建 `dist` 时是 `47 文件通过 + 1 跳过 / 744 通过 + 7 跳过`（既有 `describe.skipIf` 的设计）。
+- **五条锁定像素基线两后端逐字命中**，且与 0.4.0 记录的数值**逐字相同**（说明批 `10` / `12`
+  的语义改动没有引入像素回归）：
+  `instancing.html?verify=1&spin=0` → `instancingPixel=68,30,39` / `instancingDistinct=12`
+  （WebGPU 侧等 `instancingLit`）；`depth.html` → `depthResult=pass` / `depthPixel=255,0,0,255`；
+  `index.html?verify=1&spin=0` → `demoPixel=46,29,12`；
+  `batch.html?verify=1` → `batchLit=true` / `batchDrawcalls=125`；
+  `core-landscape.html` → `landscapeResult=ok` / `landscapeDrawCalls=8`。
+  另有 `rtt-orientation.html?layer=core|gfx` → `rttResult=pass`、`stencil.html` → `stencilResult=pass`。
+- **闸门与基线的运行环境**：无头 Chrome；WebGL2 用
+  `--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`、WebGPU 用
+  `--enable-unsafe-webgpu`，**两者绝不混用**；用 `127.0.0.1`（vite 只绑 IPv6 的 `localhost` 不算）。
+  基线取自提交 `f36dd73`（HEAD 未变才能沿用），门脚本 `.tmp-15/gates15.ps1` /
+  `.tmp-15/gates15-final.log`（**14 条闸门 exit 全 0**）。
+- `verify-emit`：**179** 个 `.js`（= 模块树 178 + ES 单文件包 1；ES 包内部没有任何相对说明符，
+  所以说明符数字**逐字未变**）、**552** 条相对说明符、**0 缺失**、0 非 `.js` 结尾；
+  四个入口都能被 Node **真实 import**：`index` **251** / `core` **151** / `webgl2` **218** /
+  `webgpu` **297** 个导出名。
+- 本版改动全部来自批 `10`（`56d0729` / `6e6bb84`）、批 `12`（`c835a8b` / `02d544a`）、
+  批 `14`（`e51acf1` / `245da1a`）、批 `15`（`92d58e1` / `bf07517` / `f36dd73`）、
+  批 `13`（`1337e6f`，探针与结论，无实现）。
+
+### 已知限制（如实标注）
+
+以下每一条都是**未验证 / 未测 / 结论对使用方有代价**的事项，**不要当成已验证的能力用**。
+
+1. **`.cjs` 在真实 CDN 上的 MIME / `nosniff` 未验证**（`.tmp-15/RESULT.md` 第 8 节）。
+   已验证的只有两处：本地 vite dev server 对 `/dist/gpu-device-api.umd.cjs` 发
+   `Content-Type: application/node`、**没有** `X-Content-Type-Options: nosniff`，Chrome 正常执行；
+   以及 Node 的 `require()`（`.js` 会静默给空命名空间，见上文的 `.cjs` 实测）。
+   浏览器**不读 `package.json` 的 `type`**，经典 `<script>` 加载什么扩展名都按经典脚本执行 ——
+   唯一的风险变量是 unpkg / jsDelivr 有没有配 `nosniff`（配了的话非 JS MIME 的经典脚本会被拒）。
+   **未验证**：本地既无法证伪也无法证实，因此不改产物命名、也不加冗余副本，只在此如实标注。
+2. **UMD 的 target 仍是 `es2022`**（与模块树一致）—— 它**不是**给老浏览器的降级产物；
+   真要支持旧引擎需另配 target，**本版未做**。
+3. **单文件包必然包含两个后端**（打的是主入口，`rollupOptions.external: []`）。
+   这是有意的取舍，不是缺陷：**要小就用子入口 + 打包器，要单文件就接受两个后端都在**。
+   相关内容与数字见下一条。
+4. **走包根的主入口，树摇实测无效**：C1（只用 WebGL2 的消费方）与 C3（两个后端都要）
+   的产物只差 **−2 字节**（正是 `'webgl2'` / `'auto'` 那个字符串字面量），
+   且 C1 产物里 `WebGPUAdapter` / `WebGPUDevice` / `WebGPURenderPassEncoder` 等符号完整在位；
+   rollup / esbuild / vite 三家、两种产物形态、六个消费方**每个组合都是 −2 字节**
+   （rollup 585,003 / 585,001、esbuild 291,738 / 291,736、vite 479,421 / 479,419，
+   gzip 也逐字节相同）。根因在源码结构而非打包器：`src/factories/default-registry.ts`
+   静态 import 了两个后端的 Adapter，`backend: 'webgl2'` 是**运行时字符串**，打包器摇不掉。
+   **正解是用子入口**：esbuild **291,738 → 167,843**（gzip 81,464 → 49,539，**−39.2%**）、
+   vite 479,421 → 269,541、rollup 585,003 → 327,957，且子入口产物里 WebGPU 符号**全部消失**。
+5. **`webpack` / `rspack` / `Bun` 未测**：上面的树摇与子入口数字只覆盖
+   rollup 4.63.2 / esbuild 0.21.5 / vite 5.4.21 三家（`node v24.20.0`、`pnpm 12.3.4`）。
+6. 0.4.0 节记录的限制里，有两条被本版按上面的方式处置（`#11.3` 完整修法 = 批 `10`；
+   `mipLevelExtent` 3D = 批 `12`），**其余限制在本版没有变化**，仍以 0.4.0 那节为准。
+   本版**没有**触碰 MSAA 多目标 resolve（0.4.0 第 2 条，仍只停留在「怀疑」）、
+   `#8` / `alphaToCoverageEnabled` 的调用级证据问题、`#39` 的 WebGL2 管线路径、
+   `#27` 数组 / 3D mip 的像素级验证，以及 `#20` 错误作用域的四条 GL 模型限制。
+7. **本文档提到的「未验证」清单**（便于逐条核对）：第 1 条的 CDN MIME / `nosniff`、
+   第 2 条的旧引擎 target、第 3 条单文件包必然含两个后端的体积代价、第 5 条的三个未测打包器；
+   另加 `SwiftShader` 的性能数字**不可用作收益判据**（批 `13`，同配置 min 0.42 /
+   中位 207 / max 249 ms）。
+
+---
+
 ## [0.4.0] - 2026-09-16
 
 本版目标：**让 `core` 层可在商业项目中放心使用**。优先级因此是
