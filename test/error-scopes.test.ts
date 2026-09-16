@@ -764,6 +764,47 @@ describe('#20.8 与既有 debug getError 轮询的冲突（本批最容易出的
     expect(error).toBeInstanceOf(ValidationError);
     device.dispose();
   });
+
+  it('作用域打开前就存在的 GL 错误不会被算成「作用域内的错误」（push 的排空把它挡在外面）', async () => {
+    const { device, queue } = createWebGl2Harness(true);
+    const api = errorScopeApi(device);
+    const reported: GpuError[] = [];
+    device.onError((error) => reported.push(error));
+
+    // debug 打开 → push 时会先把这条「上一段代码留下的」错误排掉并上报。
+    queue.codes.push(GL_ERRORS.INVALID_OPERATION);
+    api.pushErrorScope!('validation');
+    expect(reported).toHaveLength(1);
+
+    // 这个作用域是干净的：里面什么都没发生 → pop 必须返回 null。
+    await expect(api.popErrorScope!()).resolves.toBeNull();
+    expect(reported).toHaveLength(1);
+    device.dispose();
+  });
+
+  it('WebGL2：设备 dispose 后 pop 不会误报「无错」，而是如实说这个作用域无法再落定', async () => {
+    const { device } = createWebGl2Harness();
+    const api = errorScopeApi(device);
+    const scope = api.pushErrorScope!('validation') as { pop: () => Promise<GpuError | null> };
+    device.dispose();
+    /*
+     * 关键：这里**不能** resolve 成 `null` —— 设备已销毁、GL 队列再也读不到，
+     * `null` 会被理解成「作用域里没有错误」。
+     */
+    await expect(scope.pop()).rejects.toThrowError(/can no longer be settled/);
+    await expect(scope.pop()).rejects.toThrowError(/NOT "no error in scope"/);
+    // 设备这一侧也如实说：栈上没有作用域了。
+    await expect(api.popErrorScope!()).rejects.toThrowError(/no error scope on the stack/);
+  });
+
+  it('WebGPU：设备 dispose 后被遗弃的作用域同样拒绝 pop，而不是 resolve 成 null', async () => {
+    const { device } = createWebGpuHarness();
+    const api = errorScopeApi(device);
+    const scope = api.pushErrorScope!('validation') as { pop: () => Promise<GpuError | null> };
+    device.dispose();
+    await expect(scope.pop()).rejects.toThrowError(/can no longer be settled/);
+    await expect(api.popErrorScope!()).rejects.toThrowError(/no error scope on the stack/);
+  });
 });
 
 /* ------------------------------------------------------------------ #20.9 既有错误通道 -------- */
@@ -803,7 +844,6 @@ describe('#20.9 既有错误通道没有被破坏', () => {
 });
 
 /* ------------------------------------------------------------------ #20.10 作用域生命周期 ---- */
-
 describe('#20.10 作用域与设备生命周期', () => {
   it('两后端：pop 返回的 promise 在 await 之后才落定（异步语义真实）', async () => {
     const { device, queue } = createWebGl2Harness();

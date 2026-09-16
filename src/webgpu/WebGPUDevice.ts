@@ -58,6 +58,11 @@ import { ValidationError } from '../core/errors/ValidationError.js';
 import { OutOfMemoryError } from '../core/errors/OutOfMemoryError.js';
 import { GPUInternalError } from '../core/errors/GPUInternalError.js';
 import { DeviceLostError, type DeviceLostReason } from '../core/errors/DeviceLostError.js';
+import {
+  assertErrorScopeFilter,
+  type ErrorScopeFilter,
+  type ErrorScopeHandle,
+} from '../core/errors/ErrorScope.js';
 import { BufferUsage } from '../core/enums/BufferUsage.js';
 import { assertNonNegativeInteger } from '../utils/assert.js';
 import { disposeAll } from '../utils/Disposable.js';
@@ -136,6 +141,14 @@ export class WebGPUDevice implements Device {
   private readonly resources = new Set<Disposable>();
   private readonly canvasContexts = new Map<HTMLCanvasElement | OffscreenCanvas, WebGPUCanvasContext>();
   private readonly errorCallbacks = new Set<(error: GpuError) => void>();
+  /**
+   * `#20` 已压入、尚未弹出的错误作用域（栈顶即最内层）。
+   *
+   * 与原生的 `[[errorScopeStack]]` **一一对应**：这里只在 push 成功、pop 成功时同步增删，
+   * 任何原生调用失败都会把本地这一层回滚掉，因此 `scopeDepth` 永远不会与原生栈不一致
+   * （「状态撒谎」是本库反复修过的一类问题）。
+   */
+  private readonly scopeStack: WebGPUErrorScope[] = [];
   private readonly resolveLost: (info: DeviceLostInfo) => void;
   private lostInfoValue: DeviceLostInfo | null = null;
   private _disposed = false;
@@ -473,6 +486,113 @@ export class WebGPUDevice implements Device {
     };
   }
 
+  /**
+   * `#20` 压入错误作用域：**原生转发** `GPUDevice.pushErrorScope(filter)`。
+   *
+   * ## 为什么这一侧可以直接转发
+   *
+   * WebGPU 的错误作用域本来就是为这个场景设计的，栈、filter 匹配、不匹配时向外层穿透、
+   * `pop` 的异步性全部由实现保证。本层**不重新实现**那套语义（那只会引入偏差），
+   * 只做两件原生不做的事：
+   *
+   * 1. 记住**入栈顺序**（{@link WebGPUDevice.scopeStack}），这样未配对的 `pop` 能在本地
+   *    被明确拒绝，而不是把原生那句 `OperationError` 原样漏给调用方；
+   * 2. 让 `dispose()` 能把被遗弃的作用域一起清掉（否则它们会一直挂在栈上，
+   *    并且原生栈也只在设备销毁时才消失）。
+   *
+   * ## 能力缺失时如实报错
+   *
+   * `GPUDevice.pushErrorScope` 在**部分实现上没有**（原生接口本身也是可选的，
+   * mock / 残缺实现同样如此）。直接调用会得到一句 `is not a function`，调用方没有任何上下文，
+   * 所以这里显式探测并按本库惯例给出带替代方案的英文错误 —— **不假装记录**，
+   * 也不会退化成「本地记一个长度、`pop` 恒返回 null」那种会撒谎的等价物。
+   */
+  pushErrorScope(filter: ErrorScopeFilter): ErrorScopeHandle {
+    this.assertUsable('pushErrorScope');
+    assertErrorScopeFilter(filter, `Device "${this.label}".pushErrorScope(filter)`);
+
+    const native = this.native as GPUDevice & {
+      pushErrorScope?: (value: GPUErrorFilter) => void;
+    };
+    if (typeof native.pushErrorScope !== 'function') {
+      throw new ValidationError(
+        `[gpu-device-api] Device "${this.label}".pushErrorScope: this WebGPU implementation does not ` +
+          'expose GPUDevice.pushErrorScope, so device-level errors cannot be captured into a scope. ' +
+          'Subscribe to Device.onError instead (it receives the native uncapturederror events, which is ' +
+          'the same channel with coarser attribution), or run on an implementation that supports error scopes.',
+      );
+    }
+    native.pushErrorScope(filter as GPUErrorFilter);
+
+    const scope = new WebGPUErrorScope(filter, this.scopeLabel(), () => this.popScope());
+    this.scopeStack.push(scope);
+    this.logger.debug(`pushed error scope "${filter}" (depth ${this.scopeStack.length})`);
+    return scope;
+  }
+
+  /**
+   * `#20` 弹出错误作用域：原生 `popErrorScope()` 的结果映射成本库错误类型。
+   *
+   * 归属由原生保证（入栈时的那一层），所以这里只处理「没有作用域可弹」这一种本地错误：
+   * 它**拒绝**，而不是 resolve 成 `null` —— 后者会让「忘了配对」看起来像「作用域里没有错误」。
+   */
+  popErrorScope(): Promise<GpuError | null> {
+    return this.popScope();
+  }
+
+  /** 当前仍在栈上的错误作用域层数（诊断与测试用）。 */
+  get scopeDepth(): number {
+    return this.scopeStack.length;
+  }
+
+  /** 作用域句柄的默认 label（与其它资源一样走 `nextResourceId`，便于日志对照）。 */
+  private scopeLabel(): string {
+    return `webgpuErrorScope#${this.nextResourceId('scope')}`;
+  }
+
+  /** {@link WebGPUDevice.popErrorScope} 与作用域句柄 `pop()` 共用的唯一实现。 */
+  private popScope(): Promise<GpuError | null> {
+    const scope = this.scopeStack.pop();
+    if (!scope) {
+      return Promise.reject(
+        new ValidationError(
+          `[gpu-device-api] Device "${this.label}".popErrorScope: there is no error scope on the stack ` +
+            '(every popErrorScope() must be paired with a preceding pushErrorScope()).',
+        ),
+      );
+    }
+    const native = this.native as GPUDevice & {
+      popErrorScope?: () => Promise<GPUError | null>;
+    };
+    if (typeof native.popErrorScope !== 'function') {
+      return Promise.reject(
+        new ValidationError(
+          `[gpu-device-api] Device "${this.label}".popErrorScope: this WebGPU implementation does not ` +
+            'expose GPUDevice.popErrorScope, so the scope cannot be settled.',
+        ),
+      );
+    }
+    scope.close();
+    return native.popErrorScope().then((error) => {
+      if (error === null) return null;
+      const mapped = toGpuError(error);
+      scope.record(mapped);
+      /*
+       * `filterMatched` 按「交回来的错误类型是否与这一层的 filter 同类」判定，
+       * 而不是无条件 true。
+       *
+       * 依据是**实测的原生行为**（本机无头 Chrome，见
+       * `.tmp-07/probe/native-error-scope-probe.html?backend=webgpu`）：
+       * `outer=validation / inner=out-of-memory /` 一条 `GPUValidationError` →
+       * 内层 pop = null、外层 pop = GPUValidationError。也就是说**不匹配的错误会继续交给
+       * 外层作用域**，而不是消失。反过来说，一个作用域完全可能拿到一条与它 filter 不同类的
+       * 错误（只要没有更内层的作用域愿意接），那时如实报 `filterMatched = false`。
+       */
+      scope.markFilterMatched(nativeErrorMatchesFilter(error, scope.filter));
+      return mapped;
+    });
+  }
+
   /** 通过已注册的回调上报错误，不抛异常。回调自身抛错不会影响其它回调。 */
   reportError(error: GpuError): void {
     if (this.errorCallbacks.size === 0) {
@@ -494,6 +614,16 @@ export class WebGPUDevice implements Device {
     if (this._disposed) return;
     this._disposed = true;
     this.native.onuncapturederror = null;
+
+    /*
+     * `#20`：被遗弃的错误作用域（push 了但没 pop）在设备销毁时一并作废。
+     *
+     * `native.destroy()` 会让原生作用域栈消失，所以这里必须把句柄标记成「无法再落定」，
+     * 而不是只清空本地数组 —— 否则句柄的 `pop()` 会走原生那条已经失效的路径。用 `abandon()`
+     * 而不是 `close()`：后者会让 `pop()` 报「已经 pop 过」，那是误导（它从来没被 pop 过）。
+     */
+    for (const scope of this.scopeStack) scope.abandon();
+    this.scopeStack.length = 0;
 
     const resources = [...this.resources];
     this.resources.clear();
@@ -614,6 +744,120 @@ export function toGpuError(error: unknown): GpuError {
   if (isGpuErrorClass(error, 'GPUInternalError')) return new GPUInternalError(message);
   if (error instanceof Error) return new GpuError(message, { code: 'GPU_ERROR', cause: error });
   return new GpuError(message);
+}
+
+/**
+ * 原生的 `GPUError` 是哪一类 —— 用来判断它是否与某个作用域的 `filter` **同类**。
+ *
+ * 复用 {@link toGpuError} 的分类结果（`instanceof` + `constructor.name` 双路兜底），
+ * 这样「翻译成 core 错误类型」与「判断 filter 是否命中」永远基于同一个判断，
+ * 不会出现「翻译成 ValidationError 但被当成 out-of-memory 命中」这种自相矛盾。
+ */
+function nativeErrorMatchesFilter(error: GPUError, filter: ErrorScopeFilter): boolean {
+  const mapped = toGpuError(error);
+  if (filter === 'out-of-memory') return mapped instanceof OutOfMemoryError;
+  if (filter === 'internal') return mapped instanceof GPUInternalError;
+  return mapped instanceof ValidationError;
+}
+
+/**
+ * `#20` WebGPU 侧的错误作用域句柄。
+ *
+ * ## 为什么设备上还要记一层
+ *
+ * 原生的 `GPUDevice` 自己维护 `[[errorScopeStack]]`，语义（嵌套、filter 穿透、异步 pop）
+ * 全部由它保证。本层记这一层**只为两件事**，都不是重新实现语义：
+ *
+ * 1. 未配对的 `pop` 能在本地被明确拒绝（否则只能把原生那句 `OperationError` 原样漏出去，
+ *    调用方既不知道是本库的哪次调用、也拿不到 `[gpu-device-api] ` 前缀）；
+ * 2. `dispose()` 时把被遗弃的作用域句柄标记为 inactive，避免 `scopeDepth` 撒谎。
+ */
+class WebGPUErrorScope implements ErrorScopeHandle {
+  readonly label: string;
+  readonly filter: ErrorScopeFilter;
+  private readonly errorsSeen: GpuError[] = [];
+  private readonly settle: () => Promise<GpuError | null>;
+  private activeValue = true;
+  private matched = false;
+  /**
+   * 设备在它还没被 `pop` 的时候就被 `dispose()` 了。
+   *
+   * 与 {@link WebGPUErrorScope.close} 刻意分开：`close()` 表示「正常出栈了」，
+   * 这里表示「设备没了，这个作用域永远不会被落定」。两者对 `pop()` 的答复不同
+   *（一个说「已经 pop 过」、一个说「设备已销毁、无法落定」），混成一个状态会给出误导性的
+   * 消息 —— WebGL2 侧就是被自测抓到这一点才分开的。
+   */
+  private abandoned = false;
+
+  constructor(filter: ErrorScopeFilter, label: string, settle: () => Promise<GpuError | null>) {
+    this.filter = filter;
+    this.label = label;
+    this.settle = settle;
+  }
+
+  get active(): boolean {
+    return this.activeValue;
+  }
+
+  /**
+   * 返回的错误是否与这一层的 `filter` **同类**。
+   *
+   * 依据是**实测的原生行为**（本机无头 Chrome，见
+   * `.tmp-07/probe/native-error-scope-probe.html?backend=webgpu` + `wgpuNested*` 那几行）：
+   * 不匹配的错误会**继续交给外层作用域**，所以一个作用域可能拿到 filter 不同类的错误。
+   * 那种情况下这里如实返回 false，而不是为了让调用方安心而报 true。
+   *
+   * 空作用域（`pop` 返回 `null`）时保持 false ——「没有错误」谈不上命中。
+   */
+  get filterMatched(): boolean {
+    return this.matched;
+  }
+
+  get errors(): readonly GpuError[] {
+    return this.errorsSeen;
+  }
+
+  pop(): Promise<GpuError | null> {
+    if (this.abandoned) {
+      return Promise.reject(
+        new ValidationError(
+          `[gpu-device-api] error scope "${this.label}" can no longer be settled: the device was disposed ` +
+            'while this scope was still on the stack, so the native error scope is gone with it. ' +
+            'This is NOT "no error in scope" — resolving null here would be a lie.',
+        ),
+      );
+    }
+    if (!this.activeValue) {
+      return Promise.reject(
+        new ValidationError(
+          `[gpu-device-api] error scope "${this.label}" has already been popped; each pushErrorScope() ` +
+            'must be popped at most once.',
+        ),
+      );
+    }
+    return this.settle();
+  }
+
+  /** 记录任务源交回来的那条错误（`pop` 时调用；`errors` 因此最多一条）。 */
+  record(error: GpuError): void {
+    this.errorsSeen.push(error);
+  }
+
+  /** 原生返回了非 null 的错误 → 这一层的 filter 命中了。 */
+  markFilterMatched(matched: boolean): void {
+    this.matched = matched;
+  }
+
+  /** 设备销毁时对**被遗弃的**（还没 `pop` 的）作用域调用；语义见 `abandoned` 字段。 */
+  abandon(): void {
+    this.abandoned = true;
+    this.activeValue = false;
+  }
+
+  /** 正常出栈后调用；幂等。 */
+  close(): void {
+    this.activeValue = false;
+  }
 }
 
 function isGpuErrorClass(value: unknown, className: string): boolean {

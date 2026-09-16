@@ -27,6 +27,11 @@ import { BufferUsage } from '../core/enums/BufferUsage.js';
 import { ShaderStage } from '../core/enums/ShaderStage.js';
 import { GpuError } from '../core/errors/GpuError.js';
 import { DeviceLostError } from '../core/errors/DeviceLostError.js';
+import {
+  assertErrorScopeFilter,
+  type ErrorScopeFilter,
+  type ErrorScopeHandle,
+} from '../core/errors/ErrorScope.js';
 import { compileShaderStage } from '../shaders/ShaderCompiler.js';
 import { inferBindGroupLayoutEntries } from '../shaders/reflection/GLSLReflector.js';
 import { createLogger, type Logger } from '../utils/logger.js';
@@ -57,6 +62,12 @@ import type { Disposable } from '../utils/Disposable.js';
 
 import { GlStateCache } from './utils/glStateCache.js';
 import { buildDeviceLimits, queryGlFeatures, queryGlRendererInfo } from './utils/glCapabilities.js';
+import {
+  GL_ERROR_CODES,
+  WebGL2ErrorScope,
+  classifyGlError,
+  createGlError,
+} from './utils/glErrorScope.js';
 import { WebGL2Buffer } from './resources/WebGL2Buffer.js';
 import { WebGL2Texture } from './resources/WebGL2Texture.js';
 import { WebGL2Sampler } from './resources/WebGL2Sampler.js';
@@ -114,6 +125,18 @@ export class WebGL2Device implements Device {
   private readonly logger: Logger;
   private readonly resources = new Set<Disposable>();
   private readonly errorCallbacks = new Set<(error: GpuError) => void>();
+  /**
+   * `#20` 已压入、尚未弹出的错误作用域（栈顶即最内层）。
+   *
+   * ## 为什么默认完全零开销
+   *
+   * 只有这个数组非空时，{@link WebGL2Device.drainGlErrors} 才会把读到的错误往作用域里记账。
+   * 不调用 `pushErrorScope` 的代码路径上，唯一的额外工作是一次 `length === 0` 判断 ——
+   * 既不多一次 `gl.getError()`，也不改变既有 debug 轮询的读取次数。
+   */
+  private readonly scopeStack: WebGL2ErrorScope[] = [];
+  /** `gl.getError()` 真正被调用的次数（诊断与测试用：用来证明「默认零开销」与「只有一个消费者」）。 */
+  private glErrorReads = 0;
   /** 上下文恢复事件的订阅者；与 `errorCallbacks` 一样在 `dispose()` 时清空。 */
   private readonly contextRestoredCallbacks = new Set<(info: DeviceLostInfo) => void>();
   private readonly canvasContexts = new Map<HTMLCanvasElement | OffscreenCanvas, WebGL2CanvasContext>();
@@ -604,9 +627,243 @@ export class WebGL2Device implements Device {
     for (const callback of this.errorCallbacks) callback(error);
   }
 
+  /**
+   * `#20` 压入错误作用域：WebGL2 **没有**这个概念，这里给出等价物。
+   *
+   * ## 与 WebGPU 侧的语义差异（先说清楚，不假装一样）
+   *
+   * - 作用域只覆盖「`getError()` 读到的错误」，而 GL 的错误是**异步**产生的：
+   *   一次 `gl.getError()` 可能读到上一次无关调用留下的错误。所以这里回答的是
+   *   「这段时间内出现过某类错误」，**不是**「就是那一行错了」；
+   * - `filter` 无法真正筛选类型（GL 错误码分不出 validation / out-of-memory / internal），
+   *   它只决定「这条错误留在这一层，还是穿透给外层作用域」；
+   * - 每个作用域内 GL 只保留**一条**错误状态，所以 `errors` 的长度是下界而不是精确计数。
+   *
+   * 详见 `WebGL2ErrorScope` 与 `glErrorScope.ts` 的文件头。
+   *
+   * ## push 时先排空
+   *
+   * 入栈前把 GL 队列里**已有的**错误排掉（走既有的 `onError` 通道），否则上一段代码留下的
+   * 错误会被算进新作用域，作用域就变成「永远有错」。这一步同时也是「不消费掉别人错误」的
+   * 前提：排空走的是同一个消费者。
+   */
+  pushErrorScope(filter: ErrorScopeFilter): ErrorScopeHandle {
+    this.assertUsable('pushErrorScope');
+    assertErrorScopeFilter(filter, `Device "${this.label}".pushErrorScope(filter)`);
+
+    /*
+     * 入栈**之前**先把队列里残留的错误排掉（它们属于上一段代码，不属于这个作用域）。
+     *
+     * 顺序在这里是正确性问题，不是风格问题：`drainGlErrors` 把读到的错误记到**栈顶**作用域，
+     * 所以如果在 push 之后才排空，上一段代码留下的错误会被算进新作用域 ——
+     * 新作用域就变成「永远有错」，而那正是作用域最该避免的误报。
+     *
+     * 这一步**只在确实有人要看错误时才读**（栈上有作用域、或 debug 开着）：
+     * 两者都不成立时一次 `gl.getError()` 都不产生，默认路径的零开销契约因此不变。
+     */
+    if (this.debug || this.scopeStack.length > 0) this.drainGlErrors('pushErrorScope');
+
+    const scope = new WebGL2ErrorScope(filter, `webgl2ErrorScope#${nextId('scope')}`, (popped) =>
+      this.settleScope(popped),
+    );
+    this.scopeStack.push(scope);
+    this.logger.debug(`pushErrorScope("${filter}")：栈深 ${this.scopeStack.length}`);
+    return scope;
+  }
+
+  /**
+   * `#20` 弹出错误作用域：同步排空 GL 错误队列，再按 filter 决定错误留在哪一层。
+   *
+   * 栈为空时**拒绝**（而不是 resolve 成 `null`）——「没有作用域」与「作用域里没有错误」
+   * 是两件必须区分的事，后者才是 `null`。
+   *
+   * 出栈动作放在 {@link WebGL2Device.settleScope} 里，且**必须**在排空之后 —— 这一层要
+   * 留在栈顶才能接收「最后一次 `checkGlError` 到 `pop` 之间」产生的错误。
+   */
+  popErrorScope(): Promise<GpuError | null> {
+    const scope = this.scopeStack[this.scopeStack.length - 1];
+    if (!scope) {
+      return Promise.reject(
+        new ValidationError(
+          `[gpu-device-api] Device "${this.label}".popErrorScope: there is no error scope on the stack ` +
+            '(every popErrorScope() must be paired with a preceding pushErrorScope()).',
+        ),
+      );
+    }
+    return scope.pop();
+  }
+
+  /** 当前仍在栈上的错误作用域层数（诊断与测试用）。 */
+  get scopeDepth(): number {
+    return this.scopeStack.length;
+  }
+
+  /**
+   * `gl.getError()` 被调用的总次数。
+   *
+   * 暴露它是为了能**断言**「默认零开销」与「只有一个消费者」这两条契约：
+   * 不 push 作用域时不比改动前多读一次；push 之后 debug 轮询不会再多读一遍（那正是
+   * 「两个消费者互相抢错误」的形态）。
+   */
+  get glErrorReadCount(): number {
+    return this.glErrorReads;
+  }
+
+  /**
+   * GL 错误**唯一**的读取入口。`#20` 之后所有 `gl.getError()` 调用都必须走这里。
+   *
+   * ## 为什么必须收敛成一个消费者
+   *
+   * GL 的错误是「读一次消费一条」的状态位。改动前有两个潜在消费者：
+   * debug 模式下的轮询（{@link WebGL2Device.checkGlError}）与（本批新增的）错误作用域。
+   * 如果各自直接调 `gl.getError()`，先跑的那个会把错误读走，后跑的那个读到 `NO_ERROR` ——
+   * 于是**作用域会误报「无错」**（或 debug 轮询漏报），而两边都不会有任何异常。
+   * 这正是本批最容易出的静默错误。收敛成一个消费者之后，读到什么就同时给两边记账，
+   * 谁都不会把对方的结果吃掉。
+   *
+   * ## 记账规则
+   *
+   * - 读到错误时：交给栈顶作用域记账（若有），**并且**走 debug 上报通道（若 debug 打开），
+   *   两边拿到的是**同一条**错误；
+   * - 作用域是否「命中」由 `pop` 时按 filter 判定（见 {@link WebGL2Device.settleScope}），
+   *   这里只负责如实记账；
+   * - **本函数不做「要不要读」的判断**，那是调用方的事（`checkGlError` 看 `debug`、
+   *   `pushErrorScope` 看是否需要清残留）。这样职责单一：一读就必然两边都记账，
+   *   不会出现「守卫条件写错 → 读了却没人收」这种静默漏报
+   *   （本批第一次实现就踩了：`settleScope` 先把作用域出栈，导致这里的守卫以为无人关心）。
+   *
+   * 无限循环不会发生：读到 `NO_ERROR` 就停，而驱动对空队列恒返回 `NO_ERROR`。
+   */
+  private drainGlErrors(observedBy: string): void {
+    const debug = this.debug;
+    for (;;) {
+      this.glErrorReads += 1;
+      const code = this.gl.getError();
+      if (code === GL_ERROR_CODES.NO_ERROR) return;
+      const scope = this.scopeStack[this.scopeStack.length - 1];
+      if (scope) scope.record(createGlError(code, observedBy));
+      /*
+       * debug 通道继续用**改动前逐字相同**的那条消息与 `code: 'GL_ERROR'`。
+       *
+       * 不能趁这次改动把它换成作用域那套带前缀的英文消息：`code` 是机器可读的契约，
+       * 既有调用方（以及本仓库的测试）按它做分支。两条通道给出**同一个错误码、两种措辞**，
+       * 是刻意的：作用域那条要讲清楚「GL 分不出类型」，而 debug 日志那条只描述现象。
+       */
+      if (debug) this.reportError(createLegacyGlError(code, observedBy));
+    }
+  }
+
+  /**
+   * 作用域出栈时的归属判定（原生语义：错误归最内层；filter 不匹配则向外层穿透）。
+   *
+   * 返回本层 `pop()` 要交出去的那条错误；`null` 表示这一层没有可交的错误。
+   * 没有被交出去的错误不会被吞掉：它们要么留给外层（穿透），要么作为**未捕获错误**
+   * 走 `onError`（与 WebGPU 的 `uncapturederror` 同义）。
+   *
+   * ## 为什么「穿透」这件事在 GL 上仍然要做
+   *
+   * GL 本身没有 filter，但调用方写的是跨后端代码。若这里把 filter 当空气，
+   * `pushErrorScope('out-of-memory')` 内层就会把一条 validation 错误吃掉，
+   * 外层 `pushErrorScope('validation')` 拿到 `null` —— 同一段代码在 WebGPU 上拿得到错误、
+   * 在 WebGL2 上拿不到，那是最难查的一类不一致。
+   */
+  private settleScope(scope: WebGL2ErrorScope): GpuError | null {
+    /*
+     * 顺序：**先排空、再出栈**。
+     *
+     * 排空必须发生在作用域还在栈顶的时候 —— 「上一次 `checkGlError` 到这次 `pop` 之间」
+     * 产生的错误属于这一层，出栈后就没人接收了（第一次实现就是先出栈，结果这些错误
+     * 一条都读不到，`pop` 恒返回 null）。
+     */
+    this.drainGlErrors('popErrorScope');
+
+    // 出栈（句柄状态机与栈保持一致）。**注意：这里先不 close()** ——
+    // 下面的归属判定要把错误交给外层，而外层是否「活着」是按 `active` 判的；
+    // 过早 close 自己会影响不到外层，但为了顺序清楚，统一在判定结束后再收尾。
+    const position = this.scopeStack.lastIndexOf(scope);
+    if (position >= 0) this.scopeStack.splice(position, 1);
+
+    const errors = scope.errors;
+    const first = errors[0];
+    if (!first) {
+      scope.close();
+      return null;
+    }
+
+    const classification = classifyGlError(first);
+    if (classification === scope.filter) {
+      scope.markFilterMatched(true);
+      scope.close();
+      this.reportUnconsumed(errors.slice(1));
+      return first;
+    }
+
+    /*
+     * filter 不匹配 → 交给外层作用域。两条规则，顺序不能反：
+     *
+     * 1. **先找 filter 相同的外层**：跨后端代码在 `pushErrorScope('validation')` 外层里
+     *    看到的仍然是 validation 错误，这是调用方最可能想要的分类；
+     * 2. 找不到同 filter 的外层时，**交给最近的外层**，而不是把它当成未捕获错误丢掉。
+     *
+     * 第 2 条是照**实测的原生行为**写的，不是猜的：本机无头 Chrome 的原生 WebGPU 探针
+     * （`.tmp-07/probe/native-error-scope-probe.html?backend=webgpu`）实测
+     * `outer=validation / inner=out-of-memory /` 一条 `GPUValidationError` →
+     * 内层 pop = `null`，**外层 pop = `GPUValidationError`**。
+     * 也就是说原生会把不匹配的错误继续交给外层作用域，而不是让它变成 uncapturederror。
+     * 早期实现只做第 1 条，于是「内层 filter 写错 → 外层明明有作用域却什么都收不到」，
+     * 与 WebGPU 的实际行为对不上。
+     *
+     * 两条合起来也天然避免「同一条错误被复制进多个外层」：错误只搬进**一个**外层，
+     * 之后随那个外层一起出栈。
+     */
+    let fallback: WebGL2ErrorScope | null = null;
+    for (let index = this.scopeStack.length - 1; index >= 0; index -= 1) {
+      const outer = this.scopeStack[index]!;
+      if (!outer.active) continue;
+      fallback ??= outer;
+      if (outer.filter === classification) {
+        outer.record(first);
+        scope.markFilterMatched(false);
+        scope.close();
+        this.reportUnconsumed(errors.slice(1));
+        return null;
+      }
+    }
+    if (fallback) {
+      fallback.record(first);
+      scope.markFilterMatched(false);
+      scope.close();
+      this.reportUnconsumed(errors.slice(1));
+      return null;
+    }
+
+    // 没有任何外层能接收：作为未捕获错误上报（onError），绝不静默丢弃。
+    scope.markFilterMatched(false);
+    scope.close();
+    this.reportUnconsumed(errors);
+    return null;
+  }
+
+  /** 把作用域没有交出去的错误交给 `onError` 通道（与未捕获错误同一条路）。 */
+  private reportUnconsumed(errors: readonly GpuError[]): void {
+    for (const error of errors) this.reportError(error);
+  }
+
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
+    /*
+     * `#20`：被遗弃的作用域（push 了但没 pop）随设备一起作废 —— 而且**必须**明确作废。
+     *
+     * 这里的 `abandon()` 不是可选的收尾：设备一销毁就再也读不到 GL 错误队列，此时若让句柄的
+     * `pop()` 正常 resolve 成 `null`，等于告诉调用方「这个作用域里没有错误」——那是**撒谎**
+     * （本批自测抓到过这个形态）。作废之后 `pop()` 会拒绝，并说明「设备已销毁、无法落定，
+     * 这不等于无错」。
+     *
+     * 也不能用 `close()`：那会让消息变成「已经 pop 过」，同样是误导。
+     */
+    for (const scope of this.scopeStack) scope.abandon();
+    this.scopeStack.length = 0;
     // 先摘掉 canvas 上的事件监听器：device 被丢弃后 canvas 不能再强引用它。
     if (this.eventTarget && this.handleContextLost) {
       this.eventTarget.removeEventListener('webglcontextlost', this.handleContextLost);
@@ -642,18 +899,18 @@ export class WebGL2Device implements Device {
 
   /**
    * 在 debug 模式下轮询 `gl.getError()` 并转成统一错误。
-   * 注意这会强制 CPU/GPU 同步，所以只在 debug 打开时调用。
+   *
+   * ## `#20`：这里不再直接调 `gl.getError()`
+   *
+   * 读取收敛到 {@link WebGL2Device.drainGlErrors} 一个消费者，否则它与错误作用域会互相
+   * 抢错误（先跑的读到错误、后跑的读到 `NO_ERROR`，于是其中一边静默误报）。语义不变：
+   * 关掉 debug 时依旧一次 GL 调用都不产生；开着 debug 时读到的错误依旧逐条走 `onError`。
+   *
+   * 注意它会强制 CPU/GPU 同步，所以只在 debug 打开（或显式排空）时调用。
    */
   checkGlError(context: string): void {
     if (!this.debug) return;
-    const error = this.gl.getError();
-    if (error === this.gl.NO_ERROR) return;
-    this.reportError(
-      new GpuError(`[gpu-device-api] GL 错误 0x${error.toString(16)}（发生在 ${context} 之后）。`, {
-        code: 'GL_ERROR',
-        details: { glError: error, context },
-      }),
-    );
+    this.drainGlErrors(context);
   }
 
   private track<T extends Disposable>(resource: T): T {
@@ -747,6 +1004,22 @@ export class WebGL2Device implements Device {
       }
     }
   }
+}
+
+/**
+ * `#20`：debug 轮询通道（`checkGlError` → `onError`）用的错误构造函数。
+ *
+ * 消息与 `code` **与改动前逐字相同**（中文措辞、`0x` 十六进制、`details.glError`），
+ * 因为 `code: 'GL_ERROR'` 是机器可读的既有契约，调用方按它分支。错误作用域那条通道用的是
+ * `glErrorScope.ts` 里另一套更详细的消息 —— 同一个错误码、两种措辞，是刻意的：
+ * 作用域那条要讲清楚「GL 分不出 validation / out-of-memory / internal」，debug 日志那条
+ * 只描述现象。
+ */
+function createLegacyGlError(code: number, context: string): GpuError {
+  return new GpuError(`[gpu-device-api] GL 错误 0x${code.toString(16)}（发生在 ${context} 之后）。`, {
+    code: 'GL_ERROR',
+    details: { glError: code, context },
+  });
 }
 
 /** 探测当前 canvas 上可用的 WebGL2 能力，供 adapter 使用。 */

@@ -12,6 +12,7 @@ import type { BindGroup, BindGroupDescriptor } from './binding/BindGroup.js';
 import type { BindGroupLayout, BindGroupLayoutDescriptor } from './binding/BindGroupLayout.js';
 import type { PipelineLayout, PipelineLayoutDescriptor } from './binding/PipelineLayout.js';
 import type { GpuError } from './errors/GpuError.js';
+import type { ErrorScopeFilter, ErrorScopeHandle } from './errors/ErrorScope.js';
 import { ValidationError } from './errors/ValidationError.js';
 import type { DeviceLostReason } from './errors/DeviceLostError.js';
 import type { CommandEncoder, CommandEncoderDescriptor } from './render/CommandEncoder.js';
@@ -280,10 +281,72 @@ export interface Device {
    */
   createFence?(): Fence;
 
+  /* ---------------------------------------------------------------- 错误 */
+  /**
+   * `#20` 压入一个**错误作用域**：把接下来的一段设备级错误捕获下来，等 {@link Device.popErrorScope}
+   * 时一次性取走。
+   *
+   * ## 它解决什么问题
+   *
+   * `createBuffer` / `createTexture` / 命令录制这类调用是**同步**的，但设备是否接受它们只有
+   * 设备自己知道。在这之前，调用方只能靠 {@link Device.onError} 事后得知（错误来得晚、也
+   * 分不清是哪一次调用），于是「这次创建到底合不合法」在商业代码里只能靠猜。
+   *
+   * ## 对应关系
+   *
+   * - WebGPU：直接转发原生的 `GPUDevice.pushErrorScope(filter)`，语义**逐条相同**
+   *   （含嵌套、含 filter 不匹配时继续交给外层、含异步 `pop`）；
+   * - WebGL2：GL **没有**作用域概念，本层用 `gl.getError()` 轮询实现等价物。
+   *   它**做不到**的三件事必须说清楚：GL 错误码无法可靠区分 validation / out-of-memory /
+   *   internal；错误无法归属到具体调用；`pop` 只能同步排空而不是等任务源。
+   *   详见 `ErrorScopeHandle` 与 `WebGL2Device` 的对应实现。
+   *
+   * ## 成本
+   *
+   * **不调用它就没有任何开销**：WebGL2 侧只在栈非空时才开始记账，WebGPU 侧完全是原生的成本。
+   *
+   * @throws `ValidationError`（带 `[gpu-device-api] ` 前缀）：
+   * - `filter` 不是三个原生名字之一（与原生一样当场报错，不静默取默认值）；
+   * - WebGPU 实现没有暴露原生错误作用域（此时**如实报错**，并建议改用 `onError`，
+   *   而不是假装记录）。
+   * @throws `DeviceLostError` 设备已 `dispose()` 或已丢失。
+   */
+  pushErrorScope(filter: ErrorScopeFilter): ErrorScopeHandle;
+
+  /**
+   * 弹出最近一个未弹出的错误作用域，resolve 成作用域内捕获到的**第一条**错误；无错时 resolve 成 `null`。
+   *
+   * `popErrorScope()` 与 `pushErrorScope()` 返回的句柄上的 `pop()` 是**同一条路径**，不存在两套状态机。
+   *
+   * ## 异步性与归属（**实测**，别按直觉写）
+   *
+   * - WebGPU：真的异步（原生任务源）。错误归**设备处理到它时**栈上处于活动状态的那一层；
+   *   与作用域 `filter` **不同类**的错误会**继续交给外层作用域**（外层 filter 不同名也会接，
+   *   见 `ErrorScope.ts` 的实测记录）。
+   *   ⚠️ 因此**紧跟在一次非法调用之后立刻 `await popErrorScope()` 可能拿到 `null`**，
+   *   而错误随后落进外层或变成未捕获错误 —— 本机无头 Chrome 实测如此
+   *   （探针 `wgpuErrorAfterPop=null`）。想在同一层稳定拿到错误，就要让这一层的 `filter`
+   *   与错误的实际类型同类，并且别在设备处理完之前把这一层弹掉。
+   * - WebGL2：GL 的错误队列是同步查的，`pop` 当场排空后 promise 立即 resolve。
+   *   因为 GL 的错误模型是异步的（错误可能来自**上一次**无关调用），作用域只能回答
+   *   「这段时间内出现过某类错误」，**不能**精确归属到某一次调用。
+   *
+   * ## 未配对的 pop
+   *
+   * 栈为空时**拒绝**（`ValidationError`，带前缀），而不是 resolve 成 `null` ——
+   * 「没有作用域」和「作用域里没有错误」是两件必须区分的事，后者才是 `null`。
+   */
+  popErrorScope(): Promise<GpuError | null>;
+
   /**
    * 注册错误回调。WebGPU 把 `onuncapturederror` 路由到这里，WebGL2 把它轮询到的
    * `getError()` 结果（debug 模式）路由到这里，两者的内部校验失败也都走这里。
    * 返回一个取消订阅的函数。
+   *
+   * 与 {@link Device.pushErrorScope} 的关系是**互补**而不是替代：作用域只是额外给出
+   * 「这条错误属于刚刚那段代码」这个精度。但**两者不会同时报同一条错误**——
+   * 有作用域在栈上时，错误先归作用域（由 `pop` 取走），只有作用域没有取走的那些才继续走
+   * 这条通道。逐个捕获用作用域、长期监听用 `onError`，不要指望同一条错误在两边各出现一次。
    */
   onError(callback: (error: GpuError) => void): () => void;
 
