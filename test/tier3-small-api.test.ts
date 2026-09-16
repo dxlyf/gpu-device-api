@@ -25,12 +25,15 @@ import { describe, expect, it } from 'vitest';
 import { BufferUsage } from '../src/core/enums/BufferUsage.js';
 import { TextureUsage } from '../src/core/enums/TextureUsage.js';
 import { GpuError } from '../src/core/errors/GpuError.js';
+import { GPUInternalError } from '../src/core/errors/GPUInternalError.js';
 import { OutOfMemoryError } from '../src/core/errors/OutOfMemoryError.js';
 import { ValidationError } from '../src/core/errors/ValidationError.js';
 import type { Device } from '../src/core/Device.js';
 import type { Fence } from '../src/core/sync/Fence.js';
 import type { TextureViewDescriptor } from '../src/core/resources/TextureView.js';
 import type { RenderPipelineDescriptor } from '../src/core/pipeline/RenderPipeline.js';
+import { resolvePipelineLayoutLike } from '../src/core/pipeline/RenderPipeline.js';
+import * as coreErrors from '../src/core/errors/index.js';
 import * as coreResources from '../src/core/resources/index.js';
 import { resolveTextureViewDescriptor } from '../src/core/resources/TextureView.js';
 import { WebGPUDevice } from '../src/webgpu/WebGPUDevice.js';
@@ -91,8 +94,8 @@ function createFakeWebGpu(): FakeWebGpu {
       return { label: 'native-pipeline' };
     },
     createCommandEncoder: () => ({ label: 'native-encoder' }),
-    importExternalTexture: (source: unknown) => {
-      externalSources.push(source);
+    importExternalTexture: (descriptor: { source: unknown; label?: string }) => {
+      externalSources.push(descriptor.source);
       const texture = { ...nativeExternalTexture };
       destroyedExternalTextures.push(texture);
       return texture;
@@ -123,6 +126,8 @@ function createWebGpuDevice(fake: FakeWebGpu): WebGPUDevice {
 interface FenceHarness {
   readonly device: WebGL2Device;
   readonly fake: FakeWebGL2;
+  /** 设备服务的那张假 canvas（`createCanvasContext()` 只接受同一个）。 */
+  readonly canvas: HTMLCanvasElement;
   /** 已创建的 GL sync 对象数量。 */
   readonly syncCount: () => number;
   /** 把已创建的 sync 全部标记为「已 signal」。 */
@@ -180,6 +185,7 @@ function createFenceHarness(): FenceHarness {
   return {
     device,
     fake,
+    canvas: canvas.canvas,
     syncCount: () => syncs.length,
     signalAll: () => {
       for (const sync of syncs) signaled.add(sync);
@@ -285,61 +291,236 @@ function createMappedBufferHarness(): MappedBufferHarness {
   };
 }
 
+/* ------------------------------------------------------------------ WebGL2 上传路径（#25） ---- */
+
+/**
+ * `UNPACK_FLIP_Y_WEBGL` / `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 的 GL 枚举。
+ *
+ * 仓库自带的假 GL（`webgl2-fake-gl.ts`）的枚举表里还没有这两项，而 `WebGL2Queue` 是从
+ * 上下文实例上读 `gl.UNPACK_FLIP_Y_WEBGL` 的（因此读到的会是 `undefined`）。
+ * 为了让断言落在**真实枚举值**上，这里在建 harness 时把这两个常量补进假 GL —— 不改那个
+ * 被别的批次共用的文件。
+ */
+const UNPACK_FLIP_Y_WEBGL = 0x9240;
+const UNPACK_PREMULTIPLY_ALPHA_WEBGL = 0x9241;
+
+interface GlQueueHarness {
+  readonly device: WebGL2Device;
+  readonly fake: FakeWebGL2;
+  readonly canvas: HTMLCanvasElement;
+  readonly queue: import('../src/core/sync/Queue.js').Queue;
+  /** 上一次 `copyExternalImageToTexture` 里两次 `pixelStorei` 的 `pname:value` 序列。 */
+  unpackCalls(): string[];
+  /** 某个 `UNPACK_*` 开关当前的值。 */
+  currentPixelStore(pname: number): number | undefined;
+  texSubImageCalls(): number;
+  clearCalls(): void;
+}
+
+function createGlQueueHarness(): GlQueueHarness {
+  const fake = createFakeWebGL2();
+  const canvas = createFakeCanvas();
+  const gl = fake.gl as unknown as Record<string, unknown>;
+  gl.UNPACK_FLIP_Y_WEBGL = UNPACK_FLIP_Y_WEBGL;
+  gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL = UNPACK_PREMULTIPLY_ALPHA_WEBGL;
+
+  const pixelStore = new Map<number, number>();
+  const log: string[] = [];
+  let texSubImage = 0;
+  gl.pixelStorei = (pname: number, value: number) => {
+    pixelStore.set(pname, value);
+    // 只记这两个开关：`UNPACK_ALIGNMENT` 的进出不属于本项要验证的状态。
+    if (pname === UNPACK_FLIP_Y_WEBGL || pname === UNPACK_PREMULTIPLY_ALPHA_WEBGL) {
+      log.push(`${pname}:${value}`);
+    }
+  };
+  gl.texSubImage2D = () => {
+    texSubImage += 1;
+  };
+  gl.texSubImage3D = () => {
+    texSubImage += 1;
+  };
+
+  const device = new WebGL2Device({
+    gl: fake.gl,
+    canvas: canvas.canvas,
+    descriptor: { label: 'tier3-queue' },
+    adapterLimits: buildDeviceLimits(fake.gl),
+    adapterFeatures: new Set<string>(),
+  });
+
+  return {
+    device,
+    fake,
+    canvas: canvas.canvas,
+    queue: device.queue,
+    unpackCalls: () => [...log],
+    currentPixelStore: (pname) => pixelStore.get(pname),
+    texSubImageCalls: () => texSubImage,
+    clearCalls: () => {
+      log.length = 0;
+      // 状态也要清掉：不然「上一次调用留下的值」会被误读成「这一次下发的值」。
+      pixelStore.clear();
+    },
+  };
+}
+
+/** 在假 GL 上建一张可上传的 2D 纹理，作为 `copyExternalImageToTexture` 的目标。 */
+function createGlUploadTarget(harness: GlQueueHarness): import('../src/core/resources/Texture.js').Texture {
+  return harness.device.createTexture({
+    label: 'gl-copy-external-target',
+    size: { width: 2, height: 2, depthOrArrayLayers: 1 },
+    format: 'rgba8unorm',
+    usage: TextureUsage.CopyDst | TextureUsage.TextureBinding,
+  });
+}
+
 /* ------------------------------------------------------------------ #22 importExternalTexture - */
-describe('#22 device.importExternalTexture：本库缺失', () => {
-  it('core 的 Device 上没有 importExternalTexture（只有 escape hatch 转发）', () => {
-    // 类型层面：core 的 Device 接口里根本没有这个方法。
-    const typed: keyof Device extends never ? never : Device = {} as Device;
+describe('#22 device.importExternalTexture', () => {
+  it('core 的 Device 上有 importExternalTexture（改动前：整个接口里没有这个成员）', () => {
     type HasImport = 'importExternalTexture' extends keyof Device ? true : false;
-    const hasImport: HasImport = false;
-    expect(hasImport).toBe(false);
-    expect(typed).toBeDefined();
-    // 运行时层面：两个后端都没有实现。
+    const hasImport: HasImport = true;
+    expect(hasImport).toBe(true);
+    // 运行时层面：两个后端都实现了它 —— WebGPU 转发、WebGL2 明确报错，都不是 undefined。
     const fake = createFakeWebGpu();
     const webgpu = createWebGpuDevice(fake);
     const fence = createFenceHarness();
-    expect((webgpu as unknown as Record<string, unknown>).importExternalTexture).toBeUndefined();
-    expect((fence.device as unknown as Record<string, unknown>).importExternalTexture).toBeUndefined();
+    expect((webgpu as unknown as Record<string, unknown>).importExternalTexture).toBeTypeOf('function');
+    expect((fence.device as unknown as Record<string, unknown>).importExternalTexture).toBeTypeOf('function');
     webgpu.dispose();
     fence.device.dispose();
   });
 
-  it('WebGPU 侧应转发到原生 importExternalTexture（修复后 1 次调用）', () => {
+  it('WebGPU 侧转发到原生 importExternalTexture（恰好 1 次调用，source/label 原样）', () => {
     const fake = createFakeWebGpu();
     const device = createWebGpuDevice(fake);
     const source = { label: 'frame' } as unknown as VideoFrame;
-    const importFn = (device as unknown as {
-      importExternalTexture?: (options: { source: VideoFrame }) => { native: unknown; label: string };
-    }).importExternalTexture;
-    expect(importFn).toBeTypeOf('function');
-    const texture = importFn!.call(device, { source });
+    const texture = device.importExternalTexture({ source, label: 'camera' });
     expect(fake.externalSources).toEqual([source]);
     expect(texture.native).toBeDefined();
+    expect(texture.label).toBe('camera');
+    expect(texture.expired).toBe(false);
+    // 未给 label 时自动生成，与其它资源的约定一致。
+    const generated = device.importExternalTexture({ source });
+    expect(generated.label).toMatch(/^externalTexture#/);
     device.dispose();
+  });
+
+  it('外部纹理是设备的被追踪资源：dispose() 与 device.dispose() 都会摘掉它', () => {
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    const source = { label: 'frame' } as unknown as VideoFrame;
+    const baseline = device.trackedResourceCount;
+    const texture = device.importExternalTexture({ source });
+    expect(device.trackedResourceCount).toBe(baseline + 1);
+    texture.dispose();
+    expect(device.trackedResourceCount).toBe(baseline);
+    const second = device.importExternalTexture({ source });
+    device.dispose();
+    expect(second.disposed).toBe(true);
+  });
+
+  it('原生实现没有 importExternalTexture 时给出带替代方案的明确报错', () => {
+    const fake = createFakeWebGpu();
+    delete (fake.device as unknown as Record<string, unknown>).importExternalTexture;
+    const device = createWebGpuDevice(fake);
+    expect(() => device.importExternalTexture({ source: {} as VideoFrame })).toThrow(
+      /does not expose\s+GPUDevice\.importExternalTexture/,
+    );
+    expect(() => device.importExternalTexture({ source: {} as VideoFrame })).toThrow(ValidationError);
+    device.dispose();
+  });
+
+  it('colorSpace 未实现：明确报错，不静默忽略', () => {
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    expect(() =>
+      device.importExternalTexture({ source: {} as VideoFrame, colorSpace: 'display-p3' }),
+    ).toThrow(/colorSpace/);
+    // 报错发生在调用原生之前：一次原生调用都没有发生。
+    expect(fake.externalSources).toEqual([]);
+    device.dispose();
+  });
+
+  it('能力可提前判断：features.has("external-texture") 在 WebGPU 上为 true、WebGL2 上为 false', () => {
+    /*
+     * `importExternalTexture` **不是** WebGPU 的 feature（没有 requiredFeatures 要开），
+     * 它在部分实现上根本不存在。上层要提前判断就得看真实的调用面，所以 WebGPU 后端按
+     * 「原生有没有这个方法」上报这个能力名，WebGL2 后端恒为 false
+     * （见 `queryGlFeatures` 里的说明）。
+     */
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    expect(device.features.has('external-texture')).toBe(true);
+    device.dispose();
+
+    const withoutApi = createFakeWebGpu();
+    delete (withoutApi.device as unknown as Record<string, unknown>).importExternalTexture;
+    const limited = createWebGpuDevice(withoutApi);
+    expect(limited.features.has('external-texture')).toBe(false);
+    limited.dispose();
+
+    const harness = createFenceHarness();
+    expect(harness.device.features.has('external-texture')).toBe(false);
+    harness.device.dispose();
+  });
+
+  it('WebGL2 侧明确报错（GL 没有外部纹理），并给出替代方案', () => {
+    const harness = createFenceHarness();
+    const device = harness.device as unknown as {
+      importExternalTexture(options: { source: unknown }): unknown;
+    };
+    expect(() => device.importExternalTexture({ source: {} })).toThrow(ValidationError);
+    expect(() => device.importExternalTexture({ source: {} })).toThrow(/external-texture|copyExternalImageToTexture/);
+    // `source` 缺失是**参数错误**：两个后端给同一条错误。
+    expect(() => device.importExternalTexture({} as { source: unknown })).toThrow(/source/);
+    harness.device.dispose();
   });
 });
 
 /* ------------------------------------------------------------------ #23 swizzle ----------------- */
 
-describe('#23 TextureViewDescriptor.swizzle：本库缺失且被静默丢弃', () => {
-  it('类型里没有 swizzle 字段', () => {
+describe('#23 TextureViewDescriptor.swizzle', () => {
+  it('类型里有 swizzle 字段，且是四字符字符串（改动前：没有这个字段）', () => {
     type HasSwizzle = 'swizzle' extends keyof TextureViewDescriptor ? true : false;
-    const hasSwizzle: HasSwizzle = false;
-    expect(hasSwizzle).toBe(false);
+    const hasSwizzle: HasSwizzle = true;
+    expect(hasSwizzle).toBe(true);
   });
 
-  it('传入 swizzle 时解析结果里没有这个字段（静默丢弃）', () => {
+  it('传入 swizzle 时解析结果里带着它（改动前是被静默丢弃）', () => {
     const texture = {
       dimension: '2d' as const,
       depthOrArrayLayers: 1,
       mipLevelCount: 1,
       format: 'rgba8unorm' as const,
+      label: 'swizzle-subject',
     };
     const resolved = resolveTextureViewDescriptor(
       texture as unknown as Parameters<typeof resolveTextureViewDescriptor>[0],
-      { swizzle: { r: 'zero', g: 'one', b: 'zero', a: 'one' } } as unknown as TextureViewDescriptor,
+      { swizzle: 'r001' },
     );
-    expect(Object.prototype.hasOwnProperty.call(resolved, 'swizzle')).toBe(false);
+    expect(resolved.swizzle).toBe('r001');
+  });
+
+  it('非法 swizzle（长度不对/含非法字符）在解析阶段就报错，带上下文', () => {
+    const texture = {
+      dimension: '2d' as const,
+      depthOrArrayLayers: 1,
+      mipLevelCount: 1,
+      format: 'rgba8unorm' as const,
+      label: 'swizzle-subject',
+    };
+    const resolve = (swizzle: unknown) =>
+      resolveTextureViewDescriptor(
+        texture as unknown as Parameters<typeof resolveTextureViewDescriptor>[0],
+        { swizzle } as TextureViewDescriptor,
+      );
+    // 原生对错误取值只说一句 `must be exactly a four-character string`，没有上下文。
+    expect(() => resolve('rgb')).toThrow(ValidationError);
+    expect(() => resolve('rgbax')).toThrow(/four-character/);
+    expect(() => resolve('xyz0')).toThrow(/four-character/);
+    // 同一提案早期版本的 `{r,g,b,a}` 对象形状**不是**本库接受的输入（实测 Chrome 只吃字符串）。
+    expect(() => resolve({ r: 'zero' })).toThrow(ValidationError);
   });
 
   it('未指定 swizzle 时的解析结果与改动前逐字段一致（默认值回归）', () => {
@@ -353,7 +534,11 @@ describe('#23 TextureViewDescriptor.swizzle：本库缺失且被静默丢弃', (
       texture as unknown as Parameters<typeof resolveTextureViewDescriptor>[0],
       {},
     );
-    // 逐字段快照：改 swizzle 支持时不允许顺手改这些既有默认值。
+    /*
+     * 逐字段快照：加 swizzle 支持时不允许顺手改这些既有默认值。
+     * 注意 `swizzle` 在未指定时是 `undefined`（不是 `'rgba'`）—— 这样「有没有指定」是可分辨的，
+     * 后端才不会为默认情况平白多传一个字段给原生（那会改变既有调用形状）。
+     */
     expect({
       format: resolved.format,
       dimension: resolved.dimension,
@@ -362,6 +547,7 @@ describe('#23 TextureViewDescriptor.swizzle：本库缺失且被静默丢弃', (
       baseArrayLayer: resolved.baseArrayLayer,
       arrayLayerCount: resolved.arrayLayerCount,
       aspect: resolved.aspect,
+      swizzle: resolved.swizzle,
     }).toEqual({
       format: undefined,
       dimension: '2d',
@@ -370,10 +556,11 @@ describe('#23 TextureViewDescriptor.swizzle：本库缺失且被静默丢弃', (
       baseArrayLayer: 0,
       arrayLayerCount: 1,
       aspect: 'all',
+      swizzle: undefined,
     });
   });
 
-  it('WebGPU 侧应把 swizzle 原样转给 createView', () => {
+  it('WebGPU 侧把 swizzle 原样转给 createView；未指定时一个字段都不多传', () => {
     const fake = createFakeWebGpu();
     const device = createWebGpuDevice(fake);
     const texture = device.createTexture({
@@ -382,32 +569,45 @@ describe('#23 TextureViewDescriptor.swizzle：本库缺失且被静默丢弃', (
       format: 'rgba8unorm',
       usage: TextureUsage.TextureBinding | TextureUsage.CopyDst,
     });
-    const view = texture.createView({
-      label: 'swizzle-view',
-      swizzle: { r: 'zero', g: 'one', b: 'zero', a: 'one' },
-    } as unknown as TextureViewDescriptor);
+    const view = texture.createView({ label: 'swizzle-view', swizzle: 'r001' });
 
-    expect((view.descriptor as unknown as Record<string, unknown>).swizzle).toEqual({
-      r: 'zero',
-      g: 'one',
-      b: 'zero',
-      a: 'one',
-    });
-    expect(fake.viewDescriptors.at(-1)!.swizzle).toEqual({
-      r: 'zero',
-      g: 'one',
-      b: 'zero',
-      a: 'one',
-    });
+    expect(view.descriptor.swizzle).toBe('r001');
+    expect(view.swizzle).toBe('r001');
+    expect(fake.viewDescriptors.at(-1)!.swizzle).toBe('r001');
 
-    // 未指定时不向原生传 swizzle（保持改动前的调用形状）。
-    texture.createView({ label: 'no-swizzle' });
+    // 未指定时不向原生传 swizzle（保持改动前的调用形状），但对外读到的是原生默认值。
+    const plain = texture.createView({ label: 'no-swizzle' });
+    expect('swizzle' in fake.viewDescriptors.at(-1)!).toBe(false);
+    expect(plain.descriptor.swizzle).toBeUndefined();
+    expect(plain.swizzle).toBe('rgba');
+
+    // 无参调用同样不多传字段（这是最热的那条路径）。
+    texture.createView();
     expect('swizzle' in fake.viewDescriptors.at(-1)!).toBe(false);
 
     device.dispose();
   });
 
-  it('WebGL2 侧应明确报错（GL 没有 swizzle），而不是静默忽略', () => {
+  it('swizzle 是 view 的一部分：不会命中「没写 swizzle」的缓存条目', () => {
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    const texture = device.createTexture({
+      label: 'swizzle-cache',
+      size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage: TextureUsage.TextureBinding | TextureUsage.CopyDst,
+    });
+    const plain = texture.createView();
+    const swizzled = texture.createView({ swizzle: 'rrr1' });
+    expect(swizzled).not.toBe(plain);
+    expect(swizzled.swizzle).toBe('rrr1');
+    expect(plain.swizzle).toBe('rgba');
+    // 同一个 swizzle 重复取仍然复用同一个 view。
+    expect(texture.createView({ swizzle: 'rrr1' })).toBe(swizzled);
+    device.dispose();
+  });
+
+  it('WebGL2 侧明确报错（GL 没有 swizzle），而不是静默忽略', () => {
     const harness = createFenceHarness();
     const texture = harness.device.createTexture({
       label: 'gl-swizzle-target',
@@ -415,37 +615,53 @@ describe('#23 TextureViewDescriptor.swizzle：本库缺失且被静默丢弃', (
       format: 'rgba8unorm',
       usage: TextureUsage.TextureBinding | TextureUsage.CopyDst,
     });
-    expect(() =>
-      texture.createView({
-        label: 'gl-swizzle-view',
-        swizzle: { r: 'zero', g: 'one', b: 'zero', a: 'one' },
-      } as unknown as TextureViewDescriptor),
-    ).toThrow(ValidationError);
+    expect(() => texture.createView({ label: 'gl-swizzle-view', swizzle: 'r001' })).toThrow(ValidationError);
+    // 报错必须说清根因与替代方案，而不是只说「不支持」。
+    expect(() => texture.createView({ swizzle: 'r001' })).toThrow(/swizzle/);
+    expect(() => texture.createView({ swizzle: 'r001' })).toThrow(/WebGPU/);
+    // `'rgba'`（与默认值等价）不报错：它不是「要求重排」。
+    expect(() => texture.createView({ swizzle: 'rgba' })).not.toThrow();
+    // 未指定同样不报错（改动前的行为）。
+    expect(() => texture.createView()).not.toThrow();
+    harness.device.dispose();
+  });
+
+  it('WebGL2 的 canvas 帧纹理 view 走的是另一条路径，也必须明确报错', () => {
+    const harness = createFenceHarness();
+    const context = harness.device.createCanvasContext(harness.canvas);
+    // canvas 帧目标由 getCurrentFrameTarget() 提供（webgl2 侧是手写的 DefaultFramebufferView）。
+    const target = (context as unknown as {
+      getCurrentFrameTarget(): { texture: { createView(descriptor?: TextureViewDescriptor): unknown } };
+    }).getCurrentFrameTarget();
+    expect(() => target.texture.createView({ swizzle: 'rrr1' })).toThrow(ValidationError);
+    expect(() => target.texture.createView()).not.toThrow();
     harness.device.dispose();
   });
 });
 
 /* ------------------------------------------------------------------ #25 premultipliedAlpha ---- */
 
-describe('#25 copyExternalImageToTexture 的 premultipliedAlpha / colorSpace：本库缺失', () => {
-  it('core 的 Queue 签名里没有这两个参数（第 5、6 个参数不存在）', () => {
+describe('#25 copyExternalImageToTexture 的 premultipliedAlpha / colorSpace', () => {
+  it('core 的 Queue 签名里有第 5 个参数 options（改动前只有 4 个）', () => {
     type Params = Parameters<import('../src/core/sync/Queue.js').Queue['copyExternalImageToTexture']>;
     type HasFifth = Params extends [unknown, unknown, unknown, unknown?, unknown?, ...unknown[]] ? true : false;
-    // @ts-expect-error 复现证据：修复前签名只有 4 个参数，第五个参数不存在。
-    const hasFifth: HasFifth = false;
-    expect(hasFifth).toBe(false);
+    const hasFifth: HasFifth = true;
+    expect(hasFifth).toBe(true);
   });
 
-  it('WebGPU 侧默认（未指定）必须与原生逐字段一致：premultipliedAlpha=true / colorSpace="srgb"', () => {
+  it('WebGPU 侧默认（未指定）不下发这两个字段：原生默认值即 premultipliedAlpha=true / colorSpace="srgb"', () => {
     const fake = createFakeWebGpu();
     const device = createWebGpuDevice(fake);
-    // 记录原生 queue 收到的 options（改动前是 `{ source, flipY }`，没有任何这两个字段）。
+    // 记录原生 queue 收到的参数（改动前是 `{ source, flipY }`，没有任何这两个字段）。
     const received: Record<string, unknown>[] = [];
+    const destination: Record<string, unknown>[] = [];
     const queue = device.queue as unknown as { native: Record<string, unknown> };
     queue.native.copyExternalImageToTexture = (
       options: Record<string, unknown>,
+      dest: Record<string, unknown>,
     ) => {
       received.push(options);
+      destination.push(dest);
     };
     const texture = device.createTexture({
       label: 'copy-external-target',
@@ -456,49 +672,137 @@ describe('#25 copyExternalImageToTexture 的 premultipliedAlpha / colorSpace：�
     const source = { label: 'bitmap' } as unknown as ImageBitmap;
 
     device.queue.copyExternalImageToTexture(source, { texture }, { width: 4, height: 4, depthOrArrayLayers: 1 });
-    expect(received.at(-1)).toEqual({
-      source,
-      flipY: false,
-      premultipliedAlpha: true,
-      colorSpace: 'srgb',
-    });
+    /*
+     * 关键默认值断言：**未指定时一个字段都不多传**。
+     *
+     * 原生的 `GPUCopyExternalImageDestInfo` 里 `premultipliedAlpha` 默认 `true`、
+     * `colorSpace` 默认 `'srgb'`（IDL 默认值，见 W3C WebGPU 的
+     * #dictdef-gpucopyexternalimagedestinfo）。本库把「用默认值」实现成「不下发」——
+     * 由原生实现去填它自己的默认值。这样「没写新参数」的调用形状与改动前**逐字段相同**，
+     * 不存在「本库的默认值与原生的默认值哪天不一致」这种漂移。
+     */
+    expect(received.at(-1)).toEqual({ source, flipY: false });
+    expect('premultipliedAlpha' in destination.at(-1)!).toBe(false);
+    expect('colorSpace' in destination.at(-1)!).toBe(false);
+    // 其余 destination 字段照旧（与改动前一致）。
+    expect(destination.at(-1)!.mipLevel).toBeUndefined();
+    expect(destination.at(-1)!.origin).toBeUndefined();
+    expect(destination.at(-1)!.aspect).toBeUndefined();
 
-    // 显式传值时如实转发。
+    // 显式传值时如实转发到 destination（原生的这两个字段属于 destination）。
     device.queue.copyExternalImageToTexture(
       source,
       { texture },
       { width: 4, height: 4, depthOrArrayLayers: 1 },
       true,
-      // @ts-expect-error 复现证据：修复前签名只有 4 个参数，options 不存在。
       { premultipliedAlpha: false, colorSpace: 'display-p3' },
     );
-    expect(received.at(-1)).toEqual({
-      source,
-      flipY: true,
+    expect(received.at(-1)).toEqual({ source, flipY: true });
+    expect(destination.at(-1)).toEqual({
+      texture: (destination.at(-1)!.texture as GPUTexture | undefined),
       premultipliedAlpha: false,
       colorSpace: 'display-p3',
     });
 
     device.dispose();
   });
+
+  it('WebGPU 侧只给其中一个字段时，另一个仍然不下发（沿用原生默认值）', () => {
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    const destination: Record<string, unknown>[] = [];
+    const queue = device.queue as unknown as { native: Record<string, unknown> };
+    queue.native.copyExternalImageToTexture = (_options: Record<string, unknown>, dest: Record<string, unknown>) => {
+      destination.push(dest);
+    };
+    const texture = device.createTexture({
+      label: 'copy-external-partial',
+      size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+      format: 'rgba8unorm',
+      usage: TextureUsage.CopyDst | TextureUsage.TextureBinding,
+    });
+    const source = { label: 'bitmap' } as unknown as ImageBitmap;
+    const size = { width: 4, height: 4, depthOrArrayLayers: 1 };
+
+    device.queue.copyExternalImageToTexture(source, { texture }, size, false, { premultipliedAlpha: false });
+    expect(destination.at(-1)!.premultipliedAlpha).toBe(false);
+    expect('colorSpace' in destination.at(-1)!).toBe(false);
+
+    device.queue.copyExternalImageToTexture(source, { texture }, size, false, { colorSpace: 'display-p3' });
+    expect(destination.at(-1)!.colorSpace).toBe('display-p3');
+    expect('premultipliedAlpha' in destination.at(-1)!).toBe(false);
+
+    device.dispose();
+  });
+
+  it('WebGL2 侧：premultipliedAlpha 走 UNPACK_PREMULTIPLY_ALPHA_WEBGL，且用后复原', () => {
+    const harness = createGlQueueHarness();
+    const texture = createGlUploadTarget(harness);
+    const source = {} as TexImageSource;
+    const size = { width: 2, height: 2, depthOrArrayLayers: 1 };
+
+    // 省略 options：默认 true（与原生一致）；调用结束后两个开关都复原为 0。
+    harness.queue.copyExternalImageToTexture(source, { texture }, size);
+    expect(harness.unpackCalls()).toEqual([
+      `${UNPACK_FLIP_Y_WEBGL}:0`,
+      `${UNPACK_PREMULTIPLY_ALPHA_WEBGL}:1`,
+      `${UNPACK_FLIP_Y_WEBGL}:0`,
+      `${UNPACK_PREMULTIPLY_ALPHA_WEBGL}:0`,
+    ]);
+
+    // 显式 false。
+    harness.clearCalls();
+    harness.queue.copyExternalImageToTexture(source, { texture }, size, true, { premultipliedAlpha: false });
+    expect(harness.unpackCalls()).toEqual([
+      `${UNPACK_FLIP_Y_WEBGL}:1`,
+      `${UNPACK_PREMULTIPLY_ALPHA_WEBGL}:0`,
+      `${UNPACK_FLIP_Y_WEBGL}:0`,
+      `${UNPACK_PREMULTIPLY_ALPHA_WEBGL}:0`,
+    ]);
+
+    // 复原：两个开关都回到 0（否则会污染后续 writeTexture 的像素解包状态）。
+    expect(harness.currentPixelStore(UNPACK_FLIP_Y_WEBGL)).toBe(0);
+    expect(harness.currentPixelStore(UNPACK_PREMULTIPLY_ALPHA_WEBGL)).toBe(0);
+
+    harness.device.dispose();
+  });
+
+  it('WebGL2 侧：colorSpace 非 srgb 时明确报错，srgb（默认）照旧通过', () => {
+    const harness = createGlQueueHarness();
+    const texture = createGlUploadTarget(harness);
+    const source = {} as TexImageSource;
+    const size = { width: 2, height: 2, depthOrArrayLayers: 1 };
+
+    expect(() =>
+      harness.queue.copyExternalImageToTexture(source, { texture }, size, false, { colorSpace: 'display-p3' }),
+    ).toThrow(ValidationError);
+    expect(() =>
+      harness.queue.copyExternalImageToTexture(source, { texture }, size, false, { colorSpace: 'display-p3' }),
+    ).toThrow(/colorSpace/);
+    // 报错发生在任何 GL 调用之前（不留半截状态）。
+    expect(harness.texSubImageCalls()).toBe(0);
+    // 显式 'srgb' 与省略等价：不报错。
+    expect(() =>
+      harness.queue.copyExternalImageToTexture(source, { texture }, size, false, { colorSpace: 'srgb' }),
+    ).not.toThrow();
+    harness.device.dispose();
+  });
 });
 
 /* ------------------------------------------------------------------ #26 createFence ------------ */
 
-describe('#26 Device.createFence：接口上缺失，WebGL2 已有实现', () => {
-  it('core 的 Device 上把它声明为可选成员（不破坏第三方实现）', () => {
-    /*
-     * 复现证据：修复前 `Device` 上根本没有 `createFence` 成员。
-     *
-     * 这里不能用 `Device['createFence']` 做类型断言来判断 —— 对**不存在的属性**做索引访问，
-     * TS 会静默退化成 `any`（编译不报错，`undefined extends any` 也是 true），断言会假绿。
-     * 所以显式判断成员是否存在：修复前为 false，修复后（可选成员）为 true。
-     *
-     * 修复后的目标形状是：`createFence?: () => Fence` —— 可选，第三方 `Device` 实现不必提供。
-     */
+describe('#26 Device.createFence', () => {
+  it('core 的 Device 上它是可选成员（改动前：成员不存在；可选=不破坏第三方实现）', () => {
     type HasCreateFence = 'createFence' extends keyof Device ? true : false;
-    const hasCreateFence: HasCreateFence = false;
-    expect(hasCreateFence).toBe(false);
+    const hasCreateFence: HasCreateFence = true;
+    expect(hasCreateFence).toBe(true);
+    // 可选性：`createFence` 的值类型里包含 `undefined`，所以第三方实现可以不提供它。
+    type Signature = NonNullable<Device['createFence']>;
+    const callable: Signature = () => ({ signaled: true, wait: async () => {}, poll: () => true });
+    expect(callable()).toBeDefined();
+    type IsOptional = undefined extends Device['createFence'] ? true : false;
+    const isOptional: IsOptional = true;
+    expect(isOptional).toBe(true);
   });
 
   it('WebGPU 设备上不假装有 createFence（原生 WebGPU 没有 fence 对象）', () => {
@@ -528,23 +832,41 @@ describe('#26 Device.createFence：接口上缺失，WebGL2 已有实现', () =>
 
 /* ------------------------------------------------------------------ #28 GPUInternalError ------ */
 
-describe('#28 GPUInternalError：没有独立类', () => {
-  it('errors 模块里没有导出 GPUInternalError', () => {
-    expect((coreResources as unknown as Record<string, unknown>).GPUInternalError).toBeUndefined();
+describe('#28 GPUInternalError', () => {
+  it('errors 模块里导出了独立的 GPUInternalError', () => {
+    expect((coreErrors as unknown as Record<string, unknown>).GPUInternalError).toBeTypeOf('function');
   });
 
-  it('原生 GPUInternalError 现在被折成基类 GpuError（修复后应是独立类型）', () => {
+  it('原生 GPUInternalError 被映射成独立类型（code 仍是 INTERNAL_ERROR）', () => {
     const native = Object.create(globalThis.GPUValidationError?.prototype ?? Object.prototype) as object;
     Object.defineProperty(native, 'constructor', { value: { name: 'GPUInternalError' } });
     (native as { message?: string }).message = 'internal boom';
     const error = toGpuError(native);
     expect(error).toBeInstanceOf(GpuError);
+    // 关键：不再是基类，而是可以 `instanceof` 分辨的独立类型；message 仍然带前缀。
+    expect(error).toBeInstanceOf(GPUInternalError);
+    expect(error.constructor.name).toBe('GPUInternalError');
     expect(error.code).toBe('INTERNAL_ERROR');
-    // 修复后这一条要变成 true：错误类型应当是独立的 GPUInternalError。
-    expect(error.constructor.name).not.toBe('GPUInternalError');
+    expect(error.message).toBe('[gpu-device-api] internal boom');
+    // `name` 也应当是类名（`toString()` 会用到）。
+    expect(error.name).toBe('GPUInternalError');
+    expect(error.toString()).toBe('GPUInternalError [INTERNAL_ERROR]: [gpu-device-api] internal boom');
   });
 
-  it('OutOfMemoryError 是现有独立类的范例（新类应当照它的形状来）', () => {
+  it('三类原生错误仍然各自映射到各自的类型（没有互相吞掉）', () => {
+    const make = (className: string) => {
+      const native = Object.create(Object.prototype) as object;
+      Object.defineProperty(native, 'constructor', { value: { name: className } });
+      (native as { message?: string }).message = 'boom';
+      return native;
+    };
+    expect(toGpuError(make('GPUValidationError'))).toBeInstanceOf(ValidationError);
+    expect(toGpuError(make('GPUOutOfMemoryError'))).toBeInstanceOf(OutOfMemoryError);
+    expect(toGpuError(make('GPUInternalError'))).toBeInstanceOf(GPUInternalError);
+    expect(toGpuError(make('GPUInternalError'))).not.toBeInstanceOf(OutOfMemoryError);
+  });
+
+  it('OutOfMemoryError 是现有独立类的范例（新类照它的形状来）', () => {
     const error = new OutOfMemoryError('[gpu-device-api] boom');
     expect(error).toBeInstanceOf(GpuError);
     expect(error.code).toBe('OUT_OF_MEMORY');
@@ -553,24 +875,115 @@ describe('#28 GPUInternalError：没有独立类', () => {
 
 /* ------------------------------------------------------------------ #39 layout 放宽 ------------ */
 
-describe('#39 RenderPipelineDescriptor.layout 只接受 PipelineLayout', () => {
-  it('类型上不接受 BindGroupLayout（使用者手上的就是这个）', () => {
+describe('#39 RenderPipelineDescriptor.layout 接受 BindGroupLayout', () => {
+  it('类型上接受 BindGroupLayout 与 readonly BindGroupLayout[]（改动前只接受 PipelineLayout）', () => {
     type Layout = NonNullable<RenderPipelineDescriptor['layout']>;
-    // 修复后 `BindGroupLayout` 与 `readonly BindGroupLayout[]` 都会被接受。
-    type AcceptsBindGroupLayout = import('../src/core/binding/BindGroupLayout.js').BindGroupLayout extends Layout
-      ? true
-      : false;
-    // 复现证据：修复前 layout 只接受 PipelineLayout | 'auto'，所以这里只能写 false。
-    const accepts: AcceptsBindGroupLayout = false;
-    expect(accepts).toBe(false);
+    type Bgl = import('../src/core/binding/BindGroupLayout.js').BindGroupLayout;
+    type AcceptsOne = Bgl extends Layout ? true : false;
+    type AcceptsMany = readonly Bgl[] extends Layout ? true : false;
+    const acceptsOne: AcceptsOne = true;
+    const acceptsMany: AcceptsMany = true;
+    expect(acceptsOne).toBe(true);
+    expect(acceptsMany).toBe(true);
+  });
+
+  it('core 的归一化：单一 Bgl / 数组都合成一个 PipelineLayout，顺序即 bind group index', () => {
+    const calls: (readonly unknown[])[] = [];
+    const make = (label: string) =>
+      ({
+        label,
+        entries: [],
+        native: null,
+        entry: () => undefined,
+        sortedEntries: [],
+        disposed: false,
+        dispose: () => {},
+      }) as unknown as import('../src/core/binding/BindGroupLayout.js').BindGroupLayout;
+    const a = make('a');
+    const b = make('b');
+    const synthesize = (layouts: readonly import('../src/core/binding/BindGroupLayout.js').BindGroupLayout[]) => {
+      calls.push(layouts);
+      return {
+        label: 'synthesized',
+        bindGroupLayouts: layouts,
+        native: null,
+        isAuto: false,
+        disposed: false,
+        dispose: () => {},
+      } as unknown as import('../src/core/binding/PipelineLayout.js').PipelineLayout;
+    };
+    const context = 'test';
+
+    // 'auto' / undefined：不合成。
+    expect(resolvePipelineLayoutLike(undefined, synthesize, context)).toEqual({
+      layout: 'auto',
+      synthesized: null,
+    });
+    expect(resolvePipelineLayoutLike('auto', synthesize, context)).toEqual({
+      layout: 'auto',
+      synthesized: null,
+    });
+    // 单个 Bgl：合成「只有一组」的 layout。
+    const single = resolvePipelineLayoutLike(a, synthesize, context);
+    expect(single.synthesized).not.toBeNull();
+    expect(calls.at(-1)).toEqual([a]);
+    // 数组：顺序原样传给原生（下标即 bind group index）。
+    resolvePipelineLayoutLike([a, b], synthesize, context);
+    expect(calls.at(-1)).toEqual([a, b]);
+    // 空数组是用法错误，明确报错（原生会静默当成「没有布局」）。
+    expect(() => resolvePipelineLayoutLike([], synthesize, context)).toThrow(ValidationError);
+    // 真正的 PipelineLayout 原样通过，不合成。
+    const pipelineLayout = synthesize([a]);
+    const passed = resolvePipelineLayoutLike(pipelineLayout, synthesize, context);
+    expect(passed.layout).toBe(pipelineLayout);
+    expect(passed.synthesized).toBeNull();
+  });
+
+  it('WebGPU 后端：单个 BindGroupLayout 会被包成原生 GPUPipelineLayout（顺序一致）', () => {
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    const layout = device.createBindGroupLayout({
+      label: 'bgl',
+      entries: [{ binding: 0, visibility: 1, type: 'uniform' }],
+    });
+    const pipeline = device.createRenderPipeline({
+      label: 'inline-layout',
+      layout,
+      vertex: { module: device.createShaderModule({ code: '// vs' }) },
+    });
+    // core 的元数据：合成出来的 layout 里就是那一个 bind group layout。
+    expect(pipeline.layout).not.toBe('auto');
+    expect((pipeline.layout as { bindGroupLayouts: readonly unknown[] }).bindGroupLayouts).toEqual([layout]);
+    device.dispose();
+  });
+
+  it('WebGPU 后端：合成的 layout 随管线 dispose 一起释放（不泄漏在设备上）', () => {
+    const fake = createFakeWebGpu();
+    const device = createWebGpuDevice(fake);
+    const layout = device.createBindGroupLayout({
+      label: 'bgl-leak',
+      entries: [{ binding: 0, visibility: 1, type: 'uniform' }],
+    });
+    const before = device.trackedResourceCount;
+    const pipeline = device.createRenderPipeline({
+      label: 'inline-layout-leak',
+      layout,
+      vertex: { module: device.createShaderModule({ code: '// vs' }) },
+    });
+    const layoutObject = pipeline.layout;
+    pipeline.dispose();
+    expect((layoutObject as { disposed: boolean }).disposed).toBe(true);
+    // 管线与合成的 layout 都从设备追踪表里摘掉了（调用方的 BindGroupLayout 还在）。
+    expect(device.trackedResourceCount).toBeLessThan(before + 3);
+    device.dispose();
   });
 });
 
 /* ------------------------------------------------------------------ #40 asByteView -------------- */
 
-describe('#40 asByteView()：本库没有，使用者只能手写、且极易写成拷贝', () => {
-  it('resources 模块里没有导出 asByteView', () => {
-    expect((coreResources as unknown as Record<string, unknown>).asByteView).toBeUndefined();
+describe('#40 asByteView()', () => {
+  it('resources 模块导出了 asByteView', () => {
+    expect((coreResources as unknown as Record<string, unknown>).asByteView).toBeTypeOf('function');
   });
 
   it('陷阱本身：对部分范围（Uint8Array）做 new Uint8Array(range) 是逐元素拷贝，写入会丢', async () => {
@@ -597,7 +1010,7 @@ describe('#40 asByteView()：本库没有，使用者只能手写、且极易写
     harness.device.dispose();
   });
 
-  it('修复后：asByteView(部分范围) 与 asByteView(整段) 都必须是视图，写入到达 buffer', async () => {
+  it('asByteView(部分范围) 与 asByteView(整段) 都是视图，写入真的到达 buffer', async () => {
     const harness = createMappedBufferHarness();
     const buffer = harness.device.createBuffer({
       label: 'byte-view',
@@ -607,14 +1020,12 @@ describe('#40 asByteView()：本库没有，使用者只能手写、且极易写
     const whole = await buffer.mapAsync('write');
 
     // 整段：与 mapAsync() 的返回值指向同一块内存（`buffer` 相同）。
-    // @ts-expect-error 复现证据：修复前 resources 模块没有 asByteView。
     const wholeView = coreResources.asByteView(buffer.getMappedRange());
     expect(wholeView.buffer).toBe(whole);
     expect(wholeView.byteOffset).toBe(0);
     expect(wholeView.byteLength).toBe(16);
 
     // 部分范围：是映射内存上的子视图，不是拷贝。
-    // @ts-expect-error 复现证据：修复前 resources 模块没有 asByteView。
     const sliceView = coreResources.asByteView(buffer.getMappedRange(4, 4));
     expect(sliceView.buffer).toBe(whole);
     expect(sliceView.byteOffset).toBe(4);

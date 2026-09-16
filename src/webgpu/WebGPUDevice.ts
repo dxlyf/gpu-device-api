@@ -7,7 +7,7 @@
  *    使 `dispose()` 能一次性释放设备创建的全部资源；
  * 2. **错误通道**：`device.onuncapturederror` 被路由到 `Device.onError` 注册的回调，
  *    原始 `GPUValidationError` / `GPUOutOfMemoryError` / `GPUInternalError` 会被翻译成
- *    core 的 `ValidationError` / `OutOfMemoryError` / `GpuError`；
+ *    core 的 `ValidationError` / `OutOfMemoryError` / `GPUInternalError`；
  * 3. **设备丢失**：`device.lost` 映射为 {@link DeviceLostInfo}，并在非主动销毁的情况下
  *    额外上报一个 {@link DeviceLostError}。
  *
@@ -43,6 +43,10 @@ import type { RenderTargetDescriptor } from '../core/render/RenderTarget.js';
 import type { ComputePipelineDescriptor } from '../core/pipeline/ComputePipeline.js';
 import type { RenderPipelineDescriptor } from '../core/pipeline/RenderPipeline.js';
 import type { BufferDescriptor } from '../core/resources/Buffer.js';
+import type {
+  ExternalTexture,
+  ExternalTextureDescriptor,
+} from '../core/resources/ExternalTexture.js';
 import type { QuerySet, QuerySetDescriptor } from '../core/resources/QuerySet.js';
 import type { QueryResult, QuerySetReadOptions } from '../core/sync/QueryResult.js';
 import type { SamplerDescriptor } from '../core/resources/Sampler.js';
@@ -52,6 +56,7 @@ import type { Disposable } from '../utils/Disposable.js';
 import { GpuError, isGpuError } from '../core/errors/GpuError.js';
 import { ValidationError } from '../core/errors/ValidationError.js';
 import { OutOfMemoryError } from '../core/errors/OutOfMemoryError.js';
+import { GPUInternalError } from '../core/errors/GPUInternalError.js';
 import { DeviceLostError, type DeviceLostReason } from '../core/errors/DeviceLostError.js';
 import { BufferUsage } from '../core/enums/BufferUsage.js';
 import { assertNonNegativeInteger } from '../utils/assert.js';
@@ -67,6 +72,7 @@ import {
 } from './utils/wgpuCapabilities.js';
 import { WebGPUBuffer } from './resources/WebGPUBuffer.js';
 import { WebGPUTexture } from './resources/WebGPUTexture.js';
+import { WebGPUExternalTexture } from './resources/WebGPUExternalTexture.js';
 import { WebGPUSampler } from './resources/WebGPUSampler.js';
 import { WebGPUShaderModule } from './resources/WebGPUShaderModule.js';
 import { WebGPUQuerySet, asGPUQuerySet, TIMESTAMP_INSIDE_PASSES_FEATURES, TIMESTAMP_QUERY_FEATURE } from './resources/WebGPUQuerySet.js';
@@ -143,7 +149,15 @@ export class WebGPUDevice implements Device {
     this.debug = init.descriptor.debug ?? false;
     this.enabledFeatures = [...(init.descriptor.requiredFeatures ?? [])];
     this.enabledFeatureSet = readEnabledFeatures(native, this.enabledFeatures);
-    this.features = new WebGPUFeatures(init.adapterFeatures);
+    this.features = new WebGPUFeatures(
+      // 原生的 feature 名列表之外再补一个**纯调用面**的能力名：`importExternalTexture` 不是
+      // WebGPU 的 feature（没有 `requiredFeatures` 要开），但它在部分实现上根本不存在，
+      // 所以按「方法在不在」上报。上层就能用 `device.features.has('external-texture')`
+      // 两个后端统一判断（WebGL2 上恒为 false），不必自己去看 `device.native`。
+      typeof (native as GPUDevice & { importExternalTexture?: unknown }).importExternalTexture === 'function'
+        ? [...init.adapterFeatures, 'external-texture']
+        : init.adapterFeatures,
+    );
     this.limits = readDeviceLimits(native.limits);
     this.defaultSampleCount = assertSampleCount(
       init.descriptor.defaultSampleCount ?? 1,
@@ -261,6 +275,56 @@ export class WebGPUDevice implements Device {
   createQuerySet(descriptor: QuerySetDescriptor): WebGPUQuerySet {
     this.assertUsable('createQuerySet');
     return this.track(new WebGPUQuerySet(this, descriptor));
+  }
+
+  /**
+   * 把一个图像来源导入成外部纹理（原生 `GPUDevice.importExternalTexture`）。
+   *
+   * ## 为什么先探测方法在不在，而不是无脑转发
+   *
+   * `GPUDevice.importExternalTexture` 在**部分实现上没有**（原生接口本身也是可选的：
+   * Chrome 很早就有了，其它实现未必）。直接调用会得到一句 `is not a function`，而调用方
+   * 完全没有上下文。这里显式探测并给出一条带替代方案的消息 —— 这也是本库对
+   * 「能力可能在也可能不在」的一贯做法（对照 `readTimingSupport()`）。
+   *
+   * ## 过期语义
+   *
+   * 返回的对象是**一帧有效**的：原生把它绑到自动过期任务源，之后任何使用都会失败。
+   * 本类只提供 {@link ExternalTexture.expired} 的透传查询，不自己计时（见
+   * `WebGPUExternalTexture` 的说明）。**每帧重新导入**是调用方的契约。
+   *
+   * ## `colorSpace` 明确报错而不是静默忽略
+   *
+   * `ExternalTextureDescriptor.colorSpace` 是**本库刻意保留但未实现**的字段
+   * （规范的 `GPUExternalTextureDescriptor` 现在只有 `source` / `label`）。既然它在
+   * 类型里存在，传了却什么都不做就是本库最忌讳的静默忽略，所以这里直接报错并给出替代方案。
+   */
+  importExternalTexture(descriptor: ExternalTextureDescriptor): WebGPUExternalTexture {
+    this.assertUsable('importExternalTexture');
+    if (descriptor.colorSpace !== undefined) {
+      throw new ValidationError(
+        '[gpu-device-api] Device.importExternalTexture: "colorSpace" is not implemented by the WebGPU ' +
+          'backend (the native GPUExternalTextureDescriptor has no such field, so forwarding it would be ' +
+          'silently ignored). Convert the source into the wanted color space before importing it — for ' +
+          'example draw it into an OffscreenCanvas and re-import that — or omit the option.',
+      );
+    }
+    const importNative = (
+      this.native as GPUDevice & {
+        importExternalTexture?: (options: { source: unknown; label?: string }) => GPUExternalTexture;
+      }
+    ).importExternalTexture;
+    if (typeof importNative !== 'function') {
+      throw new ValidationError(
+        `[gpu-device-api] Device.importExternalTexture: this WebGPU implementation does not expose ` +
+          'GPUDevice.importExternalTexture, so external textures cannot be imported on this device. ' +
+          'Upload the frame into a regular texture instead (Queue.copyExternalImageToTexture) and sample ' +
+          'that; it needs no external-texture support and behaves the same on both backends.',
+      );
+    }
+    const label = descriptor.label ?? `externalTexture#${this.nextResourceId('externalTexture')}`;
+    const native = importNative.call(this.native, { source: descriptor.source, label });
+    return this.track(new WebGPUExternalTexture(this, native, label));
   }
 
   /**
@@ -547,7 +611,7 @@ export function toGpuError(error: unknown): GpuError {
 
   if (isGpuErrorClass(error, 'GPUValidationError')) return new ValidationError(message);
   if (isGpuErrorClass(error, 'GPUOutOfMemoryError')) return new OutOfMemoryError(message);
-  if (isGpuErrorClass(error, 'GPUInternalError')) return new GpuError(message, { code: 'INTERNAL_ERROR' });
+  if (isGpuErrorClass(error, 'GPUInternalError')) return new GPUInternalError(message);
   if (error instanceof Error) return new GpuError(message, { code: 'GPU_ERROR', cause: error });
   return new GpuError(message);
 }

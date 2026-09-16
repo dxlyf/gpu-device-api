@@ -1,4 +1,4 @@
-export { type ExternalImageSource, type Queue } from './Queue.js';
+export { type CopyExternalImageOptions, type ExternalImageSource, type Queue } from './Queue.js';
 export { type Fence } from './Fence.js';
 export {
   timestampDeltaToMilliseconds,

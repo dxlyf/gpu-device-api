@@ -404,6 +404,10 @@ function viewCacheKey(d: TextureView['descriptor']): string {
     d.baseArrayLayer,
     d.arrayLayerCount,
     d.aspect,
+    // `#23`：swizzle 是 view 的一部分 —— 不把它算进 key 会让
+    // `createView({ swizzle: 'rrr1' })` 直接命中此前 `createView()` 的缓存条目，
+    // 于是「采样时重排通道」静默失效（拿到视图里的 descriptor 也不对）。
+    d.swizzle ?? '',
   );
 }
 

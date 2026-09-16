@@ -15,7 +15,7 @@ import { nextId } from '../../utils/id.js';
 import { paddedCopy, typedArrayElementSize } from '../../utils/typedArray.js';
 import { assertUploadDataType, glFormat } from '../utils/glFormatMap.js';
 import { resolveUploadLayout, uploadTextureData } from '../utils/copyLayout.js';
-import type { Queue, ExternalImageSource } from '../../core/sync/Queue.js';
+import type { Queue, ExternalImageSource, CopyExternalImageOptions } from '../../core/sync/Queue.js';
 import type { Buffer } from '../../core/resources/Buffer.js';
 import type { BufferCopyView, CommandBuffer, TextureCopyView } from '../../core/render/CommandEncoder.js';
 import type { Extent3D, TexelCopyBufferLayout } from '../../types/internal.js';
@@ -168,17 +168,54 @@ export class WebGL2Queue implements Queue {
     destination: TextureCopyView,
     copySize: Extent3D,
     flipY = false,
+    options?: CopyExternalImageOptions,
   ): void {
     const texture = destination.texture as WebGL2Texture;
     const info = glFormat(texture.format);
     const gl = this.gl;
     const origin = resolveOrigin(destination.origin);
 
+    /*
+     * `#25`：`colorSpace` 在 WebGL2 上没有对应能力 —— **明确报错**，不静默忽略。
+     *
+     * 为什么做不到：`UNPACK_COLORSPACE_CONVERSION_WEBGL` 只能表达「要不要让浏览器做它默认的
+     * 色彩空间转换」（`BROWSER_DEFAULT_WEBGL` / `NONE` 两态），**表达不了「转成哪一个空间」**；
+     * GL 侧的颜色空间是由纹理**内部格式**（`-srgb` 后缀）决定的，与「源图是什么空间」无关。
+     * 所以 `display-p3` 在 WebGL2 上无路可走 —— 传了就报错，别让画面悄悄偏色。
+     *
+     * 默认值是 `'srgb'`（与原生一致）：省略或显式传 `'srgb'` 都走下面这条既有路径，
+     * 调用形状与改动前逐字段相同（`pixelStorei` 序列一个字节都没变）。
+     */
+    const colorSpace = options?.colorSpace ?? 'srgb';
+    if (colorSpace !== 'srgb') {
+      throw new ValidationError(
+        `[gpu-device-api] Queue.copyExternalImageToTexture: colorSpace "${colorSpace}" is not supported by ` +
+          `the WebGL2 backend (texture "${texture.label}"). GL has no per-copy color space conversion: ` +
+          'UNPACK_COLORSPACE_CONVERSION_WEBGL can only turn the browser default conversion on or off, and ' +
+          'the destination encoding is decided by the texture internal format (the "-srgb" suffix), not ' +
+          'by this option. Convert the source into sRGB beforehand (draw it into an OffscreenCanvas and ' +
+          'use that), or use an "-srgb" texture format, or omit the option (the default is "srgb").',
+      );
+    }
+
     gl.bindTexture(texture.target, texture.native);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     // WebGPU 的 copyExternalImageToTexture 默认把图像按「左上角为原点」处理，
     // 而 GL 的纹理坐标原点在左下角，所以默认需要翻转；flipY 显式传入时以其为准。
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flipY ? 1 : 0);
+    /*
+     * `#25`：`premultipliedAlpha` 在 GL 上有对应能力，走 `UNPACK_PREMULTIPLY_ALPHA_WEBGL`。
+     *
+     * **两个 `UNPACK_*` 状态必须成对恢复到各自的默认值**（flipY 默认 false、premultiply 默认
+     * false），否则它们会泄漏到后续的 `texSubImage2D` / `texSubImage3D` 调用上 —— 那些路径
+     * （`writeTexture` / `copyBufferToTexture`）**从不设置**这两个开关，一旦被这里改脏，
+     * 「同一份数据先 copyExternalImage 再 writeTexture」就会得到两个不同的结果。
+     *
+     * 注意默认值的方向：原生的 `premultipliedAlpha` 默认是 **true**（写进纹理的 RGB 要乘 alpha），
+     * 所以「省略」时这里下发的是 1，恢复时回到 0 —— 默认值由我们填，而不是指望 GL 的默认值恰好一致。
+     */
+    const premultipliedAlpha = options?.premultipliedAlpha ?? true;
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, premultipliedAlpha ? 1 : 0);
     try {
       if (texture.target === gl.TEXTURE_3D || texture.target === gl.TEXTURE_2D_ARRAY) {
         gl.texSubImage3D(
@@ -208,7 +245,10 @@ export class WebGL2Queue implements Queue {
         );
       }
     } finally {
+      // 两个 UNPACK 开关都恢复到各自的默认值：漏掉 premultiply 会让后续的上传路径被静默改写
+      // （它们从不设置这个开关，见 copyExternalImageToTexture 的说明）。
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     }
     // 只改了当前纹理单元的绑定（见 writeTexture 里的说明）。

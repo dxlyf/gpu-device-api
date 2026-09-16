@@ -27,6 +27,7 @@ import type {
   RenderPipelineVariant,
   VertexState,
 } from '../../core/pipeline/RenderPipeline.js';
+import { resolvePipelineLayoutLike } from '../../core/pipeline/RenderPipeline.js';
 import type { PipelineLayout } from '../../core/binding/PipelineLayout.js';
 import type { VertexBufferLayout } from '../../core/pipeline/VertexLayout.js';
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
@@ -107,6 +108,8 @@ export class WebGPURenderPipeline implements RenderPipeline {
   private readonly sampleCountContext: string;
   private _disposed = false;
   private warnedMissingVertexLayouts = false;
+  /** `#39`：构造时是否由本管线合成了 layout（合成的那份由本管线负责释放）。 */
+  private readonly ownsLayout: boolean;
 
   /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
   private defaultColorFormatsCache: readonly TextureFormat[] | null = null;
@@ -128,7 +131,26 @@ export class WebGPURenderPipeline implements RenderPipeline {
     this.device = device;
     this.descriptor = descriptor;
     this.label = descriptor.label ?? `renderPipeline#${device.nextResourceId('renderPipeline')}`;
-    this.layout = descriptor.layout ?? 'auto';
+    /*
+     * `#39`：`layout` 除了 `PipelineLayout | 'auto'`，还接受单个 `BindGroupLayout`（或它的数组）。
+     * 原生的 `GPUPipelineDescriptorBase.layout` 只认 `GPUPipelineLayout | 'auto'`，所以后者要在
+     * 这里合成一个真正的 `GPUPipelineLayout`（走 `device.createPipelineLayout()`：与手写包装
+     * 逐字段相同，包括 label、bindGroupLayouts 顺序与 `maxBindGroups` 校验）。
+     *
+     * 合成对象由设备追踪，并**由本管线负责释放**（见 `dispose()`）—— 它只为这条管线而建，
+     * 调用方拿不到它的引用，留在设备里就是泄漏。
+     */
+    const resolved = resolvePipelineLayoutLike(
+      descriptor.layout,
+      (bindGroupLayouts) =>
+        this.device.createPipelineLayout({
+          label: `${this.label}:inlinePipelineLayout`,
+          bindGroupLayouts,
+        }),
+      `WebGPUDevice.createRenderPipeline("${this.label}").layout`,
+    );
+    this.layout = resolved.layout;
+    this.ownsLayout = resolved.synthesized !== null;
     this.vertexLayouts = descriptor.vertex.buffers ?? null;
     this.logger = createLogger(`webgpu:${this.label}`);
     this.sampleCountContext = `RenderPipeline "${this.label}": sampleCount`;
@@ -406,6 +428,9 @@ export class WebGPURenderPipeline implements RenderPipeline {
     this.cache.dispose();
     // 解析备忘也一并丢掉：里面的 resolved / key 已经没有意义，入参引用也不必再留。
     this.variantMemo.length = 0;
+    // `#39`：合成的 layout 只为这条管线而建，调用方拿不到它的引用，必须在这里释放。
+    // 调用方自己传进来的 `PipelineLayout`（ownsLayout 为 false）不动 —— 那是它的资源。
+    if (this.ownsLayout && this.layout !== 'auto') this.layout.dispose();
     this.device.untrack(this);
   }
 

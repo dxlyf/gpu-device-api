@@ -7,10 +7,17 @@
  */
 
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
-import type { TextureView, TextureViewDescriptor } from '../../core/resources/TextureView.js';
+import type {
+  TextureSwizzleString,
+  TextureView,
+  TextureViewDescriptor,
+} from '../../core/resources/TextureView.js';
 import type { WebGPUTexture } from './WebGPUTexture.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
-import { resolveTextureViewDescriptor } from '../../core/resources/TextureView.js';
+import {
+  DEFAULT_TEXTURE_SWIZZLE,
+  resolveTextureViewDescriptor,
+} from '../../core/resources/TextureView.js';
 import { describeUnknown } from './WebGPUBuffer.js';
 import { assertTextureAspectForFormat, toGPUTextureFormat } from '../utils/wgpuFormatMap.js';
 import { toGPUTextureAspect, toGPUTextureViewDimension } from '../utils/wgpuEnumMap.js';
@@ -95,12 +102,26 @@ export class WebGPUTextureView implements TextureView {
       mipLevelCount: resolved.mipLevelCount,
       baseArrayLayer: resolved.baseArrayLayer,
       arrayLayerCount: resolved.arrayLayerCount,
+      /*
+       * `#23`：**只在调用方显式给了 swizzle 时才传这个字段**。
+       *
+       * 少传一个字段不是省事，而是「改动前后行为逐字段一致」的要求：原先的
+       * `createView()` 调用参数里没有 swizzle，而填上默认值 `'rgba'` 会改变送给原生实现的
+       * descriptor 形状（也会让所有既有调用多走一条校验路径）。默认值交给原生实现填，
+       * 这里的 `resolved.swizzle === undefined` 就代表「没指定」。
+       */
+      ...(resolved.swizzle === undefined ? {} : { swizzle: resolved.swizzle }),
     });
   }
 
   /** view 覆盖的格式（可能是重解释后的格式）。 */
   get format(): TextureFormat {
     return this.descriptor.format ?? this.texture.format;
+  }
+
+  /** 实际生效的通道重排；未指定时为 `'rgba'`（与原生默认值一致）。 */
+  get swizzle(): TextureSwizzleString {
+    return this.descriptor.swizzle ?? DEFAULT_TEXTURE_SWIZZLE;
   }
 
   get disposed(): boolean {

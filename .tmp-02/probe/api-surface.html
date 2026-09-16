@@ -23,7 +23,10 @@
       const backend = params.get('backend') ?? 'webgl2';
       const out = document.getElementById('out');
       const lines = [];
-      const publish = (key, value) => document.body.setAttribute(`data-${key}`, String(value));
+      // `<script type="module">` 在 `document.body` 存在之前就会执行（脚本标签可以出现在
+      // `<head>` 里，Vite 也会把它挪到那里），所以这里一律往 `documentElement` 上写，
+      // 与 scripts/verify-headless.mjs 读取的位置一致。
+      const publish = (key, value) => document.documentElement.setAttribute(`data-${key}`, String(value));
 
       function report(key, value) {
         lines.push(`${key} = ${value}`);
@@ -84,24 +87,37 @@
         report('GPUExternalTexture_ctor', typeof globalThis.GPUExternalTexture);
 
         // #23: GPUTextureViewDescriptor.swizzle is accepted by createView.
-        let swizzleResult = 'unknown';
-        try {
+        // Two competing shapes exist in the wild: the spec's `{r,g,b,a}` component object and an
+        // older 4-character string form. Probe BOTH, because the library must match what the
+        // browser in front of it actually takes.
+        const probeView = (label, descriptor) => {
           const texture = device.createTexture({
-            label: 'probe-swizzle',
+            label: `probe-swizzle-${label}`,
             size: { width: 4, height: 4, depthOrArrayLayers: 1 },
             format: 'rgba8unorm',
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
           });
-          const view = texture.createView({
-            label: 'probe-swizzle-view',
-            swizzle: { r: 'zero', g: 'one', b: 'zero', a: 'one' },
-          });
-          swizzleResult = view ? 'accepted' : 'returned-falsy';
-          texture.destroy();
-        } catch (error) {
-          swizzleResult = `threw:${error.constructor.name}:${error.message}`;
-        }
-        report('createViewSwizzle', swizzleResult);
+          try {
+            const view = texture.createView(descriptor);
+            return view ? 'accepted' : 'returned-falsy';
+          } catch (error) {
+            return `threw:${error.constructor.name}:${error.message}`;
+          } finally {
+            texture.destroy();
+          }
+        };
+        report('createViewSwizzleObject', probeView('object', {
+          label: 'probe-swizzle-view',
+          swizzle: { r: 'zero', g: 'one', b: 'zero', a: 'one' },
+        }));
+        report('createViewSwizzleString', probeView('string', {
+          label: 'probe-swizzle-view',
+          swizzle: 'rgba',
+        }));
+        report('createViewSwizzleStringZeroOne', probeView('string-zero-one', {
+          label: 'probe-swizzle-view',
+          swizzle: 'r001',
+        }));
 
         // #25: GPUQueue.copyExternalImageToTexture accepts premultipliedAlpha + colorSpace.
         let copyExternalApi = 'unknown';

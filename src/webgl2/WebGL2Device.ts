@@ -32,10 +32,15 @@ import { inferBindGroupLayoutEntries } from '../shaders/reflection/GLSLReflector
 import { createLogger, type Logger } from '../utils/logger.js';
 import { nextId } from '../utils/id.js';
 import { resolveLimits } from '../core/Device.js';
+import { resolvePipelineLayoutLike } from '../core/pipeline/RenderPipeline.js';
 import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo, DeviceTimingSupport } from '../core/Device.js';
 import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasConfig, CanvasContext } from '../core/CanvasContext.js';
 import type { Buffer, BufferDescriptor } from '../core/resources/Buffer.js';
+import type {
+  ExternalTexture,
+  ExternalTextureDescriptor,
+} from '../core/resources/ExternalTexture.js';
 import type { Texture, TextureDescriptor } from '../core/resources/Texture.js';
 import type { Sampler, SamplerDescriptor } from '../core/resources/Sampler.js';
 import type { ShaderModule, ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
@@ -326,6 +331,43 @@ export class WebGL2Device implements Device {
   }
 
   /**
+   * `#22`：WebGL2 后端**做不到**导入外部纹理，这里明确报错并给出替代方案。
+   *
+   * 为什么做不到：GL 里没有「外部纹理」这个概念。`OES_EGL_image_external` 是
+   * EGL / GLES 的扩展（把 EGLImage 包成 `GL_TEXTURE_EXTERNAL_OES`），浏览器端的
+   * `WebGL2RenderingContext` **不暴露**它 —— 本机无头 Chrome + SwiftShader 实测：
+   * `gl.importExternalTexture` 是 `undefined`，`OES_EGL_image_external` /
+   * `OES_EGL_image_external_essl3` / `WEBGL_external_texture` 三个扩展名全部拿不到
+   * （探针页 `.tmp-02/probe/api-surface.html?backend=webgl2`）。
+   *
+   * 也**不**退化成「把当前帧拷进一张普通纹理」：那个替代方案在语义上不等价
+   * （每帧多一次全量上传、拿不到原生的平面/色彩空间处理，而且句柄不能跨帧复用），
+   * 偷偷替调用方换实现正是本库明确拒绝的做法。想这么做的调用方可以自己调
+   * `queue.copyExternalImageToTexture()`（两个后端都支持），差别是显式的。
+   */
+  importExternalTexture(descriptor: ExternalTextureDescriptor): ExternalTexture {
+    this.assertUsable('importExternalTexture');
+    /*
+     * 先校验参数、再报「本后端做不到」：这样同一份非法输入在两个后端上得到的是**同一条**
+     * 参数错误（`source` 缺失），而不是这里先报「不支持」、WebGPU 那边报「source 非法」。
+     */
+    if (descriptor === undefined || descriptor.source === undefined || descriptor.source === null) {
+      throw new ValidationError(
+        '[gpu-device-api] Device.importExternalTexture: "source" is required (an HTMLVideoElement, ' +
+          'VideoFrame or ImageBitmap).',
+      );
+    }
+    throw new ValidationError(
+      '[gpu-device-api] Device.importExternalTexture is not supported by the WebGL2 backend: GL has no ' +
+        'external-texture concept, and the extensions that could express it ' +
+        '(OES_EGL_image_external / OES_EGL_image_external_essl3 / WEBGL_external_texture) are not exposed ' +
+        'by WebGL2RenderingContext. Upload the frame into a regular texture instead ' +
+        '(Queue.copyExternalImageToTexture, supported by both backends) and sample that; it costs one ' +
+        'upload per frame but behaves identically on both backends.',
+    );
+  }
+
+  /**
    * 读回 query set 的结果：轮询 `QUERY_RESULT_AVAILABLE` 后逐条 `getQueryParameter`。
    *
    * 轮询本身是异步的（每轮让出一拍），不会像 `gl.finish()` 那样强制同步 GPU；
@@ -420,6 +462,8 @@ export class WebGL2Device implements Device {
 
     // 解析布局：显式布局直接用；'auto' 需要先链接出 program 才能反射接口。
     let layout: PipelineLayout | 'auto';
+    /** `#39` 里由 `layout: BindGroupLayout | BindGroupLayout[]` 合成的 layout；随管线一起释放。 */
+    const synthesizedLayouts: PipelineLayout[] = [];
     if (descriptor.layout === undefined || descriptor.layout === 'auto') {
       const entries = inferBindGroupLayoutEntries(compiled.reflection, ShaderStage.Vertex | ShaderStage.Fragment);
       if (entries.length === 0) {
@@ -446,8 +490,30 @@ export class WebGL2Device implements Device {
         this.programs.bindPlan(compiled, (layout as WebGL2PipelineLayout).bindingPlan);
       }
     } else {
-      layout = descriptor.layout;
+      /*
+       * `#39`：`layout` 也接受单个 `BindGroupLayout` 或它的数组 —— 使用者手上的就是它们
+       * （各种 helper 返回 `BindGroupLayout`，`createBindGroup({ layout })` 收的也是它），
+       * 只接受 `PipelineLayout` 会逼着每个人手写一次包装。这里合成一个等价的 layout，
+       * 走的是与 `createPipelineLayout()` **完全相同**的构造与追踪路径，
+       * 因此绑定计划（uniform block / texture unit 分配）与手写包装逐字段一致。
+       */
+      const resolved = resolvePipelineLayoutLike(
+        descriptor.layout,
+        (bindGroupLayouts) => {
+          const synthesized = new WebGL2PipelineLayout(
+            { label: `${label}:inlinePipelineLayout`, bindGroupLayouts },
+            false,
+            this,
+            () => this.untrack(synthesized),
+          );
+          return this.track(synthesized);
+        },
+        `WebGL2Device.createRenderPipeline("${label}").layout`,
+      );
+      layout = resolved.layout as PipelineLayout | 'auto';
       this.programs.bindPlan(compiled, (layout as WebGL2PipelineLayout).bindingPlan);
+      // 合成的 layout 只为这一条管线而建，管线释放时一并释放（与手写包装的生命周期一致）。
+      if (resolved.synthesized) synthesizedLayouts.push(resolved.synthesized);
     }
 
     const pipeline = new WebGL2RenderPipeline(descriptor, compiled, layout, {
@@ -457,7 +523,11 @@ export class WebGL2Device implements Device {
         maxVertexAttributes: this.limits.maxVertexAttributes,
         maxVertexBufferArrayStride: this.limits.maxVertexBufferArrayStride,
       },
-      onDispose: (destroyed) => this.untrack(destroyed),
+      onDispose: (destroyed) => {
+        this.untrack(destroyed);
+        for (const synthesized of synthesizedLayouts) synthesized.dispose();
+        synthesizedLayouts.length = 0;
+      },
     });
     return this.track(pipeline);
   }

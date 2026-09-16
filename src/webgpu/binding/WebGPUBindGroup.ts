@@ -18,6 +18,7 @@ import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { isBufferBinding, isSamplerBinding } from '../../core/enums/BindingType.js';
 import { asGPUBuffer, describeUnknown } from '../resources/WebGPUBuffer.js';
+import { asGPUExternalTexture } from '../resources/WebGPUExternalTexture.js';
 import { asGPUSampler, isWebGPUSampler } from '../resources/WebGPUSampler.js';
 import { asGPUTextureView, isWebGPUTextureView } from '../resources/WebGPUTextureView.js';
 import { asGPUBindGroupLayout } from './WebGPUBindGroupLayout.js';
@@ -184,9 +185,31 @@ function toGPUBindGroupEntry(
   }
 
   if ('source' in resource) {
-    // core 没有创建 external texture 的接口，这条路径只服务 escape hatch：用户自己用
-    // device.native.importExternalTexture() 拿到 GPUExternalTexture 后直接塞进来。
-    return { binding: entry.binding, resource: resource.source as GPUExternalTexture };
+    /*
+     * 外部纹理绑定。两条来源都要接受：
+     *
+     * 1. `device.importExternalTexture()` 返回的 `WebGPUExternalTexture`（`#22` 新增）；
+     * 2. escape hatch —— 用户自己用 `device.native.importExternalTexture()` 拿到原生
+     *    `GPUExternalTexture` 后直接塞进来（这是导入能力引入之前的唯一用法，必须继续可用）。
+     *
+     * ## 过期校验（这是本层唯一能替调用方把关的地方）
+     *
+     * `GPUExternalTexture` 是**一帧有效**的（原生自动过期）。过期之后把它绑进 bind group
+     * 会在使用时失败，而原生给出的错误没有本库的上下文（哪个 bind group、哪个 binding）。
+     * 所以这里提前查一次并给出可定位的报错。
+     *
+     * **不假装能查得更细**：本层无法在每次 draw 前判断「已经绑定好的 bind group 里那个外部纹理
+     * 现在过期了没有」—— 那只有原生实现知道。每帧重新导入并重建 bind group 仍是用的人的契约。
+     */
+    const external = resource.source as { expired?: unknown };
+    if (external && typeof external === 'object' && external.expired === true) {
+      throw new ValidationError(
+        `[gpu-device-api] ${context}: the external texture bound as { source } has expired. ` +
+          'GPUExternalTexture is valid for a single frame — call device.importExternalTexture() again ' +
+          'and create a new bind group for every frame (see ExternalTexture in the core docs).',
+      );
+    }
+    return { binding: entry.binding, resource: asGPUExternalTexture(resource.source, context) };
   }
 
   throw new ValidationError(

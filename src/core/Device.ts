@@ -19,10 +19,15 @@ import type { RenderTarget, RenderTargetDescriptor } from './render/RenderTarget
 import type { ComputePipeline, ComputePipelineDescriptor } from './pipeline/ComputePipeline.js';
 import type { RenderPipeline, RenderPipelineDescriptor } from './pipeline/RenderPipeline.js';
 import type { Buffer, BufferDescriptor } from './resources/Buffer.js';
+import type {
+  ExternalTexture,
+  ExternalTextureDescriptor,
+} from './resources/ExternalTexture.js';
 import type { QuerySet, QuerySetDescriptor } from './resources/QuerySet.js';
 import type { Sampler, SamplerDescriptor } from './resources/Sampler.js';
 import type { ShaderModule, ShaderModuleDescriptor } from './resources/ShaderModule.js';
 import type { Texture, TextureDescriptor } from './resources/Texture.js';
+import type { Fence } from './sync/Fence.js';
 import type { QueryResult, QuerySetReadOptions } from './sync/QueryResult.js';
 import type { Queue } from './sync/Queue.js';
 
@@ -192,6 +197,30 @@ export interface Device {
   createQuerySet(descriptor: QuerySetDescriptor): QuerySet;
 
   /**
+   * 把一个图像来源（`<video>` / `VideoFrame` / `ImageBitmap`）导入成可被 shader 直接采样的
+   * 外部纹理。对应 WebGPU 的 `GPUDevice.importExternalTexture()`。
+   *
+   * **过期语义（必须先读）**：导入出来的外部纹理是**一帧有效**的。WebGPU 规范把它绑定到一个
+   * 自动过期任务源，过了那个时间点之后任何使用都会失败，所以正确写法是**每帧重新导入**，
+   * 而不是导入一次长期持有。本库只在「绑定进 bind group」这一处做校验，无法在每次 draw 前
+   * 替你判断（那只有原生实现知道）—— 详情与用法见
+   * {@link import('./resources/ExternalTexture.js').ExternalTexture}。
+   *
+   * **WebGL2 后端没有这个能力，会明确报错**：GL 里没有「外部纹理」这个概念，
+   * 也没有任何扩展能在 GLES 3.0 上表达它（`OES_EGL_image_external` 是 EGL/GLES 的
+   * 扩展，浏览器端的 WebGL2 不暴露；本机实测三个相关扩展名都拿不到）。WebGL2 上的替代方案是
+   * 「每帧把视频画进一张 texture」（`copyExternalImageToTexture` 或
+   * `texSubImage2D`），本库照旧支持。
+   *
+   * 这个方法**不是可选的**：外部纹理无法用别的 API 表达（原生 WebGPU 也没有替代路径），
+   * 所以两个后端都实现它 —— WebGPU 转发、WebGL2 抛错。要提前判断能力请用
+   * `device.features.has('external-texture')`（WebGPU 上取决于实现是否暴露
+   * `GPUDevice.importExternalTexture`；WebGL2 上恒为 false），或者直接看
+   * `device.backend === 'webgl2'`。
+   */
+  importExternalTexture(descriptor: ExternalTextureDescriptor): ExternalTexture;
+
+  /**
    * 把 query set 里的结果读回 CPU，并返回一个可 `await` 的结果对象。
    *
    * 为什么放在设备上而不是 `QuerySet` 的方法里：WebGPU 的读回要「resolve 进 buffer → 拷进
@@ -231,6 +260,25 @@ export interface Device {
     canvas: HTMLCanvasElement | OffscreenCanvas,
     config?: Omit<CanvasConfig, 'device'>,
   ): CanvasContext;
+
+  /**
+   * **可选**：创建一个进程内的同步点（fence）。
+   *
+   * 为什么是可选成员：原生 WebGPU **没有 fence 对象**（`GPUDevice` 上既没有 `createFence`
+   * 也没有任何等价物），所以 WebGPU 后端**不实现**它 —— 这里不存在「用一个 promise 假装成
+   * fence」的等价物：`queue.onSubmittedWorkDone()` 只能表达「等待此刻之前的全部工作」，
+   * 而 fence 的语义是「在命令流里插一个可反复查询的标记」，两者不等价。WebGL2 后端则用
+   * `gl.fenceSync` / `gl.clientWaitSync` 真正实现（见 `WebGL2Device.createFence`）。
+   *
+   * 声明成可选而不是「两个后端都实现、WebGPU 抛错」：第三方 `Device` 实现（测试桩、
+   * 别的后端）不该被这个原生不支持的能力逼着写一个抛错分支。调用方用可选调用写法即可：
+   *
+   * ```ts
+   * const fence = device.createFence?.();
+   * if (!fence) { await device.queue.onSubmittedWorkDone(); } // WebGPU 的等价做法
+   * ```
+   */
+  createFence?(): Fence;
 
   /**
    * 注册错误回调。WebGPU 把 `onuncapturederror` 路由到这里，WebGL2 把它轮询到的

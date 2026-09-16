@@ -10,7 +10,12 @@
 import { ValidationError } from '../core/errors/ValidationError.js';
 import { TextureDimension, type Texture } from '../core/resources/Texture.js';
 import { TextureUsage } from '../core/enums/TextureUsage.js';
-import type { TextureAspect, TextureView, TextureViewDescriptor } from '../core/resources/TextureView.js';
+import {
+  DEFAULT_TEXTURE_SWIZZLE,
+  type TextureAspect,
+  type TextureView,
+  type TextureViewDescriptor,
+} from '../core/resources/TextureView.js';
 import {
   CANVAS_DEPTH_FORMAT,
   defaultPixelRatio,
@@ -93,6 +98,22 @@ class DefaultFramebufferTexture implements Texture {
   }
 
   createView(descriptor: TextureViewDescriptor = {}): TextureView {
+    /*
+     * `#23`：canvas 帧纹理的 view 也接受 `swizzle`，但这里**明确拒绝**非默认取值。
+     *
+     * 这一条与 `WebGL2TextureView` 的检查是同一个理由（GLES 3.0 采样时的通道取值由内部格式
+     * 决定），只是走的是另一条代码路径：canvas 帧纹理不是 `WebGL2Texture`，它的 view 是本文件里
+     * 手写的 `DefaultFramebufferView`，不会经过 `WebGL2TextureView` 的构造函数。漏掉这里的
+     * 后果是「canvas 上 swizzle 被静默忽略、普通纹理上明确报错」——同一份代码在两条路径上行为不同。
+     */
+    if (descriptor.swizzle !== undefined && descriptor.swizzle !== DEFAULT_TEXTURE_SWIZZLE) {
+      throw new ValidationError(
+        `[gpu-device-api] canvas 帧纹理的 view「${descriptor.label ?? '(unnamed)'}」要求 swizzle` +
+          `「${descriptor.swizzle}」，但 WebGL2 后端做不到：GLES 3.0 没有 view 对象，采样时各通道的` +
+          '取值由纹理内部格式决定，没有任何调用能在绑定点上重排通道。替代方案：在着色器里做通道选择' +
+          '（`texture(...).rrr`），或者先把画面画进一张普通纹理再按需要采样，或者切到 WebGPU 后端。',
+      );
+    }
     if (!this.cachedView) {
       const view: DefaultFramebufferView = {
         label: descriptor.label ?? `${this.label}:view`,
@@ -105,7 +126,9 @@ class DefaultFramebufferTexture implements Texture {
           baseArrayLayer: 0,
           arrayLayerCount: 1,
           aspect: this.aspect,
+          swizzle: descriptor.swizzle,
         },
+        swizzle: DEFAULT_TEXTURE_SWIZZLE,
         native: null,
         isDefaultFramebuffer: true,
         disposed: false,

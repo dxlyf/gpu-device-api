@@ -181,6 +181,17 @@ export function queryGlFeatures(gl: WebGL2RenderingContext): Set<string> {
   if (gl.getExtension('WEBGL_debug_renderer_info')) features.add('debug-renderer-info');
   // 时间查询扩展：它决定 timestamp query set 能不能建（见 WebGL2QuerySet）。
   if (gl.getExtension('EXT_disjoint_timer_query_webgl2')) features.add('timestamp-query');
+  /*
+   * 外部纹理：**恒不可用**，所以这里一个名字都不加。
+   *
+   * 为什么要有这条注释：这个特性名的存在意义是让上层能用
+   * `device.features.has('external-texture')` 两个后端统一判断，而不是自己分后端写探测。
+   * WebGL2 上没有「外部纹理」这个概念（`OES_EGL_image_external` 是 EGL / GLES 的扩展，
+   * 浏览器端的 WebGL2RenderingContext 不暴露它；本机无头 Chrome 实测
+   * `gl.importExternalTexture` 是 undefined、三个相关扩展名全部拿不到），
+   * 所以 `WEBGL2_FEATURE_NAMES` 里也不列它 —— 列了就等于宣称一个永远拿不到的 feature，
+   * 而 `WebGL2Device.importExternalTexture()` 会明确报错并给出替代方案。
+   */
   return features;
 }
 

@@ -9,6 +9,8 @@
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import {
   resolveTextureViewDescriptor,
+  DEFAULT_TEXTURE_SWIZZLE,
+  type TextureSwizzleString,
   type TextureView,
   type TextureViewDescriptor,
 } from '../../core/resources/TextureView.js';
@@ -23,6 +25,30 @@ export class WebGL2TextureView implements TextureView {
 
   constructor(texture: WebGL2Texture, descriptor: TextureViewDescriptor) {
     const resolved = resolveTextureViewDescriptor(texture, descriptor);
+    /*
+     * `#23`：`swizzle` 在 WebGL2 上**做不到**，必须明确报错。
+     *
+     * 为什么做不到：GLES 3.0 的纹理没有 view 对象，采样时各通道的取值由**内部格式**决定
+     * （`RGBA8` 就是 r/g/b/a，`R8` 就是 r/0/0/1），没有任何调用能在绑定点上重排它们。
+     * 桌面 GL 有 `GL_TEXTURE_SWIZZLE_R/G/B/A`，但那是 **GL 3.3 / GLES 3.1** 的
+     * `glTextureParameteri` 路径，WebGL2（= GLES 3.0）既不暴露这些枚举、也不暴露
+     * `glTextureParameteri`；本机无头 Chrome 实测 `gl.TEXTURE_SWIZZLE_R` 是 `undefined`、
+     * 相关扩展（`EXT_texture_swizzle` / `WEBGL_texture_swizzle` / `OES_texture_view`）全部拿不到。
+     *
+     * 静默忽略的后果比报错严重得多：调用方以为「r8unorm 当灰度图用、rgb 都取自红通道」，
+     * 实际采样到的是 `(r, 0, 0, 1)` —— 画面发黑但一切「正常」，正是最难查的一类。
+     */
+    if (resolved.swizzle !== undefined && resolved.swizzle !== DEFAULT_TEXTURE_SWIZZLE) {
+      throw new ValidationError(
+        `[gpu-device-api] texture view「${descriptor.label ?? '(unnamed)'}」要求 swizzle` +
+          `「${resolved.swizzle}」，但 WebGL2 后端做不到：GLES 3.0 没有 view 对象，采样时各通道的` +
+          '取值由纹理内部格式决定，没有任何调用能在绑定点上重排通道（桌面 GL 的' +
+          ' GL_TEXTURE_SWIZZLE_* 是 GL 3.3 / GLES 3.1 的能力，WebGL2 不暴露这些枚举，' +
+          '相关扩展在本机实测也全部拿不到）。替代方案：在着色器里直接写通道选择' +
+          '（`texture(...).rrr` / `vec4(t.r, t.r, t.r, 1.0)`），或者先按需要的通道布局' +
+          '重建一张纹理再采样，或者切到 WebGPU 后端（它有真正的 `swizzle`）。',
+      );
+    }
     /*
      * `descriptor.format`（按 `viewFormats` 重解释格式）在 WebGL2 上**可以**表达，但本后端
      * 没有 texture view 对象 —— `createView()` 返回的只是一个范围记录器，真正采样时用的是
@@ -101,6 +127,16 @@ export class WebGL2TextureView implements TextureView {
   /** WebGL2 里 view 就是纹理本身，所以直接返回 GL 纹理句柄。 */
   get native(): WebGLTexture {
     return this.texture.native;
+  }
+
+  /**
+   * 实际生效的通道重排。
+   *
+   * WebGL2 上**唯一**能生效的值就是不重排（`'rgba'`）：构造函数已经拒绝了其它取值，
+   * 所以这里恒为 `'rgba'`，与 WebGPU 后端的默认值一致。
+   */
+  get swizzle(): TextureSwizzleString {
+    return DEFAULT_TEXTURE_SWIZZLE;
   }
 
   /** 底层 GL 纹理（与 `native` 相同，语义更明确）。 */

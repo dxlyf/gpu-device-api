@@ -47,7 +47,9 @@ export {
   type RenderPipelinePrewarmResult,
 } from './CompilationInfo.js';
 export {
+  resolvePipelineLayoutLike,
   type FragmentState,
+  type PipelineLayoutLike,
   type RenderPipeline,
   type RenderPipelineDescriptor,
   type RenderPipelineVariant,

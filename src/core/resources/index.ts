@@ -3,7 +3,13 @@ export {
   type BufferDescriptor,
   type MapMode,
   type MappedRange,
+  asByteView,
 } from './Buffer.js';
+export {
+  type ExternalTexture,
+  type ExternalTextureDescriptor,
+  type ExternalTextureSource,
+} from './ExternalTexture.js';
 export {
   TextureDimension,
   defaultTextureUsage,
@@ -15,8 +21,12 @@ export {
   type TextureSize,
 } from './Texture.js';
 export {
+  assertTextureSwizzle,
+  DEFAULT_TEXTURE_SWIZZLE,
   resolveTextureViewDescriptor,
   type TextureAspect,
+  type TextureSwizzleComponent,
+  type TextureSwizzleString,
   type TextureView,
   type TextureViewDescriptor,
   type TextureViewDimension,

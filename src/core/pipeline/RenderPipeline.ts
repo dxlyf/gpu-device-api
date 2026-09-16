@@ -1,6 +1,8 @@
 /** render pipeline：shader 及其运行时使用的固定功能状态。 */
 
 import type { Disposable } from '../../utils/Disposable.js';
+import { ValidationError } from '../errors/ValidationError.js';
+import type { BindGroupLayout } from '../binding/BindGroupLayout.js';
 import type { PipelineLayout } from '../binding/PipelineLayout.js';
 import type { ShaderModule } from '../resources/ShaderModule.js';
 import type { TextureFormat } from '../enums/TextureFormat.js';
@@ -38,10 +40,41 @@ export interface FragmentState {
   targets?: readonly (ColorTargetState | null)[];
 }
 
+/**
+ * 一条管线可以接受的 `layout` 写法。
+ *
+ * ## 为什么不止 `PipelineLayout | 'auto'`（`#39`）
+ *
+ * 使用者手上最多的东西是 **`BindGroupLayout`** —— 各种 helper（例如 gfx 的
+ * `createCompositeUniform()`）返回的都是它，而 `createBindGroup({ layout })` 收的也是它。
+ * 只接受 `PipelineLayout` 的时候，「两条管线共用一份 layout」就必须额外手写一次
+ * `device.createPipelineLayout({ bindGroupLayouts: [layout] })` 去包装（`examples/msaa-offscreen.ts`
+ * 当初就是这么绕的），而那条包装一旦写错（比如 bind group index 与数组顺序不一致）不会报错，
+ * 只会让绑定对不上。
+ *
+ * 这与原生 WebGPU 的形状一致：`GPUPipelineDescriptorBase.layout` 就是
+ * `GPUPipelineLayout | GPUAutoLayoutMode`，而 `GPUPipelineLayoutDescriptor.bindGroupLayouts`
+ * 是 layout 数组 —— 也就是说「一组 bind group layout」在原生里本来就是一个合法概念，
+ * 只是它要么被包成 `GPUPipelineLayout`、要么内联在数组里。本库现在两种都收：
+ *
+ * | 写法 | 语义 |
+ * | --- | --- |
+ * | `'auto'`（默认） | 由后端从着色器反射推导（与改动前一致） |
+ * | `PipelineLayout` | 直接用（与改动前一致） |
+ * | `BindGroupLayout` | 等价于「只有一组」的 layout，即 `createPipelineLayout({ bindGroupLayouts: [它] })` |
+ * | `readonly BindGroupLayout[]` | 按数组下标即 bind group index，等价于 `createPipelineLayout({ bindGroupLayouts })` |
+ *
+ * 后两种写法由**后端**在创建管线时合成一个 `PipelineLayout`（WebGL2 复用同一个
+ * `BindingPlan` 推导路径，WebGPU 走 `createPipelineLayout`），合成的对象按设备资源追踪，
+ * 与手写包装的生命周期相同。这是**公开 API 的放宽**：既有写法（`'auto'` / `PipelineLayout`）
+ * 的类型与行为都没变。
+ */
+export type PipelineLayoutLike = PipelineLayout | BindGroupLayout | readonly BindGroupLayout[] | 'auto';
+
 export interface RenderPipelineDescriptor {
   label?: string;
-  /** 显式 layout，或 `'auto'` 表示从在用的 bind group 推导。默认为 `'auto'`。 */
-  layout?: PipelineLayout | 'auto';
+  /** 显式 layout；也接受单个 `BindGroupLayout` 或它的数组（见 {@link PipelineLayoutLike}）。默认为 `'auto'`。 */
+  layout?: PipelineLayoutLike;
   vertex: VertexState;
   /** 仅含 depth 的 pipeline 可省略。 */
   fragment?: FragmentState;
@@ -70,8 +103,62 @@ export interface RenderPipelineDescriptor {
   render?: RenderState;
 }
 
-/** 首次使用时才发现的其他状态，属于具体 pipeline 的 cache key 的一部分。 */
-export interface RenderPipelineVariant {
+/**
+ * 归一化 `layout`：`'auto'` / `PipelineLayout` 原样返回，`BindGroupLayout`（或它的数组）
+ * 交给后端合成一个 `PipelineLayout`。
+ *
+ * 放在 core 而不是各后端各写一份：两个后端必须对同一份 descriptor 得出**同一个**语义
+ * （「一组布局」= 数组下标即 bind group index；单个布局 = 「只有一组」），
+ * 否则「WebGL2 上跑得通、WebGPU 上绑定错位」这类差异就会从这里长出来。
+ *
+ * `synthesize` 由后端提供，返回值必须是**已经登记到设备上**的 layout（这样它与手写的
+ * `createPipelineLayout()` 有完全相同的生命周期）；本函数只负责决定「要不要调用它」。
+ */
+export function resolvePipelineLayoutLike(
+  layout: PipelineLayoutLike | undefined,
+  synthesize: (bindGroupLayouts: readonly BindGroupLayout[]) => PipelineLayout,
+  context: string,
+): { layout: PipelineLayout | 'auto'; synthesized: PipelineLayout | null } {
+  if (layout === undefined || layout === 'auto') return { layout: 'auto', synthesized: null };
+  if (Array.isArray(layout)) {
+    const bindGroupLayouts = layout as readonly BindGroupLayout[];
+    // 空数组是明确的用法错误：「一个 bind group 都没有」应该写 'auto'（或干脆省略），
+    // 而不是写一个空数组 —— 后者在 WebGPU 上会静默退化成「没有布局」。
+    if (bindGroupLayouts.length === 0) {
+      throw new ValidationError(
+        `[gpu-device-api] ${context}: layout must not be an empty array; omit it (or pass 'auto') to let ` +
+          'the backend infer the layout from the shader.',
+      );
+    }
+    const synthesized = synthesize(bindGroupLayouts);
+    return { layout: synthesized, synthesized };
+  }
+  if (isBindGroupLayoutLike(layout)) {
+    const synthesized = synthesize([layout]);
+    return { layout: synthesized, synthesized };
+  }
+  return { layout: layout as PipelineLayout, synthesized: null };
+}
+
+/**
+ * 形状判断：`PipelineLayout` 与 `BindGroupLayout` 在 core 里都是接口（无运行时标记），
+ * 因此按两者**独有的**成员区分：
+ *
+ * - `BindGroupLayout` 有 `entry(binding)` 与 `sortedEntries`；
+ * - `PipelineLayout` 有 `bindGroupLayouts`（数组）与 `isAuto`。
+ *
+ * 拿不准时按 `PipelineLayout` 处理（保持改动前的行为：直接交给后端，由它给出它自己的报错）。
+ */
+function isBindGroupLayoutLike(
+  value: PipelineLayout | BindGroupLayout | readonly BindGroupLayout[],
+): value is BindGroupLayout {
+  const candidate = value as unknown as Record<string, unknown>;
+  if (typeof candidate.entry !== 'function' || !Array.isArray(candidate.sortedEntries)) return false;
+  // `PipelineLayout` 也有 `bindGroupLayouts`：两者都像时以它是 pipeline layout 为准。
+  return !Array.isArray(candidate.bindGroupLayouts);
+}
+
+/** 首次使用时才发现的其他状态，属于具体 pipeline 的 cache key 的一部分。 */export interface RenderPipelineVariant {
   colorFormats: readonly TextureFormat[];
   sampleCount: number;
   /**

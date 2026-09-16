@@ -48,6 +48,12 @@ export {
   type ResolvedTextureViewDescriptor,
 } from './resources/WebGPUTextureView.js';
 export {
+  WebGPUExternalTexture,
+  asGPUExternalTexture,
+  isNativeGPUExternalTexture,
+  isWebGPUExternalTexture,
+} from './resources/WebGPUExternalTexture.js';
+export {
   WebGPUSampler,
   asGPUSampler,
   isNativeGPUSampler,
