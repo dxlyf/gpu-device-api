@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gpu-device-api — 开发者探针：WEBGL_multi_draw 是否可用 / 是否逐像素一致 / 提交耗时</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; min-height: 100%; }
+      body {
+        display: flex; flex-direction: column;
+        background: #0b0e13; color: #d7dde5;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      header { padding: 10px 12px 0; }
+      h1 { font-size: 15px; margin: 0 0 6px; }
+      p { margin: 0 0 6px; color: #9fb3c8; }
+      code { color: #ffd479; }
+      .stage { padding: 12px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+      #view {
+        display: block; width: 256px; height: 256px;
+        image-rendering: pixelated; border: 1px solid #1d2530; background: #000;
+      }
+      #out {
+        margin: 0; padding: 8px 12px; flex: 1 1 auto; overflow: auto;
+        border-top: 1px solid #1d2530; background: #0f141b; color: #b8c6d6;
+        font-size: 12px; line-height: 1.45; white-space: pre;
+      }
+      footer { padding: 8px 12px; border-top: 1px solid #1d2530; background: #0f141b; color: #9fb3c8; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>开发者探针：<code>WEBGL_multi_draw</code> 可用性 / 逐像素一致性 / CPU 提交耗时</h1>
+      <p>
+        ⚠️ <strong>这一页是开发者探针，不是使用示例</strong>：它<strong>不导入本库</strong>，只读原生
+        WebGL2 的扩展面与行为，用来回答「本机这个 GL 后端到底有没有 <code>WEBGL_multi_draw</code>、
+        它能不能真的把 N 次 draw 压成一次且画出<strong>逐字节相同</strong>的画面、单次调用能承载多大
+        的 drawcount、以及 CPU 提交耗时差多少」。结论写在 <code>data-*</code> 上供
+        <code>scripts/verify-headless.mjs</code> 抓取。
+      </p>
+      <p>
+        查询参数：<code>?case=arrays|elements|instanced|instanced-elements</code>（默认 arrays）、<code
+        >&amp;mode=single|multi</code>（只有它影响 canvas 上的可见画面，供合成截图比对）、<code
+        >&amp;scene=1024</code>（可见画面的四边形数）、<code>&amp;bench=0</code>（跳过耗时基准）、<code
+        >&amp;big=0</code>（跳过 N=10000 的一致性检查）、<code>&amp;submitReps=11&amp;finishReps=7</code>（时间样本个数）。
+      </p>
+      <p>
+        无头抓取（WebGL2 软件光栅化；注意 <code>--enable-unsafe-webgpu</code> 不能与
+        swiftshader 那组同时加）：
+      </p>
+      <pre>node scripts/verify-headless.mjs --chrome "&lt;chrome&gt;" --timeout 300000 \
+  --url "http://localhost:&lt;port&gt;/examples/webgl-multi-draw-probe.html" --wait probeResult \
+  -- --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader</pre>
+      <p>
+        截图比对（真实合成截图）：<code>?case=arrays&amp;mode=single&amp;bench=0&amp;big=0</code> 与
+        <code>?case=arrays&amp;mode=multi&amp;bench=0&amp;big=0</code> 各截一张，再用
+        <code>node scripts/compare-screenshots.mjs a.png b.png --crop &lt;canvas rect&gt;</code>。
+      </p>
+    </header>
+    <div class="stage">
+      <canvas id="view" width="256" height="256"></canvas>
+    </div>
+    <pre id="out">正在启动…</pre>
+    <footer><span id="status">正在启动…</span></footer>
+    <script type="module" src="./webgl-multi-draw-probe.ts"></script>
+  </body>
+</html>
