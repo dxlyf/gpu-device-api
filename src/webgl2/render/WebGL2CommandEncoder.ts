@@ -16,6 +16,12 @@
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { nextId } from '../../utils/id.js';
 import { glFormat } from '../utils/glFormatMap.js';
+import {
+  repackRows,
+  resolveReadbackLayout,
+  resolveUploadLayout,
+  uploadTextureData,
+} from '../utils/copyLayout.js';
 import type {
   BufferCopyView,
   CommandBuffer,
@@ -24,6 +30,7 @@ import type {
   TextureCopyView,
 } from '../../core/render/CommandEncoder.js';
 import type { QuerySet } from '../../core/resources/QuerySet.js';
+import type { TextureAspect } from '../../core/resources/TextureView.js';
 import type { Extent3D } from '../../types/internal.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
@@ -35,6 +42,13 @@ import {
   popDebugGroup as popGlDebugGroup,
   pushDebugGroup as pushGlDebugGroup,
 } from '../utils/debugMarkers.js';
+
+/*
+ * 零拷贝上传路径的兜底暂存区（惰性分配）。只在「传给 `texSubImage*` 的视图起点不在元素边界上」
+ * 时才需要搬一次内存（例如把 `Uint8Array` 的 `subarray(2, ...)` 交给 `rgba32float`）。
+ * 正常情况下 `Uint8Array` → `TypedArray` 是零拷贝重解释，这块内存直到用上之前都不分配。
+ */
+const UPLOAD_SCRATCH_BYTES = 64 * 1024;
 
 /** `finish()` 产出的 command buffer：记录本次编码期间的统计信息。 */
 export interface WebGL2CommandBuffer extends CommandBuffer {
@@ -52,6 +66,8 @@ export class WebGL2CommandEncoder implements CommandEncoder {
   private drawCalls = 0;
   private passCount = 0;
   private finished = false;
+  /** 见 {@link UPLOAD_SCRATCH_BYTES}。 */
+  private scratch: ArrayBuffer | null = null;
 
   constructor(
     descriptor: CommandEncoderDescriptor | undefined,
@@ -152,68 +168,88 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     );
   }
 
+  /**
+   * buffer → texture。**一次 `texSubImage3D` 上传整叠 image**（3D / 数组纹理的全部层），
+   * 而不是逐层调用 —— GL 的 `texSubImage3D` 本来就是这样消费主机内存的
+   * （层距由 `UNPACK_IMAGE_HEIGHT` = `rowsPerImage` 决定）。
+   *
+   * 修复前的写法只按 `bytesPerRow * height` 分配源数据，却把 `copySize.depthOrArrayLayers`
+   * 原样交给 `texSubImage3D`：GL 会按「层距 = height」去读第 1 层之后的数据，读到的是缓冲区
+   * 之外的内容（实测报 `INVALID_OPERATION`，而本后端默认不查 GL 错误 → 静默）。
+   */
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void {
     this.assertOpen('copyBufferToTexture');
     const gl = this.gl;
+    const texture = destination.texture as WebGL2Texture;
     const sourceBuffer = source.buffer as WebGL2Buffer;
-    const texture = (destination.texture as WebGL2Texture).native;
-    const format = (destination.texture as WebGL2Texture).format;
-    const info = glFormat(format);
+    const info = glFormat(texture.format);
+    assertAspectSupported('copyBufferToTexture', texture, destination.aspect);
     const { x: ox, y: oy, z: oz } = resolveOrigin(destination.origin);
-    const bytesPerRow = source.bytesPerRow ?? copySize.width * info.bytesPerPixel;
+    const offset = source.offset ?? 0;
+    const layout = resolveUploadLayout(
+      source,
+      copySize,
+      info,
+      'copyBufferToTexture',
+      texture.format,
+      texture.label,
+    );
+    if (offset + layout.requiredBytes > sourceBuffer.size) {
+      throw new ValidationError(
+        `[gpu-device-api] copyBufferToTexture: the source range [${offset}, ${offset + layout.requiredBytes}) ` +
+          `exceeds buffer「${sourceBuffer.label}」's ${sourceBuffer.size} bytes — ` +
+          `${copySize.width}x${copySize.height}x${copySize.depthOrArrayLayers} pixels need ` +
+          `bytesPerRow=${layout.bytesPerRow} and rowsPerImage=${layout.rowsPerImage}.`,
+      );
+    }
 
-    // 逐行从 buffer 读出来再上传：WebGL2 的 texSubImage2D 不支持「从 buffer 读」，
-    // 必须把数据放到 CPU 内存里。像素解包参数用来处理行距与对齐。
-    const rows = copySize.height;
-    const data = new Uint8Array(bytesPerRow * rows);
+    // 逐行从 buffer 读出来再上传：WebGL2 的 texSubImage* 不支持「从 buffer 读」，
+    // 必须把数据放到 CPU 内存里。像素解包参数用来处理行距与图距。
+    const data = new Uint8Array(layout.requiredBytes);
     // 走 buffer 自己的目标读回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
-    sourceBuffer.download(source.offset ?? 0, data);
+    sourceBuffer.download(offset, data);
 
-    gl.bindTexture((destination.texture as WebGL2Texture).target, texture);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    if (bytesPerRow !== copySize.width * info.bytesPerPixel) {
-      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, bytesPerRow / info.bytesPerPixel);
-    }
-    const target = (destination.texture as WebGL2Texture).target;
-    if (target === gl.TEXTURE_3D || target === gl.TEXTURE_2D_ARRAY) {
-      gl.texSubImage3D(
-        target,
-        destination.mipLevel ?? 0,
-        ox,
-        oy,
-        oz,
-        copySize.width,
-        copySize.height,
-        copySize.depthOrArrayLayers,
-        info.format,
-        info.type,
-        data,
-      );
-    } else {
-      gl.texSubImage2D(
-        target,
-        destination.mipLevel ?? 0,
-        ox,
-        oy,
-        copySize.width,
-        copySize.height,
-        info.format,
-        info.type,
-        data,
-      );
-    }
-    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    uploadTextureData(
+      gl,
+      texture.target,
+      texture.native,
+      destination.mipLevel ?? 0,
+      { x: ox, y: oy, z: oz },
+      copySize,
+      info,
+      texture.format,
+      data,
+      layout,
+      () => this.uploadScratch(),
+      'copyBufferToTexture',
+    );
     // 只绕过缓存直接改了一个纹理单元的绑定，作废纹理单元缓存即可；
     // invalidate() 会把 program/blend/depth/VAO/UBO 一起丢掉，下一次 draw 要全部重下。
     this.state.invalidateTextureUnits();
   }
 
+  /**
+   * texture → buffer。
+   *
+   * 两个修复点：
+   *
+   * 1. **深度/模板纹理会明确报错**（`#9`）。WebGL2 的 `readPixels` 不支持任何深度组合：
+   *    规范把 `format` 限制为 `RGBA`（`UNSIGNED_BYTE` / `FLOAT`）与 `RED`（`FLOAT`），
+   *    而实现的「read format」对深度附件是 `DEPTH_COMPONENT`/`UNSIGNED_INT`，两者永远对不上。
+   *    本机原生探针实测：4 种深度格式 × 5 种组合**全部** `0x500 INVALID_ENUM`
+   *    （`WEBGL_depth_texture` 是 WebGL1 的扩展，WebGL2 没有它）。修复前的行为是
+   *    「不查错误 → 缓冲里全是 0」，调用方拿到的是一份看起来正常的全 0 数据。
+   *
+   * 2. **按 `copySize.depthOrArrayLayers` 逐层读回**，层号真的落到附件上
+   *    （`framebufferTextureLayer`），并按 `rowsPerImage` 决定每层在目标 buffer 里的起点。
+   *    修复前只读第 0 层、`rowsPerImage` 被完全忽略。
+   */
   copyTextureToBuffer(source: TextureCopyView, destination: BufferCopyView, copySize: Extent3D): void {
     this.assertOpen('copyTextureToBuffer');
     const gl = this.gl;
     const texture = source.texture as WebGL2Texture;
     const info = glFormat(texture.format);
+    assertCopyTextureToBufferSupported(texture, source.aspect, copySize.depthOrArrayLayers);
 
     /*
      * `bytesPerRow` 是**请求的行距**（WebGPU 语义：相邻两行第一个字节之间的距离），
@@ -224,20 +260,27 @@ export class WebGL2CommandEncoder implements CommandEncoder {
      * 于是任何按 WebGPU 规范传 256 对齐行距的调用方（例如 width=96 传 512）
      * 都会读到整体错位的数据：读回结果被当成「紧凑 384 字节一行」写进一块按 512 行距解释的缓冲，
      * 第 1 行之后全部对不上，缓冲后半段只剩 0。
-     *
-     * `rowsPerImage` 不参与：WebGL2 的 readPixels 只支持二维读回，没有「一个 image 几行」的概念。
      */
-    const tightRowBytes = copySize.width * info.bytesPerPixel;
-    const bytesPerRow = destination.bytesPerRow ?? tightRowBytes;
-    if (!Number.isInteger(bytesPerRow) || bytesPerRow < tightRowBytes) {
+    const layout = resolveReadbackLayout(
+      destination,
+      copySize,
+      info,
+      'copyTextureToBuffer',
+      texture.format,
+      texture.label,
+    );
+    const offset = destination.offset ?? 0;
+    const buffer = destination.buffer as WebGL2Buffer;
+    if (offset + layout.requiredBytes > buffer.size) {
       throw new ValidationError(
-        `[gpu-device-api] copyTextureToBuffer: bytesPerRow must be an integer >= ${tightRowBytes} ` +
-          `(one row of ${copySize.width} "${texture.format}" pixels), got ${String(bytesPerRow)}.`,
+        `[gpu-device-api] copyTextureToBuffer: the destination range ` +
+          `[${offset}, ${offset + layout.requiredBytes}) exceeds buffer「${buffer.label}」's ` +
+          `${buffer.size} bytes (${copySize.width}x${copySize.height}x${copySize.depthOrArrayLayers}, ` +
+          `bytesPerRow=${layout.bytesPerRow}, rowsPerImage=${layout.rowsPerImage}).`,
       );
     }
-    const data = new Uint8Array(bytesPerRow * copySize.height);
-    // 紧凑读回的暂存区：行距就是 tightRowBytes，与请求的行距无关。
-    const tight = new Uint8Array(tightRowBytes * copySize.height);
+    const tightRowBytes = copySize.width * info.bytesPerPixel;
+    const data = new Uint8Array(layout.requiredBytes);
 
     /*
      * 用 framebuffer 把纹理当附件读回：WebGL2 没有直接的 getTexImage。
@@ -248,23 +291,42 @@ export class WebGL2CommandEncoder implements CommandEncoder {
      */
     const previous = this.state.currentFramebuffer();
     const attachment = info.depth ? gl.DEPTH_ATTACHMENT : gl.COLOR_ATTACHMENT0;
-    this.state.attachReadbackTexture(texture.native, attachment, source.mipLevel ?? 0);
-
-    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-    if (status !== gl.FRAMEBUFFER_COMPLETE) {
-      // 读回失败也要把绑定还原：这个 framebuffer 是复用对象，不能留在「已绑定」的状态上。
-      this.state.bindFramebuffer(previous);
-      throw new ValidationError(
-        `[gpu-device-api] 无法把纹理「${texture.label}」作为附件读回（framebuffer 不完整，0x${status.toString(16)}）。` +
-          '请确认该纹理的 usage 里包含 RenderAttachment 或 CopySrc。',
-      );
-    }
+    const mipLevel = source.mipLevel ?? 0;
+    const { x: readX, y: readY, z: readZ } = resolveOrigin(source.origin);
 
     gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
-    const { x: readX, y: readY } = resolveOrigin(source.origin);
-    gl.readPixels(readX, readY, copySize.width, copySize.height, info.format, info.type, tight);
+    // 紧凑读回的暂存区：行距就是 tightRowBytes，与请求的行距无关；每层复用同一块。
+    const tight = new Uint8Array(tightRowBytes * copySize.height);
+    for (let layer = 0; layer < copySize.depthOrArrayLayers; layer += 1) {
+      attachReadbackLayer(this.state, gl, texture, attachment, mipLevel, readZ + layer);
+      /*
+       * `checkFramebufferStatus` 是一次**同步**查询（要等 GL 命令队列），所以只在第一次
+       * （也就是「这个附着点组合是不是完整」这件事上）查一次。换层不会改变完整性 ——
+       * 数组纹理的各层尺寸与格式完全相同（`texStorage3D` 分配的），层号越界由
+       * `attachReadbackLayer` 自己校验。
+       */
+      if (layer === 0) {
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+          // 读回失败也要把绑定还原：这个 framebuffer 是复用对象，不能留在「已绑定」的状态上。
+          gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
+          this.state.bindFramebuffer(previous);
+          this.state.invalidateFramebufferBinding();
+          this.state.forgetReadbackTexture();
+          throw new ValidationError(
+            `[gpu-device-api] 无法把纹理「${texture.label}」的第 ${readZ} 层作为附件读回` +
+              `（framebuffer 不完整，0x${status.toString(16)}）。` +
+              '请确认该纹理的 usage 里包含 RenderAttachment 或 CopySrc。',
+          );
+        }
+      }
+      gl.readPixels(readX, readY, copySize.width, copySize.height, info.format, info.type, tight);
+      // 层在目标 buffer 里的起点：`rowsPerImage` 行 × `bytesPerRow` 字节。
+      repackRows(tight, data, layer * layout.rowsPerImage * layout.bytesPerRow, tightRowBytes, layout.bytesPerRow, copySize.height);
+    }
     gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
     this.state.bindFramebuffer(previous);
+    this.state.forgetReadbackTexture();
     /*
      * 这条读回路径临时切过 framebuffer，所以只作废 **framebuffer 绑定**这一项记录。
      *
@@ -274,35 +336,78 @@ export class WebGL2CommandEncoder implements CommandEncoder {
      */
     this.state.invalidateFramebufferBinding();
 
-    // 按请求的行距重排。行距等于紧凑行距时就是一次整体拷贝，不需要逐行。
-    // 填充字节保持 0（`new Uint8Array` 的初值）：WebGPU 不写这些字节，但给出确定的值
-    // 比留下上一次读回的残留更好排查，也与本方法修复前的行为一致。
-    if (bytesPerRow === tightRowBytes) {
-      data.set(tight);
-    } else {
-      for (let row = 0; row < copySize.height; row += 1) {
-        data.set(
-          tight.subarray(row * tightRowBytes, (row + 1) * tightRowBytes),
-          row * bytesPerRow,
-        );
-      }
-    }
-
-    const buffer = destination.buffer as WebGL2Buffer;
+    // 按请求的行距重排。行间填充保持 0（`new Uint8Array` 的初值）：WebGPU 不写这些字节，
+    // 但给出确定的值比留下上一次读回的残留更好排查，也与本方法修复前的行为一致。
     // 走 buffer 自己的目标写回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
-    buffer.upload(destination.offset ?? 0, data);
+    buffer.upload(offset, data);
   }
 
+  /**
+   * texture → texture，用 `blitFramebuffer` 走 GPU 侧，避免绕 CPU 一圈。
+   *
+   * 修复了三个静默错误（`#8`）：
+   *
+   * 1. **`origin.z` 被丢弃**。修复前只解构 `x`/`y`，`z` 直接没了 —— 用数组/3D 纹理时
+   *    「拷贝第 3 层」实际拷贝的是第 0 层。
+   * 2. **数组/3D 纹理被挂到 `TEXTURE_2D` 附着点上**。修复前固定调
+   *    `framebufferTexture2D(..., TEXTURE_2D, ...)`：这在本机实测**报错**
+   *    （`0x502` + `FRAMEBUFFER_INCOMPLETE_DIMENSIONS`），而审计在另一台机器上实测
+   *    「不报错、FBO 还完整」—— 两种实现的报错不同，所以「靠 GL 报错兜底」不可靠，
+   *    必须在库内用 `framebufferTextureLayer` 说清楚层级。
+   * 3. **深度/模板纹理被当成颜色附件**（`COLOR_ATTACHMENT0` + `COLOR_BUFFER_BIT`）。
+   *    深度格式挂颜色附着点是不合法的组合，blit 请求颜色位也没有意义。
+   */
   copyTextureToTexture(source: TextureCopyView, destination: TextureCopyView, copySize: Extent3D): void {
     this.assertOpen('copyTextureToTexture');
     const gl = this.gl;
     const sourceTexture = source.texture as WebGL2Texture;
     const destinationTexture = destination.texture as WebGL2Texture;
     const info = glFormat(destinationTexture.format);
-    const { x: sourceX, y: sourceY } = resolveOrigin(source.origin);
-    const { x: destinationX, y: destinationY } = resolveOrigin(destination.origin);
+    const sourceInfo = glFormat(sourceTexture.format);
+    if (sourceInfo.internalFormat !== info.internalFormat) {
+      throw new ValidationError(
+        `[gpu-device-api] copyTextureToTexture 要求源与目标格式一致：源是「${sourceTexture.format}」，` +
+          `目标是「${destinationTexture.format}」。WebGL2 的 blitFramebuffer 不做格式转换。`,
+      );
+    }
+    if (sourceTexture.dimension !== destinationTexture.dimension) {
+      throw new ValidationError(
+        `[gpu-device-api] copyTextureToTexture 要求源与目标维度一致：源是「${sourceTexture.dimension}」，` +
+          `目标是「${destinationTexture.dimension}」。WebGL2 的 blitFramebuffer 只能在同种目标之间搬纹素。`,
+      );
+    }
 
-    // 用 blitFramebuffer 做 GPU 侧拷贝，避免绕 CPU 一圈。
+    const sourceMip = source.mipLevel ?? 0;
+    const destinationMip = destination.mipLevel ?? 0;
+    assertAspectSupported('copyTextureToTexture(source)', sourceTexture, source.aspect);
+    assertAspectSupported('copyTextureToTexture(destination)', destinationTexture, destination.aspect);
+    assertMipLevelSupported(sourceTexture, sourceMip, source.origin);
+    assertMipLevelSupported(destinationTexture, destinationMip, destination.origin);
+
+    const { x: sourceX, y: sourceY, z: sourceZ } = resolveOrigin(source.origin);
+    const { x: destinationX, y: destinationY, z: destinationZ } = resolveOrigin(destination.origin);
+    const layered = isLayeredTexture(gl, sourceTexture);
+    if (!layered && copySize.depthOrArrayLayers !== 1) {
+      throw new ValidationError(
+        `[gpu-device-api] copyTextureToTexture: depthOrArrayLayers=${copySize.depthOrArrayLayers} 需要 ` +
+          `3D 或数组纹理，但「${sourceTexture.label}」是单层 2D 纹理。`,
+      );
+    }
+
+    /*
+     * 深度/模板：GLES 3.0 只允许 blit 深度位（`DEPTH_BUFFER_BIT`；没有 `STENCIL_BUFFER_BIT`），
+     * 而且要求两端的格式在深度/模板位上兼容。这里按格式选附着点，并把 mask 放宽到
+     * 「DEPTH_BUFFER_BIT」——`depth24plus-stencil8` 的深度与模板是同一个附着点上的两个面，
+     * GL 会在 blit 时一起搬运。
+     */
+    const isDepth = sourceInfo.depth;
+    const attachment = isDepth
+      ? sourceInfo.stencil
+        ? gl.DEPTH_STENCIL_ATTACHMENT
+        : gl.DEPTH_ATTACHMENT
+      : gl.COLOR_ATTACHMENT0;
+    const mask = isDepth ? gl.DEPTH_BUFFER_BIT : gl.COLOR_BUFFER_BIT;
+
     const readFramebuffer = gl.createFramebuffer();
     const drawFramebuffer = gl.createFramebuffer();
     if (!readFramebuffer || !drawFramebuffer) {
@@ -310,44 +415,57 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     }
     const previous = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
 
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFramebuffer);
-    gl.framebufferTexture2D(
-      gl.READ_FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      sourceTexture.native,
-      source.mipLevel ?? 0,
-    );
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, drawFramebuffer);
-    gl.framebufferTexture2D(
-      gl.DRAW_FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      destinationTexture.native,
-      destination.mipLevel ?? 0,
-    );
-    if (glFormat(sourceTexture.format).internalFormat !== info.internalFormat) {
-      throw new ValidationError(
-        `[gpu-device-api] copyTextureToTexture 要求源与目标格式一致：源是「${sourceTexture.format}」，` +
-          `目标是「${destinationTexture.format}」。WebGL2 的 blitFramebuffer 不做格式转换。`,
+    try {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFramebuffer);
+      attachCopyAttachment(gl, gl.READ_FRAMEBUFFER, sourceTexture, attachment, sourceMip, sourceZ);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, drawFramebuffer);
+      attachCopyAttachment(
+        gl,
+        gl.DRAW_FRAMEBUFFER,
+        destinationTexture,
+        attachment,
+        destinationMip,
+        destinationZ,
       );
-    }
-    gl.blitFramebuffer(
-      sourceX,
-      sourceY,
-      sourceX + copySize.width,
-      sourceY + copySize.height,
-      destinationX,
-      destinationY,
-      destinationX + copySize.width,
-      destinationY + copySize.height,
-      gl.COLOR_BUFFER_BIT,
-      gl.NEAREST,
-    );
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
-    gl.deleteFramebuffer(readFramebuffer);
-    gl.deleteFramebuffer(drawFramebuffer);
+      const layers = layered ? copySize.depthOrArrayLayers : 1;
+      for (let layer = 0; layer < layers; layer += 1) {
+        if (layers > 1) {
+          attachCopyAttachment(
+            gl,
+            gl.READ_FRAMEBUFFER,
+            sourceTexture,
+            attachment,
+            sourceMip,
+            sourceZ + layer,
+          );
+          attachCopyAttachment(
+            gl,
+            gl.DRAW_FRAMEBUFFER,
+            destinationTexture,
+            attachment,
+            destinationMip,
+            destinationZ + layer,
+          );
+        }
+        gl.blitFramebuffer(
+          sourceX,
+          sourceY,
+          sourceX + copySize.width,
+          sourceY + copySize.height,
+          destinationX,
+          destinationY,
+          destinationX + copySize.width,
+          destinationY + copySize.height,
+          mask,
+          gl.NEAREST,
+        );
+      }
+    } finally {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, previous);
+      gl.deleteFramebuffer(readFramebuffer);
+      gl.deleteFramebuffer(drawFramebuffer);
+    }
     // 同上：blit 前后切了 READ/DRAW framebuffer，保留整体作废（非热路径）。
     this.state.invalidate();
   }
@@ -452,6 +570,12 @@ export class WebGL2CommandEncoder implements CommandEncoder {
       );
     }
   }
+
+  /** 取（必要时分配）零拷贝上传路径的兜底暂存区。 */
+  private uploadScratch(): ArrayBuffer {
+    this.scratch ??= new ArrayBuffer(UPLOAD_SCRATCH_BYTES);
+    return this.scratch;
+  }
 }
 
 /** `Partial<Origin3D>`（每个分量都可选）补齐成确定数值。 */
@@ -461,6 +585,188 @@ function resolveOrigin(origin: Partial<{ x: number; y: number; z: number }> | un
   z: number;
 } {
   return { x: origin?.x ?? 0, y: origin?.y ?? 0, z: origin?.z ?? 0 };
+}
+
+/** 纹理是被 GL 的 `*3D` 入口寻址的吗（3D 纹理或数组纹理）。 */
+function isLayeredTexture(gl: WebGL2RenderingContext, texture: WebGL2Texture): boolean {
+  return texture.target === gl.TEXTURE_3D || texture.target === gl.TEXTURE_2D_ARRAY;
+}
+
+/**
+ * 校验 `aspect` 被如实支持。
+ *
+ * WebGL2 里「color 纹理的 aspect」只有 `'all'` 一种含义；深度/模板纹理则是
+ * `DEPTH_STENCIL` 附着点上的一个整体，没有单独读某一面的入口（模板更是完全读不出来）。
+ * 修复前这些字段**从不被读取**，所以传什么都「成功」，行为与传默认值完全一样。
+ */
+function assertAspectSupported(
+  operation: string,
+  texture: WebGL2Texture,
+  aspect: TextureAspect | undefined,
+): void {
+  const resolved: TextureAspect = aspect ?? 'all';
+  if (resolved === 'all') return;
+  const info = glFormat(texture.format);
+  if (!info.depth && !info.stencil) {
+    throw new ValidationError(
+      `[gpu-device-api] ${operation}: aspect "${resolved}" was requested for the non-depth format ` +
+        `"${texture.format}" (texture "${texture.label}"). Use aspect "all" (or omit it).`,
+    );
+  }
+  if (resolved === 'stencil-only') {
+    throw new ValidationError(
+      `[gpu-device-api] ${operation}: aspect "stencil-only" is not supported by the WebGL2 backend. ` +
+        'WebGL2 cannot address the stencil aspect on its own — the stencil is only reachable through ' +
+        'the combined DEPTH_STENCIL attachment, and readPixels cannot read it at all. ' +
+        'Workaround: write the stencil mask into a colour attachment in a shader and copy that.',
+    );
+  }
+  // 'depth-only' 与 'all' 在 GL 里是同一件事（附着点是 DEPTH_STENCIL），如实放行。
+}
+
+/**
+ * 校验 blit 的 mip 级。
+ *
+ * GL 的 `blitFramebuffer` 只能搬**纹理基级**与 renderbuffer：它的矩形坐标没有「级」这一维，
+ * 所以「blit 第 n mip 级」这件事 GL 根本表达不了（`framebufferTexture2D` 的 level 参数虽然
+ * 能挂非 0 级，但 `blitFramebuffer` 的坐标仍然是从 `drawingBuffer` 那样从 0 开始的像素坐标，
+ * 各级尺寸不同时结果毫无意义）。修复前这个参数被直接传下去，静默地搬错了级别。
+ */
+function assertMipLevelSupported(
+  texture: WebGL2Texture,
+  mipLevel: number,
+  origin: Partial<{ x: number; y: number; z: number }> | undefined,
+): void {
+  void origin;
+  if (mipLevel === 0) return;
+  throw new ValidationError(
+    `[gpu-device-api] copyTextureToTexture: mipLevel=${mipLevel}（纹理「${texture.label}」）无法表达 —— ` +
+      'WebGL2 的 blitFramebuffer 只能搬纹理的基级。请为需要拷贝的 mip 级单独创建一张纹理，' +
+      '或改用「逐级 copyTextureToBuffer + copyBufferToTexture」。',
+  );
+}
+
+/** 把纹理的某一层挂到 blit 用的 READ/DRAW framebuffer 上。 */
+function attachCopyAttachment(
+  gl: WebGL2RenderingContext,
+  target: number,
+  texture: WebGL2Texture,
+  attachment: number,
+  mipLevel: number,
+  layer: number,
+): void {
+  if (isLayeredTexture(gl, texture)) {
+    if (mipLevel !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] copyTextureToTexture: framebufferTextureLayer 不接受非 0 的 mip 级` +
+          `（纹理「${texture.label}」请求了 mipLevel=${mipLevel}）。`,
+      );
+    }
+    gl.framebufferTextureLayer(target, attachment, texture.native, 0, layer);
+    return;
+  }
+  if (layer !== 0) {
+    throw new ValidationError(
+      `[gpu-device-api] copyTextureToTexture: 纹理「${texture.label}」是单层 2D 纹理，` +
+        `无法寻址第 ${layer} 层。`,
+    );
+  }
+  gl.framebufferTexture2D(target, attachment, gl.TEXTURE_2D, texture.native, mipLevel);
+}
+
+/**
+ * `copyTextureToBuffer` 的前置校验：**深度/模板纹理在 WebGL2 上读不回来**。
+ *
+ * ## 为什么必须报错，而不是「尽力而为」
+ *
+ * WebGL2 规范的 `readPixels` 只允许 `RGBA`（`UNSIGNED_BYTE` / `FLOAT`）与 `RED`（`FLOAT`），
+ * 而实现给深度附件报的 read format 是 `DEPTH_COMPONENT`/`UNSIGNED_INT` —— 两者永远对不上，
+ * 所以任何深度读回都会以某个 GL 错误结束（本机实测 4 种格式 × 5 种组合全部 `0x500`）。
+ * `WEBGL_depth_texture` 是 WebGL1 的扩展，WebGL2 里没有它。
+ *
+ * 由于本后端默认**不查 GL 错误**，修复前的表现是「静默地什么都不发生，缓冲里全是 0」——
+ * 这比抛错危险得多：调用方拿到的是一份看起来完全正常的全 0 深度图。
+ *
+ * `aspect` 也必须被读取：`'stencil-only'` 在 GL 里同样是 `DEPTH_STENCIL`/`UNSIGNED_INT_24_8`
+ * 组合（同样非法），而 `'all'` 在 `depth24plus-stencil8` 上按 WebGPU 的规则回落到 depth 那一半。
+ *
+ * 想读回深度请改走「**深度测试写进颜色附件**」：在片元着色器里输出
+ * `gl_FragCoord.z`（或线性化后的深度），然后按普通颜色纹理读回 —— 这是 WebGL2 里唯一可行、
+ * 也是两个后端都能用的做法。
+ */
+function assertCopyTextureToBufferSupported(
+  texture: WebGL2Texture,
+  aspect: TextureAspect | undefined,
+  depthOrArrayLayers: number,
+): void {
+  assertAspectSupported('copyTextureToBuffer', texture, aspect);
+  const info = glFormat(texture.format);
+  if (!info.depth && !info.stencil) return;
+
+  throw new ValidationError(
+    `[gpu-device-api] copyTextureToBuffer: the WebGL2 backend cannot read depth texture ` +
+      `"${texture.label}" (format "${texture.format}") back into a buffer. WebGL2's readPixels has no ` +
+      'legal depth format/type combination — the implementation-defined read format for a depth ' +
+      'attachment (DEPTH_COMPONENT/UNSIGNED_INT) is never one of the accepted pairs ' +
+      '(RGBA/UNSIGNED_BYTE, RGBA/FLOAT, RED/FLOAT), and WEBGL_depth_texture does not exist in WebGL2. ' +
+      'Measured on ANGLE/SwiftShader: all 4 depth formats x 5 format/type combinations return ' +
+      '0x500 INVALID_ENUM, and the destination buffer stays all zeros. ' +
+      'Workaround: write the depth into a colour attachment (output gl_FragCoord.z or a linearised ' +
+      `depth in the fragment shader) and copy that colour texture instead.${
+        info.stencil && (aspect ?? 'all') === 'all'
+          ? ' Note: WebGPU treats aspect "all" on a depth-stencil format as depth-only, so this call ' +
+            'would have returned the depth samples — never the stencil ones.'
+          : ''
+      }`,
+  );
+  void depthOrArrayLayers;
+}
+
+/**
+ * 把某个纹理的**某一层**挂到读回 framebuffer 上。
+ *
+ * 为什么不用 `GlStateCache.attachReadbackTexture`：那个入口只做 `framebufferTexture2D`
+ * （2D 附着），层号表达不了；而且它带「同一个纹理+附着点就跳过」的快速路径，
+ * 逐层读回时正好会命中它而跳过换层。
+ */
+function attachReadbackLayer(
+  state: GlStateCache,
+  gl: WebGL2RenderingContext,
+  texture: WebGL2Texture,
+  attachment: number,
+  mipLevel: number,
+  layer: number,
+): void {
+  state.forgetReadbackTexture();
+  const framebuffer = state.readbackFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  /*
+   * 这次直接 `gl.bindFramebuffer` 之后必须**补记**进状态缓存。
+   *
+   * 不补记的话，缓存里仍留着「上一个 framebuffer」，于是读回结束时那句
+   * `state.bindFramebuffer(previous)` 会因为「缓存说已经绑着它了」而被跳过 ——
+   * 结果**读回 framebuffer 被留在绑定点上**，而缓存还声称是调用方的那个
+   * （两者不一致，后续 draw 会画进错误的 framebuffer，且没有任何报错）。
+   */
+  state.noteFramebufferBinding(framebuffer);
+  const layered = texture.target === gl.TEXTURE_3D || texture.target === gl.TEXTURE_2D_ARRAY;
+  if (layered) {
+    if (mipLevel !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] WebGL2 的 framebufferTextureLayer 不接受非 0 的 mip 级（纹理「${texture.label}」` +
+          `请求了 mipLevel=${mipLevel}）。请为需要读回的 mip 级单独创建一张纹理。`,
+      );
+    }
+    gl.framebufferTextureLayer(gl.FRAMEBUFFER, attachment, texture.native, 0, layer);
+    return;
+  }
+  if (layer !== 0) {
+    throw new ValidationError(
+      `[gpu-device-api] copyTextureToBuffer: 纹理「${texture.label}」只有一层，` +
+        `但 origin.z=${layer} 指向了第 ${layer} 层。`,
+    );
+  }
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture.native, mipLevel);
 }
 
 /** 共享零暂存块的块大小（字节）。必须是 4 的倍数，见 {@link zeroChunks}。 */

@@ -238,6 +238,11 @@ function fakeTexture(label: string): WebGL2Texture {
     label,
     format: 'rgba8unorm',
     native: { texture: label } as unknown as WebGLTexture,
+    // 读回路径要知道这是不是数组/3D 纹理（决定用 framebufferTexture2D 还是 framebufferTextureLayer）。
+    target: 0x0de1, // TEXTURE_2D
+    dimension: '2d',
+    depthOrArrayLayers: 1,
+    mipLevelCount: 1,
   } as unknown as WebGL2Texture;
 }
 
@@ -338,7 +343,15 @@ describe('优化后 #30：copyTextureToBuffer 的 FBO 复用与收窄的失效',
       { buffer, offset: 0 },
       { width: 2, height: 2, depthOrArrayLayers: 1 },
     );
-    // 读回把绑定恢复成进入前的那个 framebuffer（不会把它留在读回 framebuffer 上）。
+    /*
+     * 读回把绑定恢复成进入前的那个 framebuffer（不会把它留在读回 framebuffer 上）。
+     *
+     * 这里断言的是「恢复后的**事实**」而不是某一次具体的 `bindFramebuffer` 调用：恢复那一次
+     * 可能被缓存跳过（进去之前恰好就是它，见 `GlStateCache.bindFramebuffer` 的同对象早退），
+     * 而跳过是更好的结果。批 04 之后逐层读回走的是 `bindFramebuffer(FRAMEBUFFER, ...)`
+     * （READ 与 DRAW 一起管），缓存记录之后按设计作废 —— 它本来就不该被当成事实，
+     * 所以 `currentFramebuffer()` 会同步问一次 GL 再记下来。
+     */
     expect(state.currentFramebuffer()).toBe(target);
   });
 
@@ -585,6 +598,10 @@ describe('优化后 #32：FramebufferCache 的对象身份键与精准淘汰', (
       label: 'mips',
       format: 'rgba8unorm',
       native: recording.make<object>('tex'),
+      target: 0x0de1, // TEXTURE_2D
+      dimension: '2d',
+      depthOrArrayLayers: 1,
+      mipLevelCount: 2,
     } as unknown as WebGL2Texture;
 
     const mip0 = cache.acquire(descriptorFor(texture, 'view', 0));

@@ -14,6 +14,7 @@ import { ValidationError } from '../../core/errors/ValidationError.js';
 import { nextId } from '../../utils/id.js';
 import { paddedCopy } from '../../utils/typedArray.js';
 import { assertUploadDataType, glFormat } from '../utils/glFormatMap.js';
+import { resolveUploadLayout, uploadTextureData } from '../utils/copyLayout.js';
 import type { Queue, ExternalImageSource } from '../../core/sync/Queue.js';
 import type { Buffer } from '../../core/resources/Buffer.js';
 import type { BufferCopyView, CommandBuffer, TextureCopyView } from '../../core/render/CommandEncoder.js';
@@ -22,6 +23,9 @@ import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2Buffer } from '../resources/WebGL2Buffer.js';
 import type { WebGL2Texture } from '../resources/WebGL2Texture.js';
 
+/** 上传时用来「搬家」的暂存区大小：只在视图起点不满足元素对齐时才用得上。 */
+const UPLOAD_SCRATCH_BYTES = 64 * 1024;
+
 export class WebGL2Queue implements Queue {
   readonly label = nextId('queue');
 
@@ -29,6 +33,14 @@ export class WebGL2Queue implements Queue {
   private readonly state: GlStateCache;
   private submittedCount = 0;
   private pending: Promise<void> = Promise.resolve();
+  /**
+   * 零拷贝路径的兜底暂存区（惰性分配）。
+   *
+   * 只在「传给 `writeTexture` 的视图起点不在元素边界上」时才需要搬一次内存
+   * （例如 `Uint8Array` 的 `subarray(2, ...)` 交给 `rgba32float`）。正常情况下
+   * `ArrayBufferView` → `TypedArray` 是零拷贝重解释，这块内存直到用上之前都不分配。
+   */
+  private scratch: ArrayBuffer | null = null;
 
   constructor(gl: WebGL2RenderingContext, state: GlStateCache) {
     this.gl = gl;
@@ -70,48 +82,46 @@ export class WebGL2Queue implements Queue {
     const texture = destination.texture as WebGL2Texture;
     const info = glFormat(texture.format);
     assertUploadDataType(texture.format, data);
+    assertQueueAspectSupported(destination, texture);
 
     const origin = resolveOrigin(destination.origin);
-    const bytesPerRow = layout.bytesPerRow ?? size.width * info.bytesPerPixel;
     const gl = this.gl;
+    const offset = layout.offset ?? 0;
+    /*
+     * 布局要在这里就算出来（而不是先 bindTexture 再校验）：校验失败时不能留下
+     * 「已经绑好纹理 + 已经改过 pixelStorei」的半截状态。
+     *
+     * `availableBytes` 传的是**本次拷贝可用的字节数**（从 offset 起算），
+     * 所以数据不足会在下发 GL 之前就报错 —— 而不是让驱动静默地记一条 INVALID_OPERATION。
+     */
+    const resolved = resolveUploadLayout(
+      layout,
+      size,
+      info,
+      'writeTexture',
+      texture.format,
+      texture.label,
+      Math.max(0, data.byteLength - offset),
+    );
 
-    gl.bindTexture(texture.target, texture.native);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    if (bytesPerRow !== size.width * info.bytesPerPixel) {
-      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, bytesPerRow / info.bytesPerPixel);
-    }
-    const source = new Uint8Array(data.buffer, data.byteOffset + layout.offset, data.byteLength - layout.offset);
-
-    if (texture.target === gl.TEXTURE_3D || texture.target === gl.TEXTURE_2D_ARRAY) {
-      gl.texSubImage3D(
-        texture.target,
-        destination.mipLevel ?? 0,
-        origin.x,
-        origin.y,
-        origin.z,
-        size.width,
-        size.height,
-        size.depthOrArrayLayers,
-        info.format,
-        info.type,
-        source,
-      );
-    } else {
-      gl.texSubImage2D(
-        texture.target,
-        destination.mipLevel ?? 0,
-        origin.x,
-        origin.y,
-        size.width,
-        size.height,
-        info.format,
-        info.type,
-        source,
-      );
-    }
-
-    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    /*
+     * 整段数据从 `offset` 起交给上传器；上传器只按布局里的偏移去取每一行，
+     * 所以这里先把视图起点移到 `offset` 上（仍然零拷贝）。
+     */
+    const bytes = new Uint8Array(data.buffer, data.byteOffset + offset, data.byteLength - offset);
+    uploadTextureData(
+      gl,
+      texture.target,
+      texture.native,
+      destination.mipLevel ?? 0,
+      origin,
+      size,
+      info,
+      texture.format,
+      bytes,
+      resolved,
+      () => this.uploadScratch(),
+    );
     // 这里只绕过缓存直接改了一个纹理单元的绑定，所以只作废纹理单元缓存；
     // 用 invalidate() 会顺带丢掉 program/blend/depth/VAO/UBO，下一次 draw 得全部重下。
     this.state.invalidateTextureUnits();
@@ -195,13 +205,39 @@ export class WebGL2Queue implements Queue {
     gl.bufferSubData(gl.COPY_WRITE_BUFFER, destinationOffset, bytes);
   }
 
+  /**
+   * `copyBufferToTexture`：先按**完整布局**（含 `rowsPerImage`）把源 buffer 读出来，
+   * 再交给 {@link writeTexture} 上传。
+   *
+   * 为什么读这么多：`texSubImage3D` 一次要吃下整叠 image，层与层之间有 `rowsPerImage`
+   * 这么大的间隔 —— 「每层各读一次、各上传一次」也可以，但那样每次 `texSubImage3D` 都得
+   * 带上 `UNPACK_SKIP_IMAGES` 之类的状态，比一次读完更容易出错，而且 GPU 侧调用次数翻倍。
+   */
   copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void {
-    const info = glFormat((destination.texture as WebGL2Texture).format);
-    const bytesPerRow = source.bytesPerRow ?? copySize.width * info.bytesPerPixel;
-    const bytes = new Uint8Array(bytesPerRow * copySize.height);
-    // 走 buffer 自己的目标读回：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
-    (source.buffer as WebGL2Buffer).download(source.offset ?? 0, bytes);
-    this.writeTexture(destination, bytes, { offset: 0, bytesPerRow }, copySize);
+    const texture = destination.texture as WebGL2Texture;
+    const info = glFormat(texture.format);
+    const buffer = source.buffer as WebGL2Buffer;
+    const offset = source.offset ?? 0;
+    // 只读「本次拷贝需要的那一段」：`requiredBytes` 由同一个函数给出（见 copyLayout.ts 的说明）。
+    const resolved = resolveUploadLayout(
+      source,
+      copySize,
+      info,
+      'copyBufferToTexture',
+      texture.format,
+      texture.label,
+    );
+    if (offset + resolved.requiredBytes > buffer.size) {
+      throw new ValidationError(
+        `[gpu-device-api] copyBufferToTexture: the source range [${offset}, ${offset + resolved.requiredBytes}) ` +
+          `exceeds buffer「${buffer.label}」's ${buffer.size} bytes (${copySize.width}x${copySize.height}` +
+          `x${copySize.depthOrArrayLayers}, bytesPerRow=${resolved.bytesPerRow}, ` +
+          `rowsPerImage=${resolved.rowsPerImage}).`,
+      );
+    }
+    const bytes = new Uint8Array(resolved.requiredBytes);
+    buffer.download(offset, bytes);
+    this.writeTexture(destination, bytes, { offset: 0, bytesPerRow: resolved.bytesPerRow, rowsPerImage: resolved.rowsPerImage }, copySize);
   }
 
   submit(commandBuffers: readonly CommandBuffer[]): void {
@@ -217,6 +253,17 @@ export class WebGL2Queue implements Queue {
     await this.pending;
     this.gl.finish();
   }
+
+  /**
+   * 取（必要时分配）零拷贝路径的兜底暂存区。
+   *
+   * 惰性分配的理由：绝大多数上传的视图起点本来就是元素对齐的（`new Uint8Array(...)`、
+   * `TypedArray` 的 `subarray` 也只按元素切），那条路径完全不需要这块内存。
+   */
+  private uploadScratch(): ArrayBuffer {
+    this.scratch ??= new ArrayBuffer(UPLOAD_SCRATCH_BYTES);
+    return this.scratch;
+  }
 }
 
 /** `Partial<Origin3D>`（每个分量都可选）补齐成确定数值。 */
@@ -226,4 +273,23 @@ function resolveOrigin(origin: Partial<{ x: number; y: number; z: number }> | un
   z: number;
 } {
   return { x: origin?.x ?? 0, y: origin?.y ?? 0, z: origin?.z ?? 0 };
+}
+
+/**
+ * `writeTexture` / `copyBufferToTexture` 的 `destination.aspect` 校验。
+ *
+ * 上传路径写的是「整个纹素」，GL 的 `texSubImage*` 也没有「只写深度那一面」的入口
+ * （深度写进 `DEPTH_COMPONENT` 面、模板写进 `STENCIL` 面，一次调用只能表达一个）。
+ * 修复前这个字段从不被读取，所以传什么都「成功」。
+ */
+function assertQueueAspectSupported(destination: TextureCopyView, texture: WebGL2Texture): void {
+  const aspect = destination.aspect ?? 'all';
+  if (aspect === 'all') return;
+  throw new ValidationError(
+    `[gpu-device-api] writeTexture: destination.aspect "${aspect}" is not supported by the WebGL2 ` +
+      `backend (texture "${texture.label}", format "${texture.format}"). GL's texSubImage* entry ` +
+      'points write whole texels, and a depth-stencil texture has a single combined attachment — ' +
+      'there is no way to address one aspect on its own. Omit the aspect (or pass "all"), or keep ' +
+      'depth and stencil in separate textures.',
+  );
 }

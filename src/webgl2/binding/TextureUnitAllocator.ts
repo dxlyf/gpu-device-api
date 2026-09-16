@@ -17,7 +17,7 @@
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { BindingType } from '../../core/enums/BindingType.js';
-import type { BindGroupLayoutEntry } from '../../core/binding/BindingTypes.js';
+import type { BindGroupLayoutEntry, TextureSampleType } from '../../core/binding/BindingTypes.js';
 
 /** 一个 uniform block 在 GL 里的落点。 */
 export interface UniformBlockSlot {
@@ -44,6 +44,15 @@ export interface TextureSlot {
   /** 配对 sampler 条目的 binding；没有声明 sampler 时为 `null`。 */
   samplerBinding: number | null;
   samplerName: string | null;
+  /**
+   * 布局声明的采样类型（`BindGroupLayoutEntry.texture.sampleType`，缺省 `'float'`）。
+   *
+   * 为什么必须带进槽位：WebGL2 的 program 是**静态编译**的，绑定点上拿不到 sampler 的类型，
+   * 而 GLSL 里 `sampler2D` 去读一张整数纹理（`RGBA8UI`）不会报错 —— 只会读到无意义的整数。
+   * WebGPU 会在创建 bind group 时用 layout 的 `sampleType` 校验，WebGL2 这边靠这个字段
+   * 在真正绑定纹理时做同一件事（见 `WebGL2RenderPassEncoder.applyBindGroups`）。
+   */
+  sampleType: TextureSampleType;
 }
 
 export interface BindingPlanLimits {
@@ -155,6 +164,8 @@ export function buildBindingPlan(
             unit: nextTextureUnit++,
             samplerBinding: paired ? paired.binding : null,
             samplerName: paired ? paired.name ?? null : null,
+            // WebGPU 的默认值是 `'float'`，这里保持一致。
+            sampleType: entry.texture?.sampleType ?? 'float',
           });
           break;
         }

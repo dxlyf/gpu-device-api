@@ -21,11 +21,15 @@ import { describe, expect, it } from 'vitest';
 import { WebGL2Device } from '../src/webgl2/WebGL2Device.js';
 import { buildDeviceLimits } from '../src/webgl2/utils/glCapabilities.js';
 import { sampleTypeMatchesFormat } from '../src/webgl2/utils/glFormatMap.js';
+import { GlStateCache } from '../src/webgl2/utils/glStateCache.js';
+import { resolveRenderState } from '../src/webgl2/pipeline/WebGL2RenderState.js';
+import { WebGL2RenderPipeline } from '../src/webgl2/pipeline/WebGL2RenderPipeline.js';
 import { TextureUsage } from '../src/core/enums/TextureUsage.js';
 import { BindingType } from '../src/core/enums/BindingType.js';
 import { ShaderStage } from '../src/core/enums/ShaderStage.js';
 import { buildBindingPlan } from '../src/webgl2/binding/TextureUnitAllocator.js';
 import type { WebGL2CanvasContext } from '../src/webgl2/WebGL2CanvasContext.js';
+import type { WebGL2RenderPipeline as WebGL2RenderPipelineType, ResolvedVariant } from '../src/webgl2/pipeline/WebGL2RenderPipeline.js';
 import type { WebGL2TextureView } from '../src/webgl2/resources/WebGL2TextureView.js';
 import type { FakeWebGL2 } from './webgl2-fake-gl.js';
 import { createFakeWebGL2 } from './webgl2-fake-gl.js';
@@ -38,6 +42,44 @@ function createDevice(fake: FakeWebGL2): WebGL2Device {
     adapterLimits: buildDeviceLimits(fake.gl),
     adapterFeatures: new Set<string>(),
   });
+}
+
+/** `SAMPLE_ALPHA_TO_COVERAGE` 的 GL 枚举。 */
+const GL_SAMPLE_ALPHA_TO_COVERAGE = 0x809e;
+
+/**
+ * 造一条只用于 `applyState()` 的管线替身。
+ *
+ * `applyState()` 只用到 `state` / `program.program` / `gl` / 两个 `alphaToCoverage` 相关字段，
+ * 所以这里不必伪造整条管线的编译结果（与 `webgl2-stencil.test.ts` 的做法一致）。
+ */
+function createAlphaToCoveragePipeline(
+  multisample: { alphaToCoverageEnabled?: boolean; count?: number },
+  variantSampleCount: number,
+): { pipeline: WebGL2RenderPipelineType; variant: ResolvedVariant; fake: FakeWebGL2 } {
+  const fake = createFakeWebGL2();
+  const state = new GlStateCache(fake.gl);
+  const variant = {
+    key: 'ac-test',
+    renderState: resolveRenderState({ vertex: { module: {} as never, entryPoint: 'vs' } }, {
+      depth: false,
+      stencil: false,
+    }),
+    depthFormat: null,
+    sampleCount: variantSampleCount,
+    vertexLayouts: [],
+    vertexArrays: new Map(),
+    vertexArrayLookup: null,
+  } satisfies ResolvedVariant;
+  const pipeline = {
+    label: 'ac-pipeline',
+    state,
+    program: { program: {} as WebGLProgram },
+    gl: fake.gl,
+    alphaToCoverage: multisample.alphaToCoverageEnabled ?? false,
+    declaredSampleCount: multisample.count ?? 1,
+  } as unknown as WebGL2RenderPipelineType;
+  return { pipeline, variant, fake };
 }
 
 describe('#13 RenderTarget.mipLevelCount', () => {
@@ -164,6 +206,32 @@ describe('#13 canvas 的 alphaMode / colorSpace', () => {
     // sRGB 是唯一能被如实支持的值，必须通过。
     expect(() => context.configure({ device, colorSpace: 'srgb' })).not.toThrow();
     device.dispose();
+  });
+});
+
+describe('#13 MultisampleState.alphaToCoverageEnabled', () => {
+  /**
+   * 处置是**实现**：GL 有 `SAMPLE_ALPHA_TO_COVERAGE`，完全能表达这个字段。
+   *
+   * 修复前 `WebGL2RenderPipeline` 完全不读它 —— 「用 alpha 做覆盖率抗锯齿」的管线在
+   * WebGL2 上静默地退化成普通 MSAA（边缘没有柔化），而 WebGPU 侧是生效的。
+   */
+  it('开启时下发 enable(SAMPLE_ALPHA_TO_COVERAGE)，关闭时下发 disable', () => {
+    const on = createAlphaToCoveragePipeline({ alphaToCoverageEnabled: true }, 4);
+    WebGL2RenderPipeline.prototype.applyState.call(on.pipeline, on.variant, 0);
+    expect(on.fake.calls).toContain(`enable:${GL_SAMPLE_ALPHA_TO_COVERAGE}`);
+
+    const off = createAlphaToCoveragePipeline({ alphaToCoverageEnabled: false }, 4);
+    WebGL2RenderPipeline.prototype.applyState.call(off.pipeline, off.variant, 0);
+    expect(off.fake.calls).toContain(`disable:${GL_SAMPLE_ALPHA_TO_COVERAGE}`);
+    expect(off.fake.calls).not.toContain(`enable:${GL_SAMPLE_ALPHA_TO_COVERAGE}`);
+  });
+
+  it('sampleCount 只有 1 时明确报错（与 WebGPU 的 toGPUMultisampleState 同形）', () => {
+    const { pipeline, variant } = createAlphaToCoveragePipeline({ alphaToCoverageEnabled: true }, 1);
+    expect(() => WebGL2RenderPipeline.prototype.applyState.call(pipeline, variant, 0)).toThrowError(
+      /\[gpu-device-api\] RenderPipeline .*MultisampleState\.alphaToCoverageEnabled requires sampleCount > 1/,
+    );
   });
 });
 

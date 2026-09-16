@@ -14,7 +14,72 @@
 
 ---
 
-## [0.3.0] - 2026-09-16
+## [未发布]
+
+### 修复（一批静默错误：WebGL2 纹素拷贝路径与 descriptor 字段）
+
+本批五项**全部**属于「GL 有能力表达但本库没用上、或用了错的常量，而且默认不查 GL 错误 →
+结果错但没有线索」。核心层要在商业项目里放心使用，这一类是最大的障碍。
+
+- **WebGL2 `copyBufferToTexture` 对 3D / 数组纹理必然失败（`#6`）**
+  旧实现只按 `bytesPerRow * height` 分配源数据，却把 `copySize.depthOrArrayLayers` 原样交给
+  `texSubImage3D`，于是第 1 层之后读的是缓冲区之外的内存（实测驱动记一条 `INVALID_OPERATION`，
+  本库默认不查 → 静默）。现在按
+  `bytesPerRow * rowsPerImage * depthOrArrayLayers` 分配并校验，一次上传整叠 image。
+  - 实测（本机原生探针）：`UNPACK_ROW_LENGTH` + `UNPACK_IMAGE_HEIGHT` + `UNPACK_ALIGNMENT=1` 下，
+    非紧密多层上传逐层读回 **R=120 == 期望值**；只给 1 层数据时驱动报 `0x502`。
+  - `Queue.copyBufferToTexture` 同形缺陷一并修掉。
+
+- **WebGL2 忽略 `TexelCopyBufferLayout.rowsPerImage`（`#7`）**
+  全后端没有 `UNPACK_IMAGE_HEIGHT`，`rowsPerImage != height` 时从第 2 层起数据全错。
+  `gfx` 恰好总是传 `rowsPerImage = height`，所以示例与既有测试**暴露不了**这个问题。
+  现在把它映射到 `UNPACK_IMAGE_HEIGHT`，并对数据不足给出带前缀的英文错误。
+  - 紧密布局（`bytesPerRow = width*4`、`rowsPerImage = height`）**一次 `pixelStorei` 都不下发**，
+    因此这条路径的 GL 调用序列与改动前逐条相同。
+
+- **WebGL2 `copyTextureToTexture` 丢弃 `origin.z`、且把数组/3D 纹理挂到 `TEXTURE_2D` 附着点（`#8`）**
+  旧实现只解构 `origin.x`/`origin.y`，两张纹理固定走 `framebufferTexture2D(..., COLOR_ATTACHMENT0, TEXTURE_2D)`。
+  现在用 `framebufferTextureLayer` 表达层级、逐层 blit，并按格式选择 `DEPTH_ATTACHMENT` /
+  `DEPTH_STENCIL_ATTACHMENT`（深度/模板纹理此前被当成颜色附件，blit 请求 `COLOR_BUFFER_BIT`）。
+  - **报错行为随实现而异**：审计在另一台机器上报 `error 0x0` + FBO 完整，本机原生探针报
+    `0x502` + `FRAMEBUFFER_INCOMPLETE_DIMENSIONS`。所以「靠 GL 报错兜底」不可靠，必须在库内校验。
+
+- **WebGL2 从深度纹理 `copyTextureToBuffer` 静默返回全 0（`#9`）——本项处置为「明确报错」**
+  实测（无头 Chrome + ANGLE/SwiftShader）：4 种深度格式 × 5 种 `readPixels` format/type 组合
+  **全部 `0x500 INVALID_ENUM`**，目标缓冲**全 0**；显式把 READ 与 DRAW 都挂到同一个完整深度 FBO 上
+  仍然如此（排除「绑错目标」）。规范层面也对得上：WebGL2 只接受 `RGBA`/`UNSIGNED_BYTE`、
+  `RGBA`/`FLOAT`、`RED`/`FLOAT`，而深度附件报出的 read format 是 `DEPTH_COMPONENT`/`UNSIGNED_INT`
+  （`WEBGL_depth_texture` 是 WebGL1 的扩展，WebGL2 没有它）。
+  因此**无法实现**，改为在调用点明确报错并给出替代方案（把深度写进颜色附件再读回）。
+  `source.aspect` 现在**真的被读取并校验**：`'stencil-only'` 明确拒绝，
+  `depth24plus-stencil8` 上的 `'all'` 按 WebGPU 的规则回落成 depth 并在错误文字里点明。
+  - 顺带修复：颜色数组纹理的读回以前只读第 0 层、`rowsPerImage` 被完全忽略；
+    现在逐层挂附件、逐层 `readPixels`，并按 `rowsPerImage` 决定每层在目标 buffer 里的起点。
+
+- **一批 descriptor 字段在 WebGL2 上静默无效（`#13`）——逐个决定「实现」还是「明确报错」**
+
+  | 字段 | 处置 | 理由 |
+  | --- | --- | --- |
+  | `RenderTarget.mipLevelCount` | **报错** | GL 的 FBO 附件永远寻址第 0 级，「渲染进第 n 级」无法表达（WebGPU 侧对多重采样目标也是拒绝的） |
+  | view 的 `format` 重解释 | **报错** | GL 没有 view 对象，采样用的始终是源纹理的内部格式 → 着色器按另一种格式解释同一段内存 |
+  | view 的 `dimension` | **报错** | GL 的纹理目标在分配时定下，绑定点上无法切换维度 |
+  | `RenderTarget.sampled: false` | **报错** | GL 的纹理只要能绑到纹理单元就能采样，没有「不可采样」状态 |
+  | canvas 的 `alphaMode` | **报错** | 由 GL context 属性决定，创建后改不了；现在读回创建属性**逐字段对照** |
+  | canvas 的 `colorSpace` | **报错** | WebGL2 的默认帧缓冲只有一种 8 位解释，`drawingBufferColorSpace` 不是渲染通道能携带的信息 |
+  | `MultisampleState.alphaToCoverageEnabled` | **实现** | GL 有 `SAMPLE_ALPHA_TO_COVERAGE`，下发 `enable`/`disable`；`sampleCount === 1` 时报错（与 WebGPU 的 `toGPUMultisampleState` 同形） |
+  | layout 的 `texture.sampleType` | **实现** | `sampleTypeMatchesFormat` 早就写好了却无人调用；现在把它带进绑定计划槽位，供渲染通道在绑定时校验 |
+
+### 验证状态（如实标注）
+
+- 判别依据：node 侧假 GL 的**逐字节**断言（假 GL 按 GL 的契约自己检查输入：数据够不够、
+  format/type 组合合法不合法），加上只读原生探针（无头 Chrome + SwiftShader，不改任何库代码）。
+- 五条锁定像素基线两后端**逐字命中**（见下），另有 `rtt-orientation`(core) 与 `stencil` 两后端通过。
+- `tsc --noEmit` 0 错误；`vitest run` **36 文件 / 557 用例全过**（本批新增 2 个测试文件、42 条用例）。
+- ⚠️ **没有验证的点**：深度读回「WebGL2 上完全不可行」这一结论只在本机 ANGLE/SwiftShader 上实测过
+  （规范层面吻合，但未在硬件驱动上复核）；`alphaToCoverageEnabled` 只做了调用级验证
+  （断言 `enable`/`disable` 真的下发），**没有像素级验证**（没有跑抗锯齿前后对比截图）。
+
+
 
 ### 修复（三项静默错误）
 

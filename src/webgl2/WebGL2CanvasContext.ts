@@ -16,6 +16,7 @@ import {
   defaultPixelRatio,
   measureCanvas,
   type FrameTarget,
+  type CanvasAlphaMode,
   type CanvasConfig,
   type CanvasContext,
   type CanvasPassDescriptor,
@@ -146,6 +147,13 @@ export class WebGL2CanvasContext implements CanvasContext {
   private depthRequested: boolean | undefined = undefined;
   /** 默认帧缓冲的采样数；`SAMPLES` 是 context 创建时定下的常量，查一次即可（见 sampleCount()）。 */
   private samples: number | null = null;
+  /**
+   * GL context 的创建属性（`alpha` / `premultipliedAlpha` …）。
+   *
+   * 这些属性**在 context 创建之后改不了**，所以在 `configure()` 里只能读回来对照调用方
+   * 要求的 `alphaMode` —— 对不上就明确报错，而不是让 alphaMode 静默失效（`#13`）。
+   */
+  private attributes: WebGLContextAttributes | null = null;
 
   constructor(options: WebGL2CanvasContextOptions) {
     this.gl = options.gl;
@@ -205,6 +213,23 @@ export class WebGL2CanvasContext implements CanvasContext {
     if (config.format !== undefined && !glFormatIsAttachment(config.format)) {
       throw new ValidationError(
         `[gpu-device-api] canvas 格式「${config.format}」不能作为颜色附件。`,
+      );
+    }
+    /*
+     * `alphaMode` / `colorSpace` 以前**完全不读**（`#13`）：传什么都被静默忽略，
+     * 而这两个字段在 WebGL2 上确实改不了 —— 它们由创建 GL context 时的
+     * `alpha` / `premultipliedAlpha` 属性决定，而 context 早就建好了。
+     * 所以这里读回创建属性并**逐字段对照**，对不上就明确报错。
+     */
+    this.assertAlphaModeSupported(config.alphaMode);
+    if (config.colorSpace !== undefined && config.colorSpace !== 'srgb') {
+      throw new ValidationError(
+        `[gpu-device-api] canvas colorSpace "${config.colorSpace}" is not supported by WebGL2. ` +
+          'The default framebuffer has exactly one 8-bit colour interpretation — WebGL2 has no ' +
+          'swap-chain colour-space configuration (drawingBufferColorSpace changes how the browser ' +
+          'interprets the buffer, not how this backend writes it, and the render pass has no place ' +
+          'to carry that information). Use "srgb", or do the conversion in a shader while writing ' +
+          'into an offscreen texture.',
       );
     }
     const device = config.device as WebGL2Device;
@@ -357,6 +382,54 @@ export class WebGL2CanvasContext implements CanvasContext {
       this.samples = Number(this.gl.getParameter(this.gl.SAMPLES) ?? 1) || 1;
     }
     return this.samples;
+  }
+
+  /**
+   * 把调用方要的 `alphaMode` 与 GL context 的**创建属性**对照。
+   *
+   * GL context 的属性在创建后就固定了，所以这里只有两种结果：一致（放行）或明确报错。
+   * 以前这里什么都不查，于是 `alphaMode` 静默失效 —— 调用方以为画布是不透明的，
+   * 实际合成结果带着 alpha（视觉上表现为「背景透出底下的东西」）。
+   */
+  private assertAlphaModeSupported(alphaMode: CanvasAlphaMode | undefined): void {
+    if (alphaMode === undefined) return;
+    const attributes = this.contextAttributes();
+    const where =
+      'The alpha behaviour of a WebGL2 canvas comes from the GL context attributes, so it must be ' +
+      'decided when the context is created: create the device with ' +
+      'createDevice({ contextAttributes: { alpha: true, premultipliedAlpha: true } }).';
+    if (attributes.alpha !== true) {
+      throw new ValidationError(
+        `[gpu-device-api] canvas alphaMode "${alphaMode}" cannot be honoured on WebGL2: this canvas ` +
+          'was created with alpha: false, so the default framebuffer has no alpha channel at all. ' +
+          where,
+      );
+    }
+    if (alphaMode === 'opaque') {
+      throw new ValidationError(
+        '[gpu-device-api] canvas alphaMode "opaque" cannot be honoured on WebGL2. A GL default ' +
+          'framebuffer always carries the alpha written by the shader / clear colour; there is no ' +
+          '"ignore alpha while compositing" switch in the GL context attributes. Clear the canvas ' +
+          'with alpha = 1 (or output alpha = 1 in the fragment shader) instead. ' +
+          where,
+      );
+    }
+    // 到这里 alphaMode 一定是 'premultiplied'：它必须与 context 的 premultipliedAlpha 一致。
+    if (attributes.premultipliedAlpha !== true) {
+      throw new ValidationError(
+        '[gpu-device-api] canvas alphaMode "premultiplied" cannot be honoured on WebGL2: this canvas ' +
+          'was created with premultipliedAlpha: false. ' +
+          where,
+      );
+    }
+  }
+
+  /** 读（并缓存）GL context 的创建属性。 */
+  private contextAttributes(): WebGLContextAttributes {
+    if (this.attributes === null) {
+      this.attributes = this.gl.getContextAttributes() ?? {};
+    }
+    return this.attributes;
   }
 
   private applyBackingSize(): void {

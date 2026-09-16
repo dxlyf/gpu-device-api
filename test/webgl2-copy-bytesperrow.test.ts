@@ -153,7 +153,17 @@ function expectedPixel(row: number, col: number): [number, number, number, numbe
 }
 
 function texture(label = 'src-texture'): WebGL2Texture {
-  return { label, format: 'rgba8unorm', native: { texture: true } } as unknown as WebGL2Texture;
+  // `target` / `depthOrArrayLayers` 是本批新增读取的字段：读回路径要知道这是不是一张
+  // 数组/3D 纹理，才能决定用 `framebufferTexture2D` 还是 `framebufferTextureLayer`。
+  return {
+    label,
+    format: 'rgba8unorm',
+    native: { texture: true },
+    target: GL_TEXTURE_2D,
+    dimension: '2d',
+    depthOrArrayLayers: 1,
+    mipLevelCount: 1,
+  } as unknown as WebGL2Texture;
 }
 
 describe('WebGL2CommandEncoder.copyTextureToBuffer 的 bytesPerRow', () => {

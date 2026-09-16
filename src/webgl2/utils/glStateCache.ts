@@ -322,6 +322,18 @@ export class GlStateCache {
   }
 
   /**
+   * 忘掉「读回 framebuffer 上挂着什么」的记录，**不动 GL 状态**。
+   *
+   * 给直接操作附着点的调用方用：`WebGL2CommandEncoder.copyTextureToBuffer` 要逐层读回，
+   * 于是自己用 `framebufferTextureLayer` 换层号（那条路径不走 {@link attachReadbackTexture}）。
+   * 不遗忘的话，下一次 `attachReadbackTexture` 会以为附件还是老样子而跳过重新挂载 ——
+   * 实际附着点上已经是另一层（甚至另一张）纹理了。
+   */
+  forgetReadbackTexture(): void {
+    this.readbackAttachment = null;
+  }
+
+  /**
    * 释放状态缓存自己持有的 GL 对象（目前只有复用的读回 framebuffer）。
    *
    * 只应在 `Device.dispose()` / 上下文丢失后调用。幂等。

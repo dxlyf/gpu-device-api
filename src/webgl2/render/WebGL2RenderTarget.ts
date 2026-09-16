@@ -211,6 +211,45 @@ export class WebGL2RenderTarget implements RenderTarget {
     this.label = descriptor.label ?? nextId('renderTarget');
     this._width = width;
     this._height = height;
+    /*
+     * `mipLevelCount` 在 WebGL2 上**做不到**，所以这里是明确报错而不是静默忽略（`#13`）。
+     *
+     * 原因：GL 的 FBO 附件只寻址第 0 mip 级（`framebufferTexture2D` 的 `level` 参数是有的，
+     * 但一个 FBO 只能挂某一级，而渲染通道的绘制目标就是它），所以
+     * 「渲染进第 1 级」这件事在 WebGL2 里没有任何表达方式；而附件纹理上虽然可以用
+     * `texStorage2D` 分配出整条 mip 链，但本后端的 `createAttachmentTexture` 拿不到这个字段，
+     * 于是 `target.mipLevelCount` 会对外宣称有 2 级、实际只有 1 级 —— 又是一次静默不一致。
+     *
+     * WebGPU 侧对「多重采样目标 + mipLevelCount > 1」本来也是拒绝的（见 `WebGPURenderTarget`），
+     * 两个后端在这里保持一致。
+     *
+     * 需要 mip 链请自己建一张带 mip 的纹理（`device.createTexture({ mipLevelCount })`）并
+     * `generateMipmaps()`，或渲染到单级目标后再拷贝。
+     */
+    if (descriptor.mipLevelCount !== undefined && descriptor.mipLevelCount !== 1) {
+      throw new ValidationError(
+        `[gpu-device-api] createRenderTarget: mipLevelCount ${String(descriptor.mipLevelCount)} is not ` +
+          'supported by the WebGL2 backend for render targets. A GL framebuffer attachment always ' +
+          'addresses mip level 0, so a render target can never write into a higher mip level — the ' +
+          'field would be silently ignored (and the attachments would still only have one level). ' +
+          'Create a texture with an explicit mipLevelCount and call generateMipmaps() after rendering ' +
+          'into level 0, or render into a single-level target and copy the result.',
+      );
+    }
+    /*
+     * `sampled` 在 WebGL2 上也是**无法被尊重**的（`#13`）：GL 的纹理只要绑到纹理单元就能采样，
+     * 没有「这张纹理不可采样」的表达方式。`sampled: true`（以及不填）与 WebGL2 的实际行为一致，
+     * 如实放行；`sampled: false` 则会静默地失效 —— 报错说明。
+     */
+    if (descriptor.sampled === false) {
+      throw new ValidationError(
+        '[gpu-device-api] createRenderTarget: sampled: false cannot be honoured on WebGL2. In GL, any ' +
+          'texture can be bound to a texture unit and sampled — there is no per-texture "not ' +
+          'sampleable" state, and this backend never validates TextureUsage. Leave the field out ' +
+          '(sampled: true is already what WebGL2 does), or keep the render output in a texture you ' +
+          'never bind.',
+      );
+    }
     this.mipLevelCount = descriptor.mipLevelCount ?? 1;
     this.colorFormats = colorFormats;
     this.depthFormat = depthFormat;

@@ -357,6 +357,9 @@ describe('applyRenderState：把完整模板状态下发到 GL', () => {
     const stub = {
       state: cache,
       program: { program: {} as WebGLProgram },
+      // `applyState()` 在批 04 之后还会下发 `SAMPLE_ALPHA_TO_COVERAGE`（`#13`），
+      // 所以这里也要给出一个带 `enable` / `disable` 的假 GL。
+      gl: createFakeGl().gl,
       // `RenderPipelineVariant` 只用于类型收窄，这里不需要真的用到。
     } as unknown as WebGL2RenderPipeline;
 

@@ -39,6 +39,7 @@ import type { FakeWebGL2 } from './webgl2-fake-gl.js';
 import { createFakeWebGL2 } from './webgl2-fake-gl.js';
 
 /** 共享假 GL 的记录里用到的 GL 常量（与 `test/webgl2-fake-gl.ts` 的记录格式对齐）。 */
+const GL_UNPACK_ALIGNMENT = 0x0cf5;
 const GL_UNPACK_ROW_LENGTH = 0x0cf2;
 const GL_UNPACK_IMAGE_HEIGHT = 0x806e;
 
@@ -327,9 +328,16 @@ function createFakeGl(): FakeGl {
     createFramebuffer: () => ({ fbo: (nextId += 1) }),
     deleteFramebuffer: () => {},
     bindFramebuffer: (target: number, framebuffer: unknown) => {
-      if (target === GL.FRAMEBUFFER) boundFramebuffer = framebuffer;
-      else if (target === GL.READ_FRAMEBUFFER) boundReadFramebuffer = framebuffer;
-      else if (target === GL.DRAW_FRAMEBUFFER) boundDrawFramebuffer = framebuffer;
+      // GL 的 `FRAMEBUFFER` 是 READ 与 DRAW 的**同一个**绑定点，`bindFramebuffer` 两边一起改。
+      if (target === GL.FRAMEBUFFER) {
+        boundFramebuffer = framebuffer;
+        boundReadFramebuffer = framebuffer;
+        boundDrawFramebuffer = framebuffer;
+      } else if (target === GL.READ_FRAMEBUFFER) {
+        boundReadFramebuffer = framebuffer;
+      } else if (target === GL.DRAW_FRAMEBUFFER) {
+        boundDrawFramebuffer = framebuffer;
+      }
       if (framebuffer && !attachmentsByFramebuffer.has(framebuffer)) {
         attachmentsByFramebuffer.set(framebuffer, { texture: null, layer: null });
       }
@@ -406,6 +414,27 @@ function createFakeGl(): FakeGl {
       const attachment = boundReadFramebuffer
         ? (attachmentsByFramebuffer.get(boundReadFramebuffer) ?? { texture: null, layer: null })
         : { texture: null, layer: null };
+      /*
+       * 按「贴在附件上的层号」填一个可预测的图案：
+       * 第 `layer` 层、第 `row` 行、第 `col` 列像素 = `(layer*100 + row*10 + col, 200, 100, 255)`。
+       *
+       * 这样「层号对不对」与「行在目标缓冲里的位置对不对」都能从**字节**上验证 ——
+       * 而不是只断言「调了几次 / 传了什么常量」。
+       */
+      if (format === GL.RGBA && type === GL.UNSIGNED_BYTE) {
+        const bytes = new Uint8Array(dst.buffer, dst.byteOffset, available);
+        const layer = attachment.layer ?? 0;
+        for (let row = 0; row < height; row += 1) {
+          for (let col = 0; col < width; col += 1) {
+            const at = (row * width + col) * 4;
+            if (at + 3 >= bytes.length) break;
+            bytes[at] = (layer * 100 + row * 10 + col) & 0xff;
+            bytes[at + 1] = 200;
+            bytes[at + 2] = 100;
+            bytes[at + 3] = 255;
+          }
+        }
+      }
       reads.push({
         x,
         y,
@@ -507,13 +536,16 @@ function fakeTexture(
   target: number = GL.TEXTURE_2D,
   label = 'tex',
 ): WebGL2Texture {
+  const layered = target === GL.TEXTURE_3D || target === GL.TEXTURE_2D_ARRAY;
   return {
     label,
     format,
     native: { texture: label },
     target,
+    // `copyTextureToTexture` 会比对源/目标的维度（单层 2D ↔ 数组纹理不能互拷）。
+    dimension: target === GL.TEXTURE_3D ? '3d' : layered ? '2d-array' : '2d',
     mipLevelCount: 1,
-    depthOrArrayLayers: 1,
+    depthOrArrayLayers: layered ? 4 : 1,
   } as unknown as WebGL2Texture;
 }
 
@@ -706,6 +738,8 @@ describe('#6 copyBufferToTexture 支持 3D / 数组纹理的多层上传', () =>
     expect(fake.uploads).toHaveLength(1);
     const upload = fake.uploads[0]!;
     expect(upload.byteLength).toBeGreaterThanOrEqual(bytesPerRow * rowsPerImage * layers);
+    // GL 会按 UNPACK_IMAGE_HEIGHT 逐层定位，所以每一层都必须是完整的 rowsPerImage 行。
+    expect(upload.byteLength).toBe(bytesPerRow * rowsPerImage * layers);
     // 填充字节必须原样保留（不是「重新紧凑排布」）。
     expect([...source.store.subarray(8, 16)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
     expectPatternBytes(source.store, {
@@ -763,7 +797,7 @@ describe('#6 copyBufferToTexture 支持 3D / 数组纹理的多层上传', () =>
         { texture, origin: { x: 0, y: 0 } },
         { width: 4, height: 1, depthOrArrayLayers: 1 },
       ),
-    ).toThrowError(/\[gpu-device-api\] copyBufferToTexture: bytesPerRow \(8\) must be >= 16/);
+    ).toThrowError(/\[gpu-device-api\] copyBufferToTexture: bytesPerRow must be an integer >= 16/);
   });
 });
 
@@ -833,7 +867,7 @@ describe('#7 Queue.copyBufferToTexture 读取 rowsPerImage（UNPACK_IMAGE_HEIGHT
     });
   });
 
-  it('省略 rowsPerImage 时按 height 处理（WebGPU 的默认值）', () => {
+  it('省略 rowsPerImage 时按 height 处理（WebGPU 的默认值），不再下发 UNPACK_IMAGE_HEIGHT', () => {
     const { fake, queue } = createQueueHarness();
     const { data } = buildPattern({ width: 2, height: 2, layers: 2 });
     const texture = fakeTexture('rgba8unorm', GL.TEXTURE_2D_ARRAY);
@@ -846,7 +880,20 @@ describe('#7 Queue.copyBufferToTexture 读取 rowsPerImage（UNPACK_IMAGE_HEIGHT
     );
 
     expect(fake.errors).toEqual([]);
-    expect(fake.uploads[0]!.imageHeight).toBe(2);
+    const upload = fake.uploads[0]!;
+    // GL 的默认 `UNPACK_IMAGE_HEIGHT` 就是 `height`，所以这里**不下发** pixelStorei
+    // （保持 GL 的默认值 0 = 省略），层级定位照样正确。
+    expect(upload.imageHeight).toBe(0);
+    expect(upload.depth).toBe(2);
+    expectPatternBytes(data, {
+      width: 2,
+      height: 2,
+      layers: 2,
+      bytesPerRow: 8,
+      rowsPerImage: 2,
+      firstLayer: 0,
+      label: 'writeTexture data',
+    });
   });
 
   it('写回后 UNPACK_IMAGE_HEIGHT / UNPACK_ROW_LENGTH / UNPACK_ALIGNMENT 都回到默认值', () => {
@@ -946,9 +993,9 @@ describe('#7 调用级合同：UNPACK_ROW_LENGTH / UNPACK_IMAGE_HEIGHT 的实际
     );
 
     const stores = fake.calls.filter((call) => call.startsWith('pixelStorei'));
-    // `UNPACK_ROW_LENGTH` 与 `UNPACK_IMAGE_HEIGHT` 都不该出现（只有对齐值 1 与还原 4）。
-    expect(stores.some((call) => call.includes(`:${GL_UNPACK_ROW_LENGTH}:`))).toBe(false);
-    expect(stores.some((call) => call.includes(`:${GL_UNPACK_IMAGE_HEIGHT}:`))).toBe(false);
+    // `UNPACK_ROW_LENGTH` 与 `UNPACK_IMAGE_HEIGHT` 一次都不该出现：
+    // 紧密布局下 GL 的默认值（0 = 省略）就是正确的语义，多下发一次就是白白多一次 JS→GL 调用。
+    expect(stores).toEqual([`pixelStorei:${GL_UNPACK_ALIGNMENT}:1`, `pixelStorei:${GL_UNPACK_ALIGNMENT}:4`]);
   });
 
   it('queue.copyBufferToTexture 的多层上传同样下发行距/图距', () => {
@@ -1015,10 +1062,11 @@ describe('#8 copyTextureToTexture 尊重 origin.z 与 3D/数组附件', () => {
     );
 
     expect(fake.errors).toEqual([]);
-    const readLayers = fake.attaches.filter((call) => call.target === GL.READ_FRAMEBUFFER).map((call) => call.layer);
-    const drawLayers = fake.attaches.filter((call) => call.target === GL.DRAW_FRAMEBUFFER).map((call) => call.layer);
-    expect(readLayers).toEqual([1, 2]);
-    expect(drawLayers).toEqual([2, 3]);
+    /*
+     * 逐层 blit 必须真的**换层** —— 只看 blit 次数抓不到「层号恒为 0」这个症状。
+     * 附件顺序：循环外那对（src 第 1 层、dst 第 2 层），然后每层各换一次。
+     */
+    expect(fake.attaches.map((call) => call.layer)).toEqual([1, 2, 1, 2, 2, 3]);
     expect(fake.blits).toHaveLength(2);
   });
 
@@ -1078,34 +1126,36 @@ describe('#8 copyTextureToTexture 尊重 origin.z 与 3D/数组附件', () => {
 /* ------------------------------------------------------------------ #9 ------------------ */
 
 describe('#9 copyTextureToBuffer 从深度纹理读回', () => {
-  it('depth24plus：必须下发合法的 readPixels format/type，并把读回的深度值逐字节写进 buffer', () => {
+  /**
+   * 这一项的处置是**明确报错**，而不是实现。
+   *
+   * 依据（本机原生探针实测，见 `.tmp-04/PROBE-NOTES.md`）：WebGL2 的 `readPixels` 在本机
+   * 对 4 种深度格式 × 5 种 `format`/`type` 组合**全部**返回 `0x500 INVALID_ENUM`，
+   * 而且显式把 READ 与 DRAW 都挂到同一个完整深度 FBO 上仍然如此（排除「绑错目标」）。
+   * 规范层面也对得上：WebGL2 的 `readPixels` 只接受 `RGBA`/`UNSIGNED_BYTE`、
+   * `RGBA`/`FLOAT`、`RED`/`FLOAT`，而深度附件报出来的 read format 是
+   * `DEPTH_COMPONENT`/`UNSIGNED_INT` —— 永远对不上（`WEBGL_depth_texture` 是 WebGL1 的扩展）。
+   *
+   * 因此「实现」不可能：`#9` 的目标从「读回正确」变成「**不再静默返回全 0**」。
+   */
+  it('depth24plus：明确报错并指出替代方案（而不是把缓冲留成全 0）', () => {
     const { fake, encoder } = createEncoderHarness();
     const texture = fakeTexture('depth24plus', GL.TEXTURE_2D, 'depth');
     const destination = createFakeBuffer(new Uint8Array(2 * 2 * 4), 'dst');
 
-    encoder.copyTextureToBuffer(
-      { texture, origin: { x: 0, y: 0 } },
-      { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
-      { width: 2, height: 2, depthOrArrayLayers: 1 },
-    );
-
-    // 修复前：用 readPixels(DEPTH_COMPONENT, UNSIGNED_INT)，而 WebGL2 只认
-    // (DEPTH_COMPONENT, UNSIGNED_INT)？不 —— 见下方假 GL 的合法性表：本库传的正是
-    // (DEPTH_COMPONENT, UNSIGNED_INT) 这一组，假 GL 接受它，但本机原生探针实测
-    // 真实 WebGL2 返回 0x500 INVALID_ENUM。因此这条用例同时断言「下发的是哪一组」，
-    // 由原生探针（`.tmp-04/`）决定到底哪一组才是本机可用的。
-    expect(fake.errors).toEqual([]);
-    expect(fake.reads).toHaveLength(1);
-    const read = fake.reads[0]!;
-    expect(read.format).toBe(GL.DEPTH_COMPONENT);
-    expect(read.type).toBe(GL.UNSIGNED_INT);
-    expect(read.alignment).toBe(1);
-    // 读回的字节必须真的落到目标 buffer 里（修复前缓冲里全是 0）。
-    expect(destination.uploads).toHaveLength(1);
-    expect(destination.uploads[0]!.data.byteLength).toBe(16);
+    expect(() =>
+      encoder.copyTextureToBuffer(
+        { texture, origin: { x: 0, y: 0 } },
+        { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
+        { width: 2, height: 2, depthOrArrayLayers: 1 },
+      ),
+    ).toThrowError(/\[gpu-device-api\] copyTextureToBuffer: the WebGL2 backend cannot read depth texture/);
+    // 关键：**连一次 readPixels 都没下发**，目标 buffer 也完全没被写过。
+    expect(fake.reads).toEqual([]);
+    expect(destination.uploads).toEqual([]);
   });
 
-  it('depth32float 明确报错：WebGL2 没有合法的 (DEPTH_COMPONENT, FLOAT) 读回组合', () => {
+  it('报错信息必须给出可执行的替代方案（写进颜色附件）', () => {
     const { encoder } = createEncoderHarness();
     const texture = fakeTexture('depth32float', GL.TEXTURE_2D, 'depth32');
     const destination = createFakeBuffer(new Uint8Array(16), 'dst');
@@ -1116,7 +1166,14 @@ describe('#9 copyTextureToBuffer 从深度纹理读回', () => {
         { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
         { width: 2, height: 2, depthOrArrayLayers: 1 },
       ),
-    ).toThrowError(/\[gpu-device-api\] copyTextureToBuffer: format "depth32float"/);
+    ).toThrowError(/workaround: write the depth into a colour attachment/i);
+    expect(() =>
+      encoder.copyTextureToBuffer(
+        { texture, origin: { x: 0, y: 0 } },
+        { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
+        { width: 2, height: 2, depthOrArrayLayers: 1 },
+      ),
+    ).toThrowError(/RGBA\/UNSIGNED_BYTE, RGBA\/FLOAT, RED\/FLOAT/);
   });
 
   it("aspect: 'stencil-only' 必须被读取并明确拒绝（WebGL2 的 readPixels 读不到模板）", () => {
@@ -1125,7 +1182,7 @@ describe('#9 copyTextureToBuffer 从深度纹理读回', () => {
     const destination = createFakeBuffer(new Uint8Array(16), 'dst');
 
     // 修复前：`source.aspect` 从不被读取 —— 传 'stencil-only' 与不传完全一样，
-    // 拿到的是一份（错的）深度数据，调用方无从察觉。
+    // 拿到的是一份（错的）全 0 数据，调用方无从察觉。
     expect(() =>
       encoder.copyTextureToBuffer(
         { texture, origin: { x: 0, y: 0 }, aspect: 'stencil-only' },
@@ -1133,41 +1190,84 @@ describe('#9 copyTextureToBuffer 从深度纹理读回', () => {
         { width: 2, height: 2, depthOrArrayLayers: 1 },
       ),
     ).toThrowError(/\[gpu-device-api\] copyTextureToBuffer: aspect "stencil-only"/);
+    expect(destination.uploads).toEqual([]);
   });
 
-  it("aspect: 'all' 在 depth24plus-stencil8 上按 depth-only 处理（与 WebGPU 的回落一致）", () => {
-    const { fake, encoder } = createEncoderHarness();
+  it("aspect: 'all' 在 depth24plus-stencil8 上按 depth-only 处理（报错文字里点明这一差异）", () => {
+    const { encoder } = createEncoderHarness();
     const texture = fakeTexture('depth24plus-stencil8', GL.TEXTURE_2D, 'ds');
     const destination = createFakeBuffer(new Uint8Array(16), 'dst');
 
-    encoder.copyTextureToBuffer(
-      { texture, origin: { x: 0, y: 0 }, aspect: 'all' },
-      { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
-      { width: 2, height: 2, depthOrArrayLayers: 1 },
-    );
-
-    expect(fake.errors).toEqual([]);
-    expect(fake.reads[0]!.format).toBe(GL.DEPTH_COMPONENT);
+    expect(() =>
+      encoder.copyTextureToBuffer(
+        { texture, origin: { x: 0, y: 0 }, aspect: 'all' },
+        { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
+        { width: 2, height: 2, depthOrArrayLayers: 1 },
+      ),
+    ).toThrowError(/WebGPU treats aspect "all" on a depth-stencil format as depth-only/);
   });
 
-  it('多层数组纹理：逐层读回，每层挂到自己的层号上且写出位置正确', () => {
+  it('非深度格式上给 aspect 也必须报错（这个字段不许被静默忽略）', () => {
+    const { encoder } = createEncoderHarness();
+    const texture = fakeTexture('rgba8unorm', GL.TEXTURE_2D, 'color');
+    const destination = createFakeBuffer(new Uint8Array(16), 'dst');
+
+    expect(() =>
+      encoder.copyTextureToBuffer(
+        { texture, origin: { x: 0, y: 0 }, aspect: 'depth-only' },
+        { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
+        { width: 2, height: 2, depthOrArrayLayers: 1 },
+      ),
+    ).toThrowError(/aspect "depth-only" was requested for the non-depth format "rgba8unorm"/);
+  });
+
+  it('颜色数组纹理：逐层读回，每层挂到自己的层号上且写出位置正确', () => {
     const { fake, encoder } = createEncoderHarness();
     const texture = fakeTexture('rgba8unorm', GL.TEXTURE_2D_ARRAY, 'array');
-    const destination = createFakeBuffer(new Uint8Array(8 * 8 * 2), 'dst');
+    // 读回是逐层的，所以层尾的填充不需要存在：只需要覆盖到「最后一个像素」为止（与 WebGPU 一致）。
+    // 8 (bytesPerRow) * ((2-1) * 4 (rowsPerImage) + 2 (height)) = 48 字节。
+    const destination = createFakeBuffer(new Uint8Array(8 * 4 * 2), 'dst');
 
     encoder.copyTextureToBuffer(
       { texture, origin: { x: 0, y: 0, z: 2 } },
-      { buffer: destination.buffer, offset: 0, bytesPerRow: 8, rowsPerImage: 8 },
+      { buffer: destination.buffer, offset: 0, bytesPerRow: 8, rowsPerImage: 4 },
       { width: 2, height: 2, depthOrArrayLayers: 2 },
     );
 
     expect(fake.errors).toEqual([]);
     expect(fake.reads).toHaveLength(2);
+    // 修复前只读第 0 层、且恒用 framebufferTexture2D（层号压根不存在）。
     expect(fake.reads.map((read) => read.attachmentLayer)).toEqual([2, 3]);
     expect(fake.reads.every((read) => read.alignment === 1)).toBe(true);
-    // 第 2 层的数据落在 rowsPerImage * bytesPerRow = 64 字节处。
-    expect(destination.uploads).toHaveLength(2);
-    expect(destination.uploads[1]!.offset).toBe(64);
+    /*
+     * 目标缓冲是**一次写回**的（`copyTextureToBuffer` 在 JS 里拼好整块再 `bufferSubData`，
+     * 与 `copyBufferToTexture` 对称），所以断言落在「整块数据里的字节位置」上：
+     * 第 1 层的数据必须出现在偏移 `rowsPerImage * bytesPerRow = 32` 处。
+     */
+    expect(destination.uploads).toHaveLength(1);
+    const data = destination.uploads[0]!.data;
+    expect(destination.uploads[0]!.offset).toBe(0);
+    expect(data).toHaveLength(48);
+
+    const pixelAt = (offset: number): number[] => [
+      data[offset]!,
+      data[offset + 1]!,
+      data[offset + 2]!,
+      data[offset + 3]!,
+    ];
+    // 第 0 层（附件层号 2）：第 0 行第 0 列 → R = 2*100 + 0 + 0 = 200；第 1 行第 1 列 → 211。
+    expect(pixelAt(0)).toEqual([200, 200, 100, 255]);
+    expect(pixelAt(8 + 4)).toEqual([211, 200, 100, 255]);
+    // 第 1 层（附件层号 3）落在偏移 32，第 0 行第 0 列 → R = 300 & 0xff = 44。
+    expect(pixelAt(32)).toEqual([300 & 0xff, 200, 100, 255]);
+    expect(pixelAt(32 + 8 + 4)).toEqual([311 & 0xff, 200, 100, 255]);
+    /*
+     * 第 0 层与第 1 层之间那段偏移 16..31（`(rowsPerImage - height) * bytesPerRow`）是**填充**，
+     * 必须是 0 —— 它验证的是「层的起点按 rowsPerImage 算，而不是按 height 紧凑排」。
+     */
+    expect([...data.subarray(16, 32)]).toEqual([
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]);
   });
 
   it('rowsPerImage 小于 height 时明确报错', () => {
@@ -1184,10 +1284,29 @@ describe('#9 copyTextureToBuffer 从深度纹理读回', () => {
     ).toThrowError(/rowsPerImage \(1\) must be >= the copy height \(2\)/);
   });
 
-  it('mipLevel != 0 的深度读回明确报错（深度附着点不能挂非 0 级）', () => {
+  it('单层 2D 纹理上给 origin.z != 0 明确报错（层号无法寻址）', () => {
     const { encoder } = createEncoderHarness();
-    const texture = fakeTexture('depth24plus', GL.TEXTURE_2D, 'depth');
-    const destination = createFakeBuffer(new Uint8Array(16), 'dst');
+    const texture = fakeTexture('rgba8unorm', GL.TEXTURE_2D, 'flat');
+    const destination = createFakeBuffer(new Uint8Array(64), 'dst');
+
+    let message = '';
+    try {
+      encoder.copyTextureToBuffer(
+        { texture, origin: { x: 0, y: 0, z: 1 } },
+        { buffer: destination.buffer, offset: 0, bytesPerRow: 8 },
+        { width: 2, height: 2, depthOrArrayLayers: 1 },
+      );
+    } catch (error) {
+      message = String(error instanceof Error ? error.message : error);
+    }
+    expect(message).toMatch(/\[gpu-device-api\]/);
+    expect(message).toMatch(/纹理「flat」只有一层/);
+  });
+
+  it('数组纹理上给 mipLevel != 0 明确报错（framebufferTextureLayer 不接受非 0 级）', () => {
+    const { encoder } = createEncoderHarness();
+    const texture = fakeTexture('rgba8unorm', GL.TEXTURE_2D_ARRAY, 'array');
+    const destination = createFakeBuffer(new Uint8Array(64), 'dst');
 
     expect(() =>
       encoder.copyTextureToBuffer(

@@ -265,8 +265,8 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
     },
     framebufferTexture2D: (target: number, attachment: number, texTarget: number, texture: unknown) =>
       record(`framebufferTexture2D:${target}:${attachment}:${texTarget}:${nameOf(texture)}`),
-    framebufferTextureLayer: (target: number, attachment: number, texture: unknown) =>
-      record(`framebufferTextureLayer:${target}:${attachment}:${nameOf(texture)}`),
+    framebufferTextureLayer: (target: number, attachment: number, texture: unknown, level: number, layer: number) =>
+      record(`framebufferTextureLayer:${target}:${attachment}:${nameOf(texture)}:level=${level}:layer=${layer}`),
     framebufferRenderbuffer: (target: number, attachment: number, renderbufferTarget: number, renderbuffer: unknown) =>
       record(`framebufferRenderbuffer:${target}:${attachment}:${renderbufferTarget}:${nameOf(renderbuffer)}`),
     drawBuffers: (attachments: readonly number[]) => record(`drawBuffers:${attachments.join('|')}`),
@@ -377,6 +377,21 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
     clearBufferfi: (buffer: number, drawbuffer: number) => record(`clearBufferfi:${buffer}:${drawbuffer}`),
     depthMask: (flag: boolean) => record(`depthMask:${flag}`),
     colorMask: () => record('colorMask'),
+    /* ---- 固定功能状态（`applyRenderState` 会下发这些） ------------------------------------- */
+    useProgram: () => record('useProgram'),
+    depthFunc: () => record('depthFunc'),
+    cullFace: () => record('cullFace'),
+    frontFace: () => record('frontFace'),
+    polygonOffset: () => record('polygonOffset'),
+    blendFuncSeparate: () => record('blendFuncSeparate'),
+    blendEquationSeparate: () => record('blendEquationSeparate'),
+    stencilFuncSeparate: (face: number, func: number, reference: number, mask: number) =>
+      record(`stencilFuncSeparate:${face}:${func}:${reference}:${mask}`),
+    stencilOpSeparate: (face: number, fail: number, depthFail: number, pass: number) =>
+      record(`stencilOpSeparate:${face}:${fail}:${depthFail}:${pass}`),
+    stencilMaskSeparate: (face: number, mask: number) => record(`stencilMaskSeparate:${face}:${mask}`),
+    createVertexArray: () => make('vao'),
+    deleteVertexArray: () => {},
     flush: () => record('flush'),
     finish: () => record('finish'),
   } as unknown as WebGL2RenderingContext;

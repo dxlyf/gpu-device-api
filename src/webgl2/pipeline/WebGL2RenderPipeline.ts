@@ -133,6 +133,17 @@ export class WebGL2RenderPipeline implements RenderPipeline {
   private readonly program: CompiledProgram;
   private readonly plan: WebGLBindingPlan | null;
   private readonly topologyMode: number;
+  /**
+   * `MultisampleState.alphaToCoverageEnabled`（`#13`）。
+   *
+   * WebGPU 侧会把它翻成 `GPUMultisampleState.alphaToCoverageEnabled`，而 WebGL2 后端以前
+   * **完全不读**这个字段 —— 于是「用 alpha 做覆盖率抗锯齿」的管线在 WebGL2 上静默地不生效
+   * （画面上表现为边缘没有柔化，只有 MSAA 的普通效果）。GL 有 `SAMPLE_ALPHA_TO_COVERAGE`，
+   * 能表达，所以这里**实现**它。
+   */
+  private readonly alphaToCoverage: boolean;
+  /** 描述里声明的采样数（WebGPU 的默认值是 1）；`alphaToCoverage` 只能配 `> 1`。 */
+  private readonly declaredSampleCount: number;
   private readonly variantCache = new Map<string, ResolvedVariant>();
   private _disposed = false;
 
@@ -169,6 +180,8 @@ export class WebGL2RenderPipeline implements RenderPipeline {
     this.program = program;
     this.plan = layout === 'auto' ? null : ((layout as WebGL2PipelineLayout).bindingPlan ?? null);
     this.topologyMode = GL_PRIMITIVE_MODES[descriptor.primitive?.topology ?? 'triangle-list'];
+    this.alphaToCoverage = descriptor.multisample?.alphaToCoverageEnabled ?? false;
+    this.declaredSampleCount = descriptor.multisample?.count ?? 1;
   }
 
   /** WebGL2 在创建时就完成了编译。 */
@@ -338,10 +351,33 @@ export class WebGL2RenderPipeline implements RenderPipeline {
     return this.program.compilationInfo;
   }
 
-  /** 把该管线的固定功能状态写入 GL 状态缓存。 */
+  /**
+   * 把该管线的固定功能状态写入 GL 状态缓存。
+   *
+   * `SAMPLE_ALPHA_TO_COVERAGE`（`#13`）是个**上下文级**开关（不是逐 draw 状态的一部分），
+   * 所以直接在这里下发：每次 draw 多一次廉价的 `enable/disable` 是刻意选的 ——
+   * 走 `GlStateCache` 需要一个新字段，而这条路径的调用者（渲染通道）已经知道本帧的采样数，
+   * 在这里判断不会有歧义。采样数不合法时明确报错（与 WebGPU 的
+   * `toGPUMultisampleState` 同形：`alphaToCoverageEnabled` 要求 `sampleCount > 1`）。
+   */
   applyState(variant: ResolvedVariant, stencilReference = 0): void {
     this.state.useProgram(this.program.program);
     applyRenderState(this.state, variant.renderState, stencilReference);
+
+    if (this.alphaToCoverage) {
+      if (this.declaredSampleCount <= 1 && variant.sampleCount <= 1) {
+        throw new ValidationError(
+          `[gpu-device-api] RenderPipeline "${this.label}": MultisampleState.alphaToCoverageEnabled ` +
+            'requires sampleCount > 1, but both the pipeline descriptor and the current render target ' +
+            `use sampleCount 1. WebGPU rejects this combination too. Create the render target with ` +
+            'sampleCount 2 or 4 (WebGL2 cannot multisample a texture attachment, so use an offscreen ' +
+            'RenderTarget).',
+        );
+      }
+      setAlphaToCoverage(this.gl, true);
+    } else {
+      setAlphaToCoverage(this.gl, false);
+    }
   }
 
   /**
@@ -450,8 +486,21 @@ export class WebGL2RenderPipeline implements RenderPipeline {
   }
 }
 
-function buildVertexArrayKey(
-  layouts: readonly VertexBufferLayout[],
+/** GL 的 `SAMPLE_ALPHA_TO_COVERAGE`（写死数值，避免依赖 `gl` 实例才能取到常量）。 */
+const GL_SAMPLE_ALPHA_TO_COVERAGE = 0x809e;
+
+/**
+ * 开关 `SAMPLE_ALPHA_TO_COVERAGE`。
+ *
+ * 写成「先查方法在不在」的形式：单元测试里有用结构化替身直接调用 `applyState` 的用例
+ * （只关心模板状态），替身上没有这两个方法。真实的 `WebGL2RenderingContext` 一定有它们。
+ */
+function setAlphaToCoverage(gl: WebGL2RenderingContext, enabled: boolean): void {
+  if (enabled) gl.enable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+  else if (typeof gl.disable === 'function') gl.disable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+}
+
+function buildVertexArrayKey(  layouts: readonly VertexBufferLayout[],
   bindings: readonly (VertexBufferBinding | null)[],
   indexBuffer: WebGLBuffer | null,
 ): string {
