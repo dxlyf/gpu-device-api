@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "types": ["@webgpu/types"],
+    "baseUrl": ".",
+    "paths": {
+      "@dxyl/gpu-device-api": ["../src/index.ts"],
+      "@dxyl/gpu-device-api/webgl2": ["./subentry/webgl2.ts"]
+    }
+  },
+  "include": ["consumers/**/*.ts", "subentry/**/*.ts", "types-shim.d.ts"]
+}
