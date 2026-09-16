@@ -38,6 +38,7 @@ renderer.endFrame();
 - [core 层](#core-层)
 - [便捷层 gfx](#便捷层-gfx)
 - [GPU 计时](#gpu-计时)
+- [已修复的正确性问题](#已修复的正确性问题)
 - [性能优化](#性能优化)
 - [示例与自检](#示例与自检)
 - [两个后端的硬约束（踩过的坑）](#两个后端的硬约束踩过的坑)
@@ -103,7 +104,7 @@ pnpm install
 
 pnpm dev          # 启动示例站（vite dev server），打开 /examples/gallery.html
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（当前 26 个文件 / 396 条用例，node 环境；数字以 pnpm test 打印的为准）
+pnpm test         # vitest run（当前 34 个文件 / 515 条用例，node 环境；数字以 pnpm test 打印的为准）
 pnpm build        # 产出 dist/gpu-device-api.js（ESM）+ dist/types
 pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```
@@ -587,6 +588,100 @@ CPU 侧的 draw 次数、uniform 写入量在这个实验里完全没变。
 - **读回本身有开销**：每 `delay` 帧多一次小 command buffer（WebGPU）或一次 GL 查询轮询（WebGL2），
   做严格 A/B 性能对比时请开着同一个设置对比，或干脆关掉计时。
 
+## 已修复的正确性问题
+
+`0.2.0` → `0.3.0` 之间修掉了**三项「不报错、但结果错」的缺陷**。它们都不会抛异常、也不会写日志，
+只是画面或数据**静默地和预期不一样** —— 所以这一节逐项写清症状、机制与实测数字，
+使用方可以据此判断自己有没有踩过。
+
+### WebGL2 曾完全忽略模板（stencil）状态
+
+`glStateCache` 以前只听「模板开不开」，比较函数与三种操作被整段丢掉：下发时硬编码一句
+`gl.stencilFunc(ALWAYS, ref, 0xff)`，从不调用 `stencilOpSeparate` / `stencilMaskSeparate`
+（`GL_STENCIL_OPS` 定义了却没有调用方）。后果是 `{ compare: 'equal', passOp: 'replace' }`
+这类配置在 WebGL2 上退化成「**恒通过、不写**」，而 WebGPU 侧一直是完整的 —— 同一份代码
+在两个后端结果不同，且**不报任何错**。
+
+现在用 GLES 3.0 的 `stencilFuncSeparate` / `stencilOpSeparate` / `stencilMaskSeparate`
+**真正实现双面语义**：正/背面各自的 `compare` / `failOp` / `depthFailOp` / `passOp`，
+加上 `stencilReadMask` / `stencilWriteMask`；`setStencilReference()` 的引用值也真正下发到
+`stencilFuncSeparate`。状态缓存的去重键覆盖全部 12 个字段（两个面各 4 个 + 引用值 + 两个掩码 + 开关），
+任何字段变化都会重新下发。
+
+量化对照（`examples/stencil.html`：同一份模板配置在两个后端跑四个场景，
+`scripts/analyze-screenshot.mjs` 统计真实合成截图）：**修复前 WebGL2 的示例页自检是 `fail`**
+（模板门控区域**外**也变绿 —— 32768/32768 前景像素、100% 绿，而 WebGPU 是 0%）；
+**修复后两个后端的 `data-*` 逐字节相同**（模板区内 `0,255,0`、区外 `11,14,19`）。
+逐字段的参数断言在 `test/webgl2-stencil.test.ts`（32 例；修复前 30 例里 27 例失败）。
+
+顺带修掉一个**同源缺陷**：GL 的 `clearBufferfi` 清模板会被 `STENCIL_WRITEMASK` 逐位过滤，
+上一条管线留下写掩码 0 时**清模板静默失效、模板值跨渲染通道残留**。现在清深度/模板之前
+把两个写掩码临时置成全写（`GlStateCache.prepareClear()`），清完作废缓存、下一次下发真实掩码。
+
+⚠️ **一处如实标注的位宽差异**：WebGPU 的 `stencilReadMask` / `stencilWriteMask` /
+`setStencilReference()` 是 **32 位**（缺省掩码 `0xffffffff`），而 GLES 3.0 在
+`depth24plus-stencil8` 上只有 **8 位** —— GL 自己会把掩码与 `2^s - 1` 相与。本库**原样传递、
+不报错、不改写**调用方的值；要知道的只是「WebGPU 上第 8 位以上的掩码位在 WebGL2 上没有意义」。
+
+### `getMappedRange()` 曾返回拷贝 → 「部分范围写入」静默丢失
+
+**这是使用方最容易踩的一项**，所以单独写细。旧实现在**部分范围**上（`getMappedRange(offset, size)`）
+用 `slice()` 返回**副本**，于是这条最常见的写入路径**静默不生效**（数据写进了临时副本，
+`unmap()` 时什么都没上传）：
+
+```ts
+const range = await buffer.mapAsync('write', 0, 64);
+const view = buffer.getMappedRange(16, 16);       // 旧实现：这里拿到的是副本
+new Uint8Array(view as ArrayBuffer).set(payload);
+buffer.unmap();                                   // 什么都没上传，也不报错
+```
+
+而且**两个后端一致地错**，所以任何「WebGL2 对比 WebGPU」的验证都发现不了它。
+
+现在返回的是**映射内存上的视图**（`MappedRange = ArrayBuffer | Uint8Array`）：
+
+- **整段范围**返回 `mapAsync()` resolve 出来的那个 `ArrayBuffer`（就是映射内存本身）；
+- **部分范围**返回建在**同一块映射内存**上的 `Uint8Array` 视图（WebGL2 是影子缓冲上的子视图）；
+- 同一段范围**重复调用**一定拿到指向**同一块内存**的视图（`view.buffer` 相同），
+  所以 A 视图写入、B 视图立刻可见；
+- `unmap()` 之后视图失效：长度归零、写被**静默忽略**，而 `slice()` 这类真正触碰底层内存的操作
+  会抛 `TypeError` —— **要在 `unmap()` 之前把要留下的数据拷出来**（`range.slice()`）。
+
+⚠️ **必须点名的坑**：返回类型是联合类型，所以**不要**无脑写 `new Uint8Array(range)` ——
+当 `range` 已经是 `Uint8Array` 时，这个构造器会**逐元素拷贝**，等于把刚修好的静默丢失又重现一层。
+保留联合类型是为了让整段范围继续返回 `ArrayBuffer`、不破坏既有用法。用 `instanceof` 分流即可：
+
+```ts
+const range = buffer.getMappedRange(16, 16);                     // ArrayBuffer | Uint8Array
+const bytes = range instanceof Uint8Array ? range : new Uint8Array(range);
+bytes.set(payload);                                              // 写的是映射内存（或它的视图）
+```
+
+**另附一条按实测修正的文档级发现**：原生 `GPUBuffer.mapAsync(offset)` 之后调用原生
+`GPUBuffer.getMappedRange(offset, size)`，它的 `offset` 是**相对 buffer 起点的绝对偏移**，
+**不是**相对映射起点 —— 这与 MDN 当前的措辞相反，但与规范原文和 Chrome 实测一致
+（`mapAsync(WRITE, 16, 32)` 之后 `getMappedRange(16, 32)` 成功，传 `(0, 32)` 或 `(8, 4)`
+都报 `OperationError`）。本库按实测实现：给原生的就是绝对偏移（传 0 在 `offset > 0` 时会直接报错），
+而**本库对外的 `Buffer.getMappedRange(offset, size)` 统一用「相对映射起点」**（与 WebGL2 后端一致），
+两个坐标系之间的平移只发生在 `mapAsync()` 里那一处。
+
+回归测试：`test/buffer-mapped-range.test.ts`（写 → `unmap()` → 读回、重复取同一块内存、
+`unmap()` 后视图失效，两个后端各一套；修复前 8/10 失败）。
+
+### WebGPU 每帧泄漏一个 command encoder
+
+`WebGPUCommandEncoder.finish()` 里不把自己从设备的资源追踪集合里摘掉，而 core 的
+`CommandEncoder` 接口**没有 `dispose()`** —— 于是最标准的写法「每帧 `createCommandEncoder()`
+→ 用完 `finish()` 丢掉」会让追踪集合**无上限增长**，一直强引用到 `device.dispose()` 为止。
+实测 120 帧后计数 **+120**（`test/command-encoder-tracking.test.ts`；修复前 2/6 失败）。
+
+现在 `finish()` 里就摘除。**语义安全性**已确认：`finish()` 之后除幂等的 `dispose()` 之外，
+该 encoder 上的**每一个**方法都会先过 `assertRecording()` 抛错，不可能再产生设备侧工作，
+所以提前摘除不会留下悬空引用。
+
+**WebGL2 侧没有这个问题**：`WebGL2Device.createCommandEncoder()` 从不登记 encoder
+（它不持有 GL 资源，也没有 `dispose()`）。
+
 ## 性能优化
 
 这一节只写**这一轮做完、并且量过**的优化：每一项都有独立的判据，量不出来的就不写进来。
@@ -730,11 +825,51 @@ resolve 途径。（一个常见误解是「WebGL2 做不到，所以只能放�
 多出来的是**一条额外的动态偏移 binding**。所以它已经回退，**不是现有特性**，这里只作为「测过、
 不划算」的记录留着。
 
+### 第四档：命令路径与缓存（全部有实测数字）
+
+上面几节是前三档；这一档集中优化**每帧都会走的命令路径与各类缓存**，判据与前面一致：
+数字来自本机实测（WebGL2 是 SwiftShader 软件光栅化），改前的基线由
+`test/webgl2-opt-2a.test.ts` / `test/webgl2-opt-2b.test.ts` 用同一台假 GL 钉住。
+
+- **`gl.copyBufferSubData` 取代 CPU 往返**：GL buffer 之间的拷贝以前走「`getBufferSubData`
+  读回 CPU + `bufferSubData` 再传回去」，现在非索引缓冲直接 `gl.copyBufferSubData`：
+  1MB **2.23ms → 0ms**、16MB **53.1ms → 0.003ms**，两条路径**逐字节一致**。两类保留 CPU 回退：
+  **索引缓冲**（`ELEMENT_ARRAY_BUFFER` 是 VAO 状态的一部分，不能当拷贝的源/目标）与
+  **同 buffer 的重叠区间**（GL 规定重叠是 `INVALID_VALUE`，而 CPU 中转天然是 memmove 语义）。
+  顺带改正了一处**错误注释**：原文写「WebGL2 没有 `copyBufferSubData`」，实测该函数存在。
+- **读回 framebuffer 复用 + 收窄状态失效**：原来每次 `copyTextureToBuffer` 都 create/delete
+  一个临时 FBO，并**全量** `invalidate()` 状态缓存。后果不只是建删开销 —— **紧随其后的那一次
+  draw 会重新下发全部固定功能状态**，实测 **13 次 → 0 次**。现在复用一块读回 FBO，
+  失效范围收窄到「framebuffer 绑定」这一项。
+- **混合状态去重键改数字比较**：`setBlend` 原先每次现拼 7 段模板字符串，现在改成 7 次
+  数字/布尔比较（零分配）。100 万次同值调用实测 **381ms → 5.4ms（约 70×）**。
+  并加了**编译期闸门**（`UncomparedBlendField` + 约束 `never`）：`GlBlendState` 新增字段若忘了
+  参与比较，**直接编译失败**，不会退化成「换条管线之后画面偶尔不对」。
+- **FBO 缓存改用对象身份键 + 精准淘汰**：原先的键是 `${view.label}@${texture.label}#${W}x${H}`，
+  于是**显式给两张同尺寸纹理传相同 label 时会复用错误的 framebuffer、静默画进错误的纹理**；
+  而且任意一张纹理销毁会清空整个缓存（反复重建、抖动）。现在改成对象身份键（`WeakMap` 惰性分配 id）、
+  只淘汰引用了该纹理的条目，并复用既有的 LRU 上限（默认 64）。
+- **VAO 缓存加上限**：原来只增不淘汰；现在每个变体的 LRU 上限 **64**（可配、强制 `>= 1`）。
+  **并修掉一个潜在静默错误**：快速路径在特定版本号下会返回**已被淘汰的 VAO**
+  （表现为 `INVALID_OPERATION` + 保持旧绑定 → 静默画错）；淘汰时现在显式清理快速路径与
+  状态缓存里的残留引用。
+- **WebGPU mipmap 的 view / bind group 按级缓存**：同一张纹理连续 5 次 `generateMipmaps()`，
+  `createView` **40 → 8**、`createBindGroup` **20 → 4**（第 2 次起零新建）；预热后反复 20000 次，
+  新建原生对象 **480000 → 0**。
+- **变体解析改 4 条 MRU 备忘**：两个变体交替使用时解析次数 **24 → 2**；同一进程内前后代码
+  交替计时 **450.7ms → 112.1ms（4.02×）**。（真正的原生管线缓存仍是独立的 64 条 LRU，
+  被挤出备忘不会重建 GPU 对象。）
+- **pass 建立期零分配**：`JSON.stringify(clearValue)` 的比较改成解析后 RGBA 的**逐分量数值比较**，
+  每个附件的 `new Float32Array` 改成**共享零暂存**（`CLEAR_COLOR_SCRATCH`）。实测各 **2 → 0**
+  （多重采样 pass：2 颜色 + 深度；原始附件 pass 同样 2 → 0），`clearBufferfv` 调用次数不变。
+- **测过但无收益、未改**：`WebGL2Queue.writeBuffer` 的视图构造 —— 微基准显示替代写法
+  **1.110× 更慢**（在噪声内），所以**保持原样、没有改**。
+
 ## 示例与自检
 
 | 页面 | 内容 |
 | --- | --- |
-| `examples/gallery.html` | **示例汇总**：示例的索引页（目前 13 张卡片：从 `core-triangle` 到 `depth`，含 `benchmark` / `index` / `smoke`）。下面这些新页**还没有卡片**（`core-texture-async` / `core-prewarm` / `gfx-prewarm` / `depth-null-format` / `rtt-orientation` / `device-lost` / `compute` / `msaa-offscreen`），直接开 URL 即可 |
+| `examples/gallery.html` | **示例汇总**：示例的索引页（目前 22 张卡片，下面表里的页面几乎都有卡片）。**还没有卡片**的只有 `examples/stencil.html` 与 `examples/scissor-origin.html` 两页，直接开 URL 即可 |
 | `examples/index.html` | gfx 层的完整 demo：lil-gui 调参、切换后端、几何体/材质/光照切换 |
 | `examples/instancing.html` | **实例化**：一个网格 + 每实例数据（位置/颜色/缩放），**1 次 draw call 画 4096 个实例** |
 | `examples/batch.html` | **批量**：每边 N 个盒子共 N³ 次 draw call，每次带自己的 model 与 uniform，共用 1 条管线 |
@@ -761,7 +896,9 @@ resolve 途径。（一个常见误解是「WebGL2 做不到，所以只能放�
 | `examples/rtt-orientation.html` | **渲染到纹理的行序对照**：四象限 + 单侧白色标记，报出纹素第 0 行 / 最后一行的颜色与 `rttRowOrderOk` |
 | `examples/device-lost.html` | **真的把设备弄丢**（WebGL2 用 `WEBGL_lose_context`、WebGPU 用 `GPUDevice.destroy()`），验证检测 → 明确报错 → 重新建一个设备能用 |
 | `examples/compute.html` | WebGPU 上跑 compute kernel（4096 个值逐元素严格相等）；WebGL2 上把两条「不支持」错误原文抓出来 |
-| `examples/msaa-offscreen.html` | **离屏 MSAA**：`?samples=1|4` 渲染到离屏目标再 1:1 上屏，中间色像素数由截图统计给出 |
+| `examples/msaa-offscreen.html` | **离屏 MSAA**：`?samples=1\|4` 渲染到离屏目标再 1:1 上屏，中间色像素数由截图统计给出 |
+| `examples/stencil.html` | **模板门控的两个后端一致性**：同一份模板配置跑四个场景（`gated` / `control` / `nowrite` / `noread`），逐像素对照左/右半屏；结论写在 `data-stencil-result="pass\|fail"` 与逐场景的 `data-stencil-<scene>-inside` / `-outside`（另见 [已修复的正确性问题](#已修复的正确性问题)） |
+| `examples/scissor-origin.html` | **scissor / viewport 原点探针**：同一个「左上原点」矩形在三类通道（canvas / 离屏不翻投影 / 离屏翻投影）上落在图像的哪一半，读回像素写进 `data-*`；`?backend=webgl2\|webgpu\|auto&probe=split`。**两个后端的浏览器验证尚未补做**（见[两个后端的硬约束](#两个后端的硬约束踩过的坑) ⑨） |
 
 `core-landscape.html` 的自检有 8 条判据（`sky-blue` / `sky-not-clear` / `sun-bright` /
 `sun-aligned` / `ridge-darker` / `river-blue` / `river-bed` / `water-animates`），全部写在
@@ -978,6 +1115,38 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 再把每行前 `width * 4` 字节搬到紧凑缓冲里（`core-shared.ts` / `offscreen-verify.ts` 里的
 `verifyOffscreen` 就是这套；WebGL2 的 `readPixels` 没有这个限制，所以只有 WebGPU 会暴露）。
 
+**⑨ `setViewport` / `setScissorRect` 的 Y 原点在两个后端是反的，core 刻意不转换。**
+原生约定不同，而且**这是正确的**：WebGL2 的 `gl.viewport` / `gl.scissor` 原点在**左下**，
+WebGPU 的 `setViewport` / `setScissorRect` 原点在**左上**。core 是「显式镜像 WebGPU 形状」的一层，
+所以它**如实透传、不做任何 Y 变换** —— 同一个矩形在两个后端会落在相反的一半上。
+
+要写可移植的代码，用两个从**包根导出**的公开 helper：
+
+```ts
+import { toNativeScissorRect, toNativeViewportRect } from '@dxyl/gpu-device-api';
+
+// 传进去的矩形一律是「左上原点、y 向下」的图像空间坐标
+const rect = { x: 0, y: 0, width: target.width, height: Math.floor(target.height / 2) };
+const native = toNativeScissorRect(rect, target.height, imageOrigin);
+pass.setScissorRect(native.x, native.y, native.width, native.height);
+```
+
+- 换算规则：`imageOrigin: 'topLeft'` 恒等（`y' = y`）；`imageOrigin: 'bottomLeft'` 时
+  `y' = attachmentHeight - (y + height)`。
+- 两个 helper 是同一条公式：viewport 与 scissor rect 在两个后端里本来就是同一套窗口坐标，
+  只在一个后端翻 Y 等于只在那个后端把整幅图翻过来。
+- **第二个参数是「附件高度」，不是矩形高度**：WebGL2 的 canvas 通道传 canvas 的像素高度，
+  离屏通道传该 render target 的高度。返回值在附件的**原生坐标系**里，**不在**入参那个坐标系里。
+- ⚠️ **必须点名的坑**：`gfx` 默认对**纹理附件**做投影翻转（见
+  [能力边界（诚实清单）](#能力边界诚实清单) 里的「纹理坐标约定」），于是会出现
+  「**离屏通道恰好与 WebGPU 一致、canvas 通道不一致**」的情况。所以**不能从某一条渲染路径
+  反推规则** —— 「WebGL2 就要翻」在离屏通道上是错的，「不转换就对了」在 canvas 通道上也是错的；
+  要按**附件自己的原点约定**（`imageOrigin`）判断。
+- 证据页与脚本已在仓库里：`examples/scissor-origin.html`（探针页）与
+  `scripts/verify-scissor-origin.mjs`（按 `data-*` 结论校验）。**如实标注：这一项的两个后端
+  浏览器验证尚未补做**（提交时环境内存不足，可用内存约 1.89GB），两后端实测一致率**待补**；
+  探针页里的期望值来自规范与代码，**不要当成已实测结论**。
+
 ## 能力边界（诚实清单）
 
 **WebGL2 后端不支持（创建/调用时明确抛错，附带替代方案）**
@@ -999,6 +1168,14 @@ WebGPU 原生按字节算，WebGL2 的 `bufferSubData` 也按字节算，但早�
 [性能优化](#性能优化) 里的「离屏 MSAA」一小节，页面是 `examples/msaa-offscreen.html`。
 另外 `bgra8unorm` / `bgra8unorm-srgb` 在 WebGL2 上**不能从主机内存上传**（BGRA 只是默认帧缓冲的
 隐式布局，不是纹理内部格式），gfx 的纹理层会明确抛错并让你改用 `rgba8unorm` / `rgba8unorm-srgb`。
+
+**WebGL2 无法逐附件设置 blend / 写掩码（这条不抛错，是静默降级）**
+
+GLES 3.0 没有 `blendFunci` / `colorMaski`，所以 MRT 的**所有附件共用同一套 blend**，写掩码只取
+**第 0 个附件**的值（`WebGL2RenderState` 从 `fragment.targets[0].writeMask` 取，其余附件忽略）。
+WebGPU 侧是按附件逐个翻译的（`toGPUColorTargets` 对每个 color attachment 各自取 `blend` /
+`writeMask`），所以「附件 A 加 alpha 混合、附件 B 不混合」这类配置在 WebGL2 上会**静默**变成
+「两个附件用 A 的混合」。要跨后端一致，就让所有附件的 blend 与写掩码相同。
 
 **device-lost 无法在抽象层内自动恢复（两个后端都只能「检测 + 明确报错」）**
 
@@ -1073,6 +1250,10 @@ pass 带深度附件时管线必须声明同格式，否则整条 command buffer
 - `docs/需求.md` 里标注「第二阶段」的 query set / fence：query set 已在两个后端做完
   （timestamp + occlusion，见 [GPU 计时](#gpu-计时)）；`CommandEncoder.resolveQuerySet()`
   与 pass 内的 `timestampWrites` 在 WebGL2 上没有对应能力，调用即抛错并给出替代方案。
+- **`Device.createFence()` 不在 core 的 `Device` 接口上**：只有 `WebGL2Device` 上有
+  （`WebGL2Fence`，走 `fenceSync` / `clientWaitSync`）；WebGPU 原生**没有 fence 对象**，
+  等待入口只有 `GPUQueue.onSubmittedWorkDone()`，所以它没有被提升到 core ——
+  写跨后端代码不要依赖它。core 里只有 `Fence` 这个接口类型本身。
 - `GPUCommandEncoder.writeTimestamp()` 之外的 encoder 级 GPU 时间手段（例如逐 pass 的
   `resolveQuerySet` 批量读回）没有封装；目前 gfx 只暴露整帧一个数字。
 
@@ -1092,10 +1273,11 @@ pass 带深度附件时管线必须声明同格式，否则整条 command buffer
 
 ### 测试构成
 
-`test/` 下 **26 个文件、396 条用例**，全部跑在 **node** 环境（不需要浏览器），实测全绿。
-这两个数字以 `pnpm test` / `pnpm exec vitest run` 打印的当前值为准 —— 这一轮为了给「渲染到纹理的
-行序」「mip 生成」「预热」「MSAA」等改动补证据，测试文件增长得很快，写死在文档里必然过期
-（本节上一次写的是「9 个文件、208 条用例」）。
+`test/` 下 **34 个文件、515 条用例**，全部跑在 **node** 环境（不需要浏览器），实测全绿。
+这两个数字以 `pnpm test` / `pnpm exec vitest run` 打印的当前值为准 —— 这一轮为了给「模板双面语义」
+「映射内存视图」「command encoder 追踪」「第四档优化」「渲染到纹理的行序」「mip 生成」「预热」
+「MSAA」等改动补证据，测试文件增长得很快，写死在文档里必然过期
+（本节上一次写的是「26 个文件、396 条用例」）。
 
 | 文件 | 覆盖 |
 | --- | --- |
@@ -1124,6 +1306,14 @@ pass 带深度附件时管线必须声明同格式，否则整条 command buffer
 | `test/webgl2-copy-bytesperrow.test.ts` | `copyTextureToBuffer` 的 `bytesPerRow` 校验 |
 | `test/webgl2-resource-tracking.test.ts` | `WebGL2Device` 资源追踪：`destroy()` 后从追踪集合里摘掉（500 轮 create/destroy 回到基线） |
 | `test/webgpu-resource-tracking.test.ts` | 同上，WebGPU 侧 |
+| `test/webgl2-stencil.test.ts` | WebGL2 模板双面语义（32 例）：逐字段参数断言、双面独立、缓存对每个字段变化都敏感、`setStencilReference()` 的引用值真的下发、清屏与写掩码的交互 |
+| `test/webgl2-opt-2a.test.ts` | 第四档 2a 的改后证据：`copyBufferSubData`（含索引缓冲与重叠区间的 CPU 回退）、读回 FBO 复用与收窄失效、FBO 缓存的对象身份键与精准淘汰（改前基线由同一台假 GL 钉住） |
+| `test/webgl2-opt-2b.test.ts` | 第四档 2b 的改后证据：`setBlend` 数字比较去重（逐字段「改了必须重新下发」）、VAO 缓存的 LRU 上限与淘汰安全性、`clearValue` 比较与共享零暂存 |
+| `test/buffer-mapped-range.test.ts` | `Buffer.getMappedRange()` 的视图语义：写 → `unmap()` → 读回、重复取同一块内存（`view.buffer` 相同）、`unmap()` 后视图失效（两个后端各一套） |
+| `test/command-encoder-tracking.test.ts` | encoder 生命周期：120 帧 create + `finish()` 之后设备追踪计数回到基线、`finish()` 后 `dispose()` 幂等、其它方法仍抛错；WebGL2 侧用同一计数断言钉住「没有同形问题」 |
+| `test/gpu-timing-capability.test.ts` | GPU 计时的能力判定与失败模式：不再只看 feature 标志，而是探测原生 API 表面（`encoderTimestamps` / `passTimestamps` / `unavailableReason`）；`gpuTiming: true` 是尽力而为、运行中失败只自动关闭计时而不打断渲染 |
+| `test/webgpu-mipmap-reuse.test.ts` | WebGPU `generateMipmaps()` 的 per-level view / bind group 缓存：重复调用不再新建原生对象，且下发给 GPU 的指令逐字段与第一次相同 |
+| `test/webgpu-pipeline-variant-reuse.test.ts` | 变体解析的 4 条 MRU 备忘：两个变体交替 resolve 只在首次解析、被挤出备忘不重建原生管线、四个字段任一变化都必须重新解析 |
 
 **像素级**的验证放在浏览器里，入口是 `examples/gallery.html` 与
 [示例与自检](#示例与自检)那一节列出的全部页面：`examples/smoke.html`（core 层 17 项，**只跑 WebGL2**）、
@@ -1156,7 +1346,10 @@ pass 带深度附件时管线必须声明同格式，否则整条 command buffer
 - `setGlobalLogLevel()` / `createLogger(name)` 控制日志级别；默认是 `warn`，也就是只输出警告与错误，
   需要细节时把级别调到 `debug`（`device.native` 上的一切仍按原生后端自己的规则输出）。
 - 已经在做的事：视锥剔除（默认开）、mip 由后端生成、异步管线预热与编译诊断、离屏 MSAA、
-  gfx 的纹理上传与异步创建 —— 每一项的实测数字写在 [性能优化](#性能优化) 一节。
+  gfx 的纹理上传与异步创建，以及第四档的命令路径与缓存优化（`gl.copyBufferSubData`、读回 FBO 复用、
+  FBO / VAO 缓存的键与上限、mip view 缓存、变体 MRU、pass 建立期零分配）—— 每一项的实测数字
+  写在 [性能优化](#性能优化) 一节；三项已修的静默错误（模板状态、映射内存视图、encoder 泄漏）
+  见 [已修复的正确性问题](#已修复的正确性问题)。
 - 量性能前先想清楚要哪个数：`stats.frameTime` 是 CPU 提交、`stats.gpuFrameTime` 是 GPU 执行
   （默认 `null`），两者不可互相替代。见 [GPU 计时](#gpu-计时)。
 - 无头脚本（`scripts/verify-headless.mjs` / `scripts/capture-screenshot.mjs` /
