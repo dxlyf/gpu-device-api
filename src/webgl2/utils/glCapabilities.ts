@@ -102,8 +102,23 @@ export function buildDeviceLimits(gl: WebGL2RenderingContext): DeviceLimits {
   const maxBufferSize = 0x7fffffff;
 
   return {
-    // WebGL2 没有 1D 纹理，用 2D 上限代替，上层代码读到的是一个安全的正数。
-    maxTextureDimension1D: gl2.maxTextureSize,
+    /*
+     * `#18`：WebGL2 **没有** 1D 纹理，所以这个 limit 如实报 0。
+     *
+     * 改前报的是 `MAX_TEXTURE_SIZE`（本机实测 2048），而同一份能力探测的另一端
+     *（`glTextureTarget()` / `WebGL2Texture` 构造）明确拒绝 `dimension: '1d'`。
+     * 于是「先读 `device.limits` 再决定要不要用 1D 纹理」的调用方会读到 2048、
+     * 据此做出「支持 1D」的决策，然后在 `createTexture()` 那里才吃到异常 ——
+     * limits 撒谎属于本会话反复在修的那类「静默错误」（同一个事实有两个互相矛盾的来源）。
+     *
+     * 为什么不是「用 height = 1 的 2D 纹理模拟出来」：那确实能装下数据，但 `sampler2D` 与
+     * `sampler1D` 是两个不同的着色器类型，本层没有「把 2D 纹理按 1D 采样」的表达方式，
+     * 承诺一个做不到的 `dimension: '1d'` 会比报 0 更容易误导。
+     *
+     * 读数为 0 的统一含义（与 WebGPU 的 storage/compute 类 limit 在 WebGL2 上报 0 一致）：
+     * **这个后端没有该能力**，请改用 `{ width: n, height: 1 }` 的 2D 纹理或切到 WebGPU。
+     */
+    maxTextureDimension1D: 0,
     maxTextureDimension2D: gl2.maxTextureSize,
     maxTextureDimension3D: gl2.max3dTextureSize,
     maxTextureArrayLayers: gl2.maxArrayTextureLayers,

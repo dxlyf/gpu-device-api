@@ -12,7 +12,7 @@
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { nextId } from '../../utils/id.js';
-import { paddedCopy } from '../../utils/typedArray.js';
+import { paddedCopy, typedArrayElementSize } from '../../utils/typedArray.js';
 import { assertUploadDataType, glFormat } from '../utils/glFormatMap.js';
 import { resolveUploadLayout, uploadTextureData } from '../utils/copyLayout.js';
 import type { Queue, ExternalImageSource } from '../../core/sync/Queue.js';
@@ -52,6 +52,20 @@ export class WebGL2Queue implements Queue {
     return this.submittedCount;
   }
 
+  /**
+   * 把主机端数据写进 buffer。
+   *
+   * ## `#15`：元素对齐校验与 WebGPU 对齐（改前 WebGL2 没有）
+   *
+   * core 的契约里 `dataOffset` / `size` 是**字节**，而 WebGPU 原生接口在 `data` 是 TypedArray 时
+   * 按**元素**计，所以 `WebGPUQueue` 必须要求两者都是元素大小的倍数（否则换算出来的元素数
+   * 不是整数，原生实现会直接抛）。改前 WebGL2 不检查这一条：`new Uint8Array(data.buffer,
+   * byteOffset + 2)` 这种「起点落在元素中间」的视图照样能上传 —— 于是**同一段代码在 WebGL2 上
+   * 通、在 WebGPU 上抛**，而在 WebGL2 上拿到的是一份半错位的重解释数据。
+   *
+   * 现在这里先做与 `WebGPUQueue.writeBuffer` **逐字相同**的检查（注意：报告的是**字节**数，
+   * 因为 core 契约里这两个参数就是字节），再走本后端的补齐上传。
+   */
   writeBuffer(
     buffer: Buffer,
     bufferOffset: number,
@@ -67,9 +81,17 @@ export class WebGL2Queue implements Queue {
           `超出了 buffer「${target.label}」的 ${target.size} 字节。`,
       );
     }
+    // DataView 没有「元素」概念，按字节计；TypedArray 用它的 BYTES_PER_ELEMENT。
+    const bytesPerElement = typedArrayElementSize(data);
+    if (dataOffset % bytesPerElement !== 0 || bytes % bytesPerElement !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] Queue.writeBuffer: dataOffset (${dataOffset}) and size (${bytes}) are measured in ` +
+          `bytes, so both must be multiples of the element size (${bytesPerElement}) of the given ${data.constructor.name}.`,
+      );
+    }
     const view = new Uint8Array(data.buffer, data.byteOffset + dataOffset, bytes);
-    // WebGL2 的 bufferSubData 要求数据长度是 4 的倍数的情况并不存在，
-    // 但 WebGPU 侧要求 4 对齐；这里统一补齐，保证两端写入的字节完全一致。
+    // WebGL2 的 bufferSubData 不要求数据长度是 4 的倍数，但 WebGPU 侧要求 4 对齐；
+    // 这里统一补齐，保证两端写入的字节完全一致（补齐的那几个字节写 0，不会读旧内容）。
     target.upload(bufferOffset, paddedCopy(view));
   }
 

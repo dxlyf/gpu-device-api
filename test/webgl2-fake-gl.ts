@@ -173,6 +173,17 @@ export function createFakeWebGL2(options: FakeWebGL2Options = {}): FakeWebGL2 {
 
   const gl = {
     ...GL,
+    /*
+     * 默认帧缓冲的尺寸。
+     *
+     * 真实上下文上这两个是**属性**（不是函数），本后端用它们算出「整个默认帧缓冲」的
+     * scissor 矩形与 viewport（见 `WebGL2RenderPassEncoder.beginDefaultFramebufferPass`）。
+     * 改前假 GL 没有这两个属性，于是那些调用收到的是 `undefined` —— 测试看到的是
+     * `scissor:0,0,undefined,undefined` 这种在真实环境里不可能出现的参数。
+     * 给一个具体的非零尺寸，才能让假 GL 上的断言与真实行为对得上。
+     */
+    drawingBufferWidth: 8,
+    drawingBufferHeight: 8,
 
     /* ---- 纹理 ---------------------------------------------------------------------------- */
     createTexture: () => {

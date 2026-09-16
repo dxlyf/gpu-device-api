@@ -441,6 +441,22 @@ export class WebGPUDevice implements Device {
     }
     this.errorCallbacks.clear();
     this.native.destroy();
+    /*
+     * `#16`：主动 dispose 也要让**同步可查询的丢失状态**与 `device.lost` 一致地落定
+     * （`WebGL2Device.dispose()` 一直是这样做的，WebGPU 侧改前缺了这一步）。
+     *
+     * 为什么重要：跨后端的恢复代码基本都是「先看 `device.disposed` / `lostInfo` 判断该不该
+     * 重建」，只有一侧填了信息时，同一段恢复逻辑在 WebGPU 上会看到 `lostInfo === null`
+     * 而误判成「设备还在、只是没资源」。
+     *
+     * 顺序上刻意**先 `native.destroy()` 再 resolve**：`destroy()` 会让原生实现自己 resolve
+     * `GPUDevice.lost`（reason `'destroyed'`），那条路径经 `handleDeviceLost()` 写入的信息更权威；
+     * 这里的赋值只用于「原生实现不 resolve」的情况，且用的是同一个「主动销毁」原因。
+     * 本层自己的 `lostInfoValue` 在 `_disposed` 之后不再被 `assertUsable()` 使用（它先判
+     * `_disposed`），所以这里填的是给调用方读的，不会改变抛出的错误类型。
+     */
+    this.lostInfoValue = { reason: 'destroyed', message: 'Device.dispose() was called.' };
+    this.resolveLost(this.lostInfoValue);
   }
 
   /* ---------------------------------------------------------------- 内部 */
@@ -470,12 +486,26 @@ export class WebGPUDevice implements Device {
    * 表现就是「画不出来但一切正常」；所以这里必须主动抛出带 `[gpu-device-api] ` 前缀的
    * {@link DeviceLostError}，并带上丢失原因。
    *
+   * ## `#16`：「已 dispose」抛的也是 `DeviceLostError`，两个后端一致
+   *
+   * 改前这里对 `_disposed` 抛的是 `ValidationError`，而 WebGL2 后端抛 `DeviceLostError`
+   * —— 同一段上层代码（例如「拿旧 device 的资源去创建东西」的错误恢复分支）在 WebGPU 上
+   * 只会看到 `ValidationError`，跨后端写 `instanceof DeviceLostError` 的恢复逻辑就会漏掉这一支。
+   *
+   * 「已 dispose」与「设备丢失」是两件事，但**归类**是同一类：设备已经不能再用、
+   * 调用方该做的是丢弃它并重建。所以这里也抛 `DeviceLostError`，用 `reason: 'destroyed'`
+   * 表示「是调用方主动释放的、属于预期情形」（`isExpected === true`），
+   * 而真正的丢失（`GPUDevice.lost` / `webglcontextlost`）仍然带它自己的 reason。
+   *
    * 公开（而不是 private）是因为 `WebGPUQueue` 的提交路径也要用它 —— 设备丢失后
    * `queue.submit()` 是唯一「静默无效」的提交入口，必须在那一层拦下。
    */
   assertUsable(operation: string): void {
     if (this._disposed) {
-      throw new ValidationError(`[gpu-device-api] Device.${operation}: device "${this.label}" has been disposed.`);
+      throw new DeviceLostError(
+        `[gpu-device-api] Device.${operation}: device "${this.label}" has been disposed.`,
+        { reason: 'destroyed' },
+      );
     }
     if (this.lostInfoValue) {
       throw new DeviceLostError(

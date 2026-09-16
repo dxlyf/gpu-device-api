@@ -210,7 +210,7 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
         const first = attachments[0]!;
         const width = first.view.texture.width;
         const height = first.view.texture.height;
-        this.clearRawAttachments(descriptor, framebuffer);
+        this.clearRawAttachments(descriptor, framebuffer, first.view);
         this.gl.viewport(0, 0, width, height);
         this.state.setViewport(0, 0, width, height);
       }
@@ -885,10 +885,21 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
    * 静默地画错（改前正是如此：附件挂在 0、清屏清 1、draw 的 location 0 又写进 view）。
    * `null` 空位**不清屏**：那个 location 没有片元输出，清它没有意义。
    */
-  private clearRawAttachments(descriptor: RenderPassDescriptor, framebuffer: WebGLFramebuffer): void {
+  private clearRawAttachments(
+    descriptor: RenderPassDescriptor,
+    framebuffer: WebGLFramebuffer,
+    view: { readonly texture: { readonly width: number; readonly height: number } },
+  ): void {
     const gl = this.gl;
     void framebuffer;
-    this.state.setScissor(false, 0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    /*
+     * `#14`：scissor 复位成「整个附件、关闭」。
+     *
+     * 尺寸用**第一个附件**的大小，而不是 `drawingBufferWidth/Height`：这条分支画进的
+     * 是按附件临时拼出来的 FBO，它的视口/清屏范围本来就由第一个附件决定（见构造器），
+     * 拿默认帧缓冲的尺寸去复位等于给「整个附件」填了一个别的数。
+     */
+    this.state.resetScissor(view.texture.width, view.texture.height);
 
     const attachments = descriptor.colorAttachments;
     attachments.forEach((attachment, index) => {

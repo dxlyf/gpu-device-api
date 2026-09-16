@@ -69,12 +69,57 @@
   | `MultisampleState.alphaToCoverageEnabled` | **实现** | GL 有 `SAMPLE_ALPHA_TO_COVERAGE`，下发 `enable`/`disable`；`sampleCount === 1` 时报错（与 WebGPU 的 `toGPUMultisampleState` 同形） |
   | layout 的 `texture.sampleType` | **实现** | `sampleTypeMatchesFormat` 早就写好了却无人调用；现在把它带进绑定计划槽位，供渲染通道在绑定时校验 |
 
+### 修复（两后端行为与校验的一致性对齐：同一份代码不该一边正常一边抛错）
+
+本批七项的共同点是**同一份上层代码在两个后端上表现不同**，或者**校验只有一侧有**。
+逐项都写明了选定的语义与理由（细节见 `docs/backend-limits.md` 第七节，
+回归测试见 `test/webgl2-consistency-06.test.ts`）。
+
+| 项 | 改前的差异 | 改后 |
+| --- | --- | --- |
+| `#12` 上一个 pass 还开着 | WebGPU 隐式结束；**WebGL2 抛错** | 两后端都**隐式结束**（对齐 WebGPU 原生语义） |
+| `#14` 全 `load` 的 pass | 上一个 pass 的 scissor 仍生效（缓存还声称已关） | 每个 pass 开始时 scissor 复位成「整个附件、关闭」 |
+| `#15` `clearBuffer` 的 4 对齐 / 范围 | 只有 WebGPU 校验，**WebGL2 静默接受** | 两后端同一批非法输入抛**同一个错**（消息逐字相同） |
+| `#15` `writeBuffer` 的元素对齐 | 只有 WebGPU 校验 | 同上（WebGL2 补齐；WebGPU 顺带补上范围校验） |
+| `#16` disposed 设备 | WebGPU 抛 `ValidationError`、WebGL2 抛 `DeviceLostError` | 两后端都抛 `DeviceLostError`（`reason: 'destroyed'`） |
+| `#17` `cube` / `cube-array` view | WebGL2 报的是误导性的「维度不一致」 | 单独识别，写明根因与替代方案 |
+| `#18` `maxTextureDimension1D` | WebGL2 报 2D 上限（2048），而创建 1D 纹理会抛错 | WebGL2 如实报 `0` |
+| `#19` `target` + 非空 `colorAttachments` | WebGL2 抛错、**WebGPU 静默忽略整个列表** | 两后端都抛错 |
+
+- **`#12` 提醒（有代价的对齐）**：对齐成隐式结束之后，**忘记 `pass.end()` 不会报错** ——
+  通道仍然会走完收尾（多重采样 resolve、时间查询 `endQuery`），所以「少了一次 resolve」
+  这类症状没有任何异常提示。要选「两边都抛错」也是可行的，代价是与 core 镜像的 WebGPU
+  语义不一致、会让 core 变成比原生更严格的另一个 API，本批选了「对齐 WebGPU」。
+- **`#14` 为什么也复位矩形（不只是关开关）**：`setScissor()` 只在开关打开时比较矩形，
+  `end()` 的 `invalidate()` 又会清掉矩形记录，所以只关不设会让「矩形已经变了」被漏掉，
+  某个 pass 里第一次 `setScissorRect` 可能跳过 `gl.scissor()` 继续用更早的矩形。
+- **`#16` 顺带对齐**：WebGPU 后端 `dispose()` 现在也会填 `lostInfo`
+  （`reason: 'destroyed'`）并 resolve `device.lost`，与 WebGL2 一致 ——
+  跨后端的恢复代码几乎都靠「先看 `disposed` / `lostInfo` 判断该不该重建」，
+  只有一侧填信息时，同一段逻辑在 WebGPU 上会把「已经释放」误判成「设备还在」。
+- **公开 API**：没有收窄。`RenderPassDescriptor.colorAttachments` **仍是必填字段**
+  （用 `target` 时写 `[]`）。评估过把它改成可选，那属于公开 API 放宽，
+  本批没做 —— 保持「有没有附件」这件事只有一种表达方式。
+- **`limits` 的一处**：`maxTextureDimension1D` 从 2048 变成 `0` 是**有意的可观察变化**，
+  含义与 WebGL2 上那些 `0` 值的 storage / compute limit 相同：「本后端没有该能力」。
+- **本批验证状态**：`tsc --noEmit` 0 错误；`vitest run` **40 文件 / 613 用例全过**
+  （本批新增 `test/webgl2-consistency-06.test.ts` 共 22 条用例，基线 39 文件 / 591 → 40 / 613）；
+  五条锁定像素基线两后端**逐字命中**（见下）。改前证据是单独一次提交
+  （`git log` 里的「先落复现证据」），那一版里有 9 条复现用例通过、11 条目标契约用例失败。
+  - ⚠️ **没有验证的点**：`#12` 的隐式结束在 WebGPU 侧只是「不抛错 + 原生 `beginRenderPass()`
+    被调用了几次」（`WebGPURenderPassEncoder.end()` 是否真的被调到无法在 mock 上独立观测，
+    因为 `closeOpenPass()` 与原生 pass 的 `end()` 之间没有可注入的缝）；`#14` 的 scissor 复位
+    断言的是**下发的 GL 状态**，没有做「像素级：第二个 pass 的可见区域是整个附件」的截图验证；
+    `#17` 的 cube view 结论基于 GLES 3.0 的纹理目标模型与本后端的实现方式，
+    没有在真实驱动上尝试「用 `TEXTURE_2D_ARRAY` 当 `samplerCube`」这种不合法组合去反证。
+
 ### 验证状态（如实标注）
 
 - 判别依据：node 侧假 GL 的**逐字节**断言（假 GL 按 GL 的契约自己检查输入：数据够不够、
   format/type 组合合法不合法），加上只读原生探针（无头 Chrome + SwiftShader，不改任何库代码）。
 - 五条锁定像素基线两后端**逐字命中**（见下），另有 `rtt-orientation`(core) 与 `stencil` 两后端通过。
 - `tsc --noEmit` 0 错误；`vitest run` **36 文件 / 557 用例全过**（本批新增 2 个测试文件、42 条用例）。
+  （这是**本批合入当时**的数字；后续批次继续增长，见下面「一致性对齐」那一节的标注。）
 - ⚠️ **没有验证的点**：深度读回「WebGL2 上完全不可行」这一结论只在本机 ANGLE/SwiftShader 上实测过
   （规范层面吻合，但未在硬件驱动上复核）；`alphaToCoverageEnabled` 只做了调用级验证
   （断言 `enable`/`disable` 真的下发），**没有像素级验证**（没有跑抗锯齿前后对比截图）。

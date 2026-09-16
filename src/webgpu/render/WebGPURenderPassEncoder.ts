@@ -67,6 +67,22 @@ export function toGPURenderPassDescriptor(
         `[gpu-device-api] ${label}: descriptor.target must be a WebGPURenderTarget created by a WebGPU device.`,
       );
     }
+    /*
+     * `#19`：`target` 与**非空** `colorAttachments` 同时出现时明确报错（与 WebGL2 侧一致）。
+     *
+     * 改前这里把整个 colorAttachments 静默丢掉、只用 target 生成附件列表：调用方以为自己设的
+     * 附件生效了（例如「用 target 定尺寸、用 colorAttachments 换一张 view」这种写法），
+     * 实际画进的是 target 自己的附件 —— 画面不对，却一行错误都没有。
+     * 空的 `[]` 不算「同时给两套附件」（`RenderPassDescriptor.colorAttachments` 是必填字段，
+     * 用 `target` 时写 `[]` 是正常写法），所以只拦非空列表。
+     */
+    if (descriptor.colorAttachments.length > 0) {
+      throw new ValidationError(
+        `[gpu-device-api] ${label}: descriptor.target and a non-empty descriptor.colorAttachments were ` +
+          'both given. Keep only one of them: use target to say "render into this render target", or ' +
+          'use colorAttachments to name the attachments explicitly (pass an empty array alongside target).',
+      );
+    }
     const built = descriptor.target.createPassDescriptor({
       clearValue: descriptor.clearValue,
       depthClearValue: descriptor.depthClearValue,

@@ -46,9 +46,18 @@ export interface BufferCopyView {
 
 export interface CommandEncoder {
   readonly label: string;
-  /** 开始一个 render pass。同一时间只能有一个 pass 处于打开状态。 */
+  /**
+   * 开始一个 render pass。同一时间只能有一个 pass 处于打开状态。
+   *
+   * **上一个 pass 还开着时会被隐式结束**（`#12`）：这与 WebGPU 原生的
+   * `GPUCommandEncoder.beginRenderPass()` 一致，两个后端行为相同。
+   *
+   * ⚠️ 注意这条契约的代价：**忘记调用 `pass.end()` 不会报错**。被隐式结束的通道仍然会走完
+   * `end()` 的全部收尾（多重采样 resolve、时间查询 end、状态作废），所以「少了一次 resolve」
+   * 这类症状不会有任何异常提示。写代码时请显式 `end()`。
+   */
   beginRenderPass(descriptor: import('./RenderPassEncoder.js').RenderPassDescriptor): import('./RenderPassEncoder.js').RenderPassEncoder;
-  /** 开始一个 compute pass（仅 WebGPU；WebGL2 后端会抛错）。 */
+  /** 开始一个 compute pass（仅 WebGPU；WebGL2 后端会抛错）。上一个 pass 还开着时同样隐式结束。 */
   beginComputePass(descriptor?: import('./ComputePassEncoder.js').ComputePassDescriptor): import('./ComputePassEncoder.js').ComputePassEncoder;
 
   copyBufferToBuffer(
@@ -108,6 +117,7 @@ export interface CommandEncoder {
   /**
    * 结束录制，返回可提交的 command buffer。**这是编码器的终点**：
    *
+   * - 还有 pass 开着时会**隐式结束**它（与 {@link beginRenderPass} 同一条 `#12` 契约）；
    * - 之后调用本对象的任何其它方法都会抛 `ValidationError`（`finish()` 自身也是）；
    * - 后端在这时就可以把它从设备资源追踪集合里摘掉（WebGPU 后端正是这么做的，
    *   否则「每帧 create + finish」会让追踪集合无上限增长）；

@@ -42,6 +42,38 @@ export class WebGL2TextureView implements TextureView {
           `「${resolved.format}」纹理后再采样。`,
       );
     }
+    /*
+     * `#17`：`cube` / `cube-array` 单独拦下，给一条**说得清根因**的错误。
+     *
+     * 改前这两种维度会掉到下面那条「维度与纹理不一致」的通用校验里（`expectedViewDimension()`
+     * 永远返回 `'2d'` / `'2d-array'` / `'3d'`），于是消息是：
+     *
+     * > texture view 的 dimension「cube」与纹理「...」的「2d-array」不一致；
+     * > WebGL2 没有 view 对象，维度的差别无法表达
+     *
+     * 这条消息把「WebGL2 根本没有立方体贴图采样」说成了「你把纹理的维度配错了」，
+     * 调用方会去改纹理的 `depthOrArrayLayers` / `dimension`（怎么改都还是错），
+     * 而不是换方案 —— 对一个「做不到」的能力来说，指错方向比不报错更难查。
+     *
+     * 为什么确实做不到：WebGL2（GLES 3.0）的立方体贴图是**独立的纹理目标**
+     * `TEXTURE_CUBE_MAP`，它有自己的 `texStorage2D` 分配与「6 个面各一个偏移」的寻址方式；
+     * 本后端的纹理是按 `TEXTURE_2D` / `TEXTURE_2D_ARRAY` / `TEXTURE_3D` 分配的（见
+     * `glTextureTarget()`），`GL_TEXTURE_2D_ARRAY` 在着色器里只能被 `sampler2DArray` 采样，
+     * 没有任何方式把它当成 `samplerCube` 用。而且 core 的 `TextureDescriptor` 里也没有
+     * 「立方体贴图」这个维度（只有 `1d` / `2d` / `3d`），所以连「创建一张 cube 纹理再建 cube view」
+     * 这条路都不存在。
+     */
+    if (resolved.dimension === 'cube' || resolved.dimension === 'cube-array') {
+      throw new ValidationError(
+        `[gpu-device-api] texture view「${descriptor.label ?? '(unnamed)'}」要求 dimension` +
+          `「${resolved.dimension}」，但 WebGL2 后端不支持立方体贴图采样：GLES 3.0 的立方体贴图是` +
+          '独立的 TEXTURE_CUBE_MAP 纹理目标，而本后端的纹理按 TEXTURE_2D / TEXTURE_2D_ARRAY / ' +
+          'TEXTURE_3D 分配（本后端的 TextureDescriptor 也没有 cube 维度），两者无法互相重解释。' +
+          '替代方案：用 2D array 纹理（`size.depthOrArrayLayers = 6`）承载 6 个面，在着色器里用' +
+          '`sampler2DArray` 手动按面选层（例如按主法线轴算层号），需要方向采样时自己做一次' +
+          '坐标到「层 + uv」的换算；或者切到 WebGPU 后端（它有真正的 `cube` / `cube-array` view）。',
+      );
+    }
     if (resolved.dimension !== expectedViewDimension(texture)) {
       throw new ValidationError(
         `[gpu-device-api] texture view 的 dimension「${resolved.dimension}」与纹理` +

@@ -15,9 +15,16 @@ import type { BufferLike } from './CommandEncoder.js';
 
 export interface RenderPassDescriptor {
   label?: string;
+  /**
+   * 附件列表（`null` 表示该 location 的片元输出被丢弃）。
+   *
+   * **给了 `target` 时必须为空数组**：两个后端都会对「`target` + 非空 `colorAttachments`」
+   * 抛出 `ValidationError`（`#19`）。这个字段本身仍是必填的，用 `target` 时写 `[]` ——
+   * 这样「有没有附件」这件事在两个后端只有一种表达方式，不会出现「一边静默忽略、一边报错」。
+   */
   colorAttachments: readonly (ColorAttachment | null)[];
   depthStencilAttachment?: DepthStencilAttachment | null;
-  /** 便捷方式：直接由一个 render target 生成两份 attachment 列表。 */
+  /** 便捷方式：直接由一个 render target 生成两份 attachment 列表。与上面的 `[]` 搭配使用。 */
   target?: RenderTarget;
   occlusionQuerySet?: QuerySet;
   /**

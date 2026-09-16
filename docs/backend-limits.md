@@ -284,4 +284,84 @@ GL 自己会把掩码与 `2^s - 1` 相与，所以传 `0xffffffff` 与传 `0xff`
 （两个面各自独立、引用值单值、掩码单值）。仍然只能表达不了的只有深度侧的
 `depthBiasClamp`（见 `glStateCache.setDepthTest()` 的注释）。
 
+## 七、两后端行为对齐的四条契约（0.4.0 起）
+
+这一节记录**同一份代码在两个后端上表现必须相同**的四件事。它们在 0.4.0 之前都**不一致**，
+而且不一致的方向都是「一边静默、一边报错」或者「两边都静默」—— 属于最难排查的那一类。
+每一条都写明选定的语义与理由（回归测试见 `test/webgl2-consistency-06.test.ts`）。
+
+### 1. 上一个 pass 还开着时，`beginRenderPass` / `finish()` **隐式结束**它（`#12`）
+
+两个后端与 WebGPU 原生语义一致：开始新通道、或 `finish()` 时，前一个没 `end()` 的通道会被
+**隐式结束**（走完 `end()` 的全部收尾：多重采样 resolve、时间查询 `endQuery`、状态作废）。
+
+> 改前：WebGPU 后端隐式结束（与原生一致），WebGL2 后端抛 `ValidationError`
+> —— 同一份上层代码一边正常一边抛错。
+
+**为什么不对齐成「两边都抛错」**：core 层的定位是**显式镜像 WebGPU 形状**
+（见 `core/Device.ts`），而「同时只能有一个打开的 pass」这条约束在 WebGPU 里的执行方式
+就是「开始新 pass 时隐式结束旧的」。让 WebGL2 比它镜像的对象更严格，等于把 core 变成另一个 API。
+
+⚠️ **这条契约有隐藏 bug 的风险，必须知道**：**忘记 `pass.end()` 不会报错**。
+被隐式结束的通道会照常收尾，所以「少了一次 resolve / 少了一次时间查询」这类症状
+不会有任何异常提示。写代码时请显式 `end()`，并用 `WebGL2CommandBuffer.passCount` /
+`WebGPUCommandBuffer` 对应的统计对账。
+
+### 2. 每个 pass 开始时 scissor 都复位成「整个附件、关闭」（`#14`）
+
+WebGPU 的 `GPURenderPassEncoder` 在每个 pass 开始时把 scissor 重置为整个附件；
+WebGL2 的 `SCISSOR_TEST` 与矩形都是**上下文状态**、会跨 pass 保留，所以本层在每个 pass
+开始时显式复位（`GlStateCache.resetScissor()`，三条目标路径 + 默认帧缓冲 / 原始附件路径都会调）。
+
+**为什么选「关闭」而不是「开着 + 整个附件」**：两者对画面的效果相同（整个附件的裁剪框
+裁不掉任何像素），但「关闭」与本后端其余路径的默认状态一致，也不会让一条从未用过 scissor
+的管线白白走上裁剪路径。**矩形同样被复位**这一点是必需的（不只是关开关）：`setScissor()`
+只在开关打开时比较矩形，只关不设会让「矩形已经变了」被漏掉，某个 pass 里第一次
+`setScissorRect` 就可能跳过 `gl.scissor()`、继续用更早的矩形。
+
+> 改前：复位只在「要清屏」的分支里做，于是「上一个 pass 设过 `setScissorRect` →
+> 本 pass 颜色与深度**都是** `load`」这条缝里，上一个 pass 的矩形继续生效，而
+> `end()` 的 `invalidate()` 让状态缓存**声称** scissor 是关的（缓存与驱动不一致）。
+
+### 3. `target` 与**非空** `colorAttachments` 不能同时给（`#19`）
+
+两个后端都抛 `ValidationError`。用 `target` 时 `colorAttachments` 写 `[]`（该字段仍是必填的）。
+
+> 改前：WebGL2 抛错、**WebGPU 静默忽略整个列表**只用 target 的附件 ——
+> 调用方以为自己设的附件生效了（例如「用 target 定尺寸、用 colorAttachments 换 view」），
+> 实际画进了 target 自己的附件，没有任何提示。
+
+（顺带评估过把 `colorAttachments` 改成可选：那是公开 API 的放宽，会让
+`{ target, colorAttachments: [] }` 这种写法失去唯一的规范形式，本批**没做**。）
+
+### 4. `limits.maxTextureDimension1D` 在 WebGL2 上如实为 `0`（`#18`）
+
+WebGL2（GLES 3.0）**没有** 1D 纹理，所以该 limit 报 `0`，含义与 WebGPU 专有的那些
+storage / compute limit 在 WebGL2 上报 `0` 一致：**这个后端没有该能力**。
+
+> 改前：报的是 `MAX_TEXTURE_SIZE`（本机实测 2048，即 2D 上限），而 `createTexture({
+> dimension: '1d' })` 明确抛错 —— 「读 limits 判断能力」与「真的创建」这两个来源互相矛盾，
+> 调用方会据此做出「支持 1D」的错误决策，直到创建那一刻才吃到异常。
+
+**为什么不用「`height = 1` 的 2D 纹理模拟」来撑起这个数字**：数据确实装得下，但
+`sampler2D` 与 `sampler1D` 是两个不同的着色器类型，本层没有「把 2D 纹理按 1D 采样」的表达方式。
+请改用 `{ width: n, height: 1 }` 的 2D 纹理，或切到 WebGPU。
+
+### 附：立方体贴图（`cube` / `cube-array` view）在 WebGL2 上明确不可用（`#17`）
+
+`texture.createView({ dimension: 'cube' | 'cube-array' })` 在 WebGL2 后端抛
+`ValidationError`，消息里写明根因与替代方案。
+
+根因：GLES 3.0 的立方体贴图是**独立的纹理目标** `TEXTURE_CUBE_MAP`，有自己的分配方式与
+「6 个面各一个偏移」的寻址；本后端的纹理按 `TEXTURE_2D` / `TEXTURE_2D_ARRAY` / `TEXTURE_3D`
+分配，`sampler2DArray` 无法当 `samplerCube` 用。而且 core 的 `TextureDescriptor` 里也没有
+cube 维度，所以「建一张 cube 纹理再建 cube view」这条退路同样不存在。
+
+替代方案：用 2D array 纹理（`size.depthOrArrayLayers = 6`）承载 6 个面，在着色器里用
+`sampler2DArray` 手动按面选层；或者切到 WebGPU（它有真正的 `cube` / `cube-array` view）。
+
+> 改前：这两种维度会掉进 `WebGL2TextureView` 那条通用的「维度与纹理不一致」校验，
+> 消息说的是「你把纹理的维度配错了」，**根因没被说出来** —— 调用方会去改纹理的
+> `depthOrArrayLayers` / `dimension`（怎么改都还是错），而不是换方案。
+
 

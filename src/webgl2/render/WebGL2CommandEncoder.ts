@@ -14,6 +14,7 @@
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
+import { assertNonNegativeInteger } from '../../utils/assert.js';
 import { nextId } from '../../utils/id.js';
 import { glFormat } from '../utils/glFormatMap.js';
 import {
@@ -86,14 +87,30 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     this.drawCalls += 1;
   }
 
+  /**
+   * 开始一个 render pass。
+   *
+   * ## `#12`：上一个 pass 还开着时**隐式结束**它（对齐 WebGPU 原生语义）
+   *
+   * 改前这里抛 `ValidationError`，而 WebGPU 后端（以及原生 `GPUCommandEncoder.beginRenderPass()`）
+   * 是**隐式结束**上一个 pass。于是「忘了 `pass.end()`」的调用方在 WebGPU 上正常出图、
+   * 在 WebGL2 上直接抛错 —— 同一份上层代码一边正常一边崩，这是本批要消掉的那类不一致。
+   *
+   * 选「对齐 WebGPU」而不是「两边都抛错」的理由：
+   * core 层的定位是**显式镜像 WebGPU 形状**（见 `core/Device.ts` 与 `core/render/CommandEncoder.ts`），
+   * 而 WebGPU 规范里「一个 encoder 同时只能有一个打开的 pass」这条约束的**执行方式**就是
+   * 「开始新 pass 时隐式结束旧的」，不是在 `end()` 之外再加一个人造错误；
+   * 让 WebGL2 严格到比它镜像的对象更严，等于把 core 变成另一个 API。
+   *
+   * ⚠️ **这有隐藏 bug 的风险**：忘记 `pass.end()` **不会报错**，那个通道的收尾动作
+   * （多重采样 resolve、时间查询 end、状态作废）只会因为这里调用了 `end()` 才发生。
+   * 换句话说，写错了以后表现是「少了一次 resolve / 少了一次查询收尾」，而不是一条异常。
+   * 这是 WebGPU 原生语义本身的代价，不是本后端的额外缺陷；要自查可以对着
+   * `WebGL2CommandBuffer.passCount` 与预期通道数对账。
+   */
   beginRenderPass(descriptor: Parameters<CommandEncoder['beginRenderPass']>[0]): WebGL2RenderPassEncoder {
     this.assertOpen('beginRenderPass');
-    if (this.openPass && !this.openPass.ended) {
-      throw new ValidationError(
-        `[gpu-device-api] encoder「${this.label}」里已经有打开的渲染通道了。` +
-          'WebGPU 也只允许同时打开一个通道，请先 end() 再开始下一个。',
-      );
-    }
+    this.closeOpenPass();
     const pass = new WebGL2RenderPassEncoder(descriptor, this.passOptions);
     this.openPass = pass;
     this.passCount += 1;
@@ -102,6 +119,8 @@ export class WebGL2CommandEncoder implements CommandEncoder {
 
   beginComputePass(): WebGL2ComputePassEncoder {
     this.assertOpen('beginComputePass');
+    // WebGL2 没有 compute pass（构造器会抛错），但隐式结束上一个 pass 的语义先对齐（`#12`）。
+    this.closeOpenPass();
     return new WebGL2ComputePassEncoder();
   }
 
@@ -470,16 +489,54 @@ export class WebGL2CommandEncoder implements CommandEncoder {
     this.state.invalidate();
   }
 
+  /**
+   * 将 buffer 的一段范围清零。
+   *
+   * ## `#15`：校验与 WebGPU 逐条对齐（改前 WebGL2 完全没有）
+   *
+   * 改前这里直接把 `(offset, length)` 传给 `bufferSubData`：`offset` 随意、`length` 为 0 或负数
+   * 时连一次调用都不发（静默），超范围时驱动记一条 `INVALID_VALUE` 而本后端默认不查 GL 错误。
+   * 于是**同一段代码在 WebGL2 上「成功」、在 WebGPU 上抛错**，而且在 WebGL2 上留下的还是
+   * 未定义结果。现在按 `WebGPUCommandEncoder.clearBuffer` 的**同一顺序**做同一组检查
+   * （消息逐字相同），两个后端对同一批非法输入给出同一个 `ValidationError`。
+   *
+   * 放行的一侧也一并核对过：WebGPU 允许「`size` 省略时清到末尾」并要求结果仍满足 4 对齐，
+   * 而 `WebGL2Buffer` 的大小本身就是 4 的倍数（见它的构造校验），所以省略 `size` 的
+   * 合法用法不会被误杀。
+   */
   clearBuffer(buffer: { readonly size: number }, offset = 0, size?: number): void {
     this.assertOpen('clearBuffer');
+    assertNonNegativeInteger(offset, `${this.label}.clearBuffer offset`);
+    const resolvedSize = size ?? buffer.size - offset;
+    if (offset % 4 !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] ${this.label}.clearBuffer: offset must be a multiple of 4, got ${offset}.`,
+      );
+    }
+    if (resolvedSize <= 0) {
+      throw new ValidationError(
+        `[gpu-device-api] ${this.label}.clearBuffer: size must be positive, got ${resolvedSize}.`,
+      );
+    }
+    if (resolvedSize % 4 !== 0) {
+      throw new ValidationError(
+        `[gpu-device-api] ${this.label}.clearBuffer: size must be a multiple of 4, got ${resolvedSize}.`,
+      );
+    }
+    if (offset + resolvedSize > buffer.size) {
+      throw new ValidationError(
+        `[gpu-device-api] ${this.label}.clearBuffer: range [${offset}, ${offset + resolvedSize}) exceeds the ` +
+          `buffer size ${buffer.size}.`,
+      );
+    }
     const target = buffer as WebGL2Buffer;
-    const length = size ?? (buffer.size - offset);
     // 走 buffer 自己的目标：索引缓冲只能是 ELEMENT_ARRAY_BUFFER（见 WebGL2Buffer）。
     // 零数据来自**共享的分块暂存**：小清零（≤ 4KB，绝大多数用法）连分配都省掉，
-    // 大清零按块复用同一块内存，不再一次分配 `length` 字节。
-    for (const chunk of zeroChunks(length)) {
-      target.upload(offset, chunk);
-      offset += chunk.length;
+    // 大清零按块复用同一块内存，不再一次分配 `size` 字节。
+    let cursor = offset;
+    for (const chunk of zeroChunks(resolvedSize)) {
+      target.upload(cursor, chunk);
+      cursor += chunk.length;
     }
   }
 
@@ -541,15 +598,13 @@ export class WebGL2CommandEncoder implements CommandEncoder {
    * 不需要（也没有）从设备追踪集合里摘自己：本类从不被登记（见类注释），
    * 与 WebGPU 后端在 `finish()` 里 `untrack()` 的处理对应的是同一个生命周期终点 ——
    * finish 之后本对象的其它方法都会经 `assertOpen()` 抛错。
+   *
+   * `#12`：还有 pass 开着时**隐式结束**它（与 WebGPU 后端、以及原生
+   * `GPUCommandEncoder.finish()` 一致），不再抛错。理由与风险见 {@link beginRenderPass}。
    */
   finish(): WebGL2CommandBuffer {
     this.assertOpen('finish');
-    if (this.openPass && !this.openPass.ended) {
-      // 与 WebGPU 一致：通道没结束就 finish 是错误用法。
-      throw new ValidationError(
-        `[gpu-device-api] encoder「${this.label}」还有未结束的渲染通道，请先调用 pass.end()。`,
-      );
-    }
+    this.closeOpenPass();
     this.finished = true;
     return {
       label: `${this.label}:commandBuffer`,
@@ -569,6 +624,18 @@ export class WebGL2CommandEncoder implements CommandEncoder {
         `[gpu-device-api] encoder「${this.label}」已经 finish()，不能再调用 ${operation}()。`,
       );
     }
+  }
+
+  /**
+   * 隐式结束当前打开的渲染通道（`#12`，与 WebGPU 后端的 `closeOpenPass()` 同形）。
+   *
+   * 幂等：没有打开的通道、或它已经 `end()` 过，都是空操作。
+   */
+  private closeOpenPass(): void {
+    if (this.openPass && !this.openPass.ended) {
+      this.openPass.end();
+    }
+    this.openPass = null;
   }
 
   /** 取（必要时分配）零拷贝上传路径的兜底暂存区。 */

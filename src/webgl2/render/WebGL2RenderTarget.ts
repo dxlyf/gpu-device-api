@@ -374,8 +374,20 @@ export class WebGL2RenderTarget implements RenderTarget {
    *
    * 多重采样时绑定的是 draw FBO（renderbuffer 附件），内容要等到 {@link resolve} 才进纹理。
    *
-   * 清屏时临时关闭 `SCISSOR_TEST`：GL 的 `clearBuffer*` 会受裁剪框影响，
-   * 而这里的语义应该是「清整个附件」。
+   * ## `#14`：每个 pass 开始时 scissor 都必须是「整个附件、关闭」的已知状态
+   *
+   * 改前这一句 `setScissor(false, ...)` 只在 `needsClear` 分支里下发。于是「上一个 pass 设过
+   * `setScissorRect` → 本 pass 的颜色与深度**都是** `load`」这条缝里，`SCISSOR_TEST` 会保持
+   * 上一个 pass 留下的「开着 + 旧矩形」状态：
+   *
+   * - `WebGL2RenderPassEncoder.end()` 会 `state.invalidate()`，缓存因此**声称** scissor 是关的，
+   *   而 GL 里其实是开的 —— 缓存与驱动不一致；
+   * - 后果是后续所有绘制被静默裁进上一个 pass 的矩形里（WebGPU 的行为是每个 pass 重置成整个附件）。
+   *
+   * 所以现在**无条件**下发（清屏与不清屏两条路都走），不再依赖别的分支的副作用。
+   * 关闭 `SCISSOR_TEST` 之后再把它设成整个附件：`GlStateCache` 的去重键只记「关」这一位，
+   * 不重设矩形的话，某个 pass 里第一次 `setScissorRect` 可能因为「缓存说矩形没变」而漏掉
+   * `gl.scissor()`，于是拿着更早那个 pass 的矩形去裁剪。
    *
    * 完整性（`checkFramebufferStatus`）不在这里查：附件只在构造与 resize() 时变，
    * 所以 attach 阶段已经查过了。原来每个渲染通道都做一次同步查询是白付的。
@@ -384,10 +396,10 @@ export class WebGL2RenderTarget implements RenderTarget {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.drawFramebuffer);
     this.needsResolve = this.sampleCount > 1;
+    this.resetScissor();
 
     const needsClear = clear.loadOp !== 'load' || (this.depthTexture !== null && clear.depthLoadOp !== 'load');
     if (needsClear) {
-      this.state.setScissor(false, 0, 0, this._width, this._height);
       if (clear.loadOp !== 'load') {
         const [r, g, b, a] = resolveClearColor(clear.clearColor);
         // 复用共享暂存数组（`clearBufferfv` 立刻拷贝，多附件因此可以共用同一块）。
@@ -413,6 +425,16 @@ export class WebGL2RenderTarget implements RenderTarget {
 
     gl.viewport(0, 0, this._width, this._height);
     this.state.setViewport(0, 0, this._width, this._height);
+  }
+
+  /**
+   * 把 scissor 状态复位成「关掉 + 整个附件」（`#14`）。
+   *
+   * 实现在 `GlStateCache.resetScissor()` 里（那里还能把「已经复位」的情况免掉 GL 调用），
+   * 这里只是把本目标的尺寸传过去。
+   */
+  private resetScissor(): void {
+    this.state.resetScissor(this._width, this._height);
   }
 
   /**

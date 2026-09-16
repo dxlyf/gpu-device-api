@@ -56,14 +56,26 @@ export class WebGPUQueue implements Queue {
     dataOffset = 0,
     size?: number,
   ): void {
-    // 设备丢失后原生 queue 的调用会被静默丢弃，这里必须主动报错（见 WebGPUDevice.assertUsable）。
+    // Device 丢失后原生 queue 的调用会被静默丢弃，这里必须主动报错（见 WebGPUDevice.assertUsable）。
     this.device.assertUsable('Queue.writeBuffer');
+    /*
+     * 范围校验（`#15`）：越界只有 WebGL2 侧报过错，WebGPU 侧改前是交给原生实现去报
+     * （那要等到 `finish()` / 提交才看得到，而且消息不带本库的上下文与 buffer label）。
+     * 两个后端都对同一批非法输入给出同一个 `ValidationError` 才是最省事的一致性，
+     * 所以这一条提到这里显式做，并保持与 `WebGL2Queue.writeBuffer` 相同的判据与文本。
+     */
+    const byteSize = size ?? data.byteLength - dataOffset;
+    if (bufferOffset < 0 || byteSize < 0 || bufferOffset + byteSize > buffer.size) {
+      throw new ValidationError(
+        `[gpu-device-api] writeBuffer 越界：写入范围 [${bufferOffset}, ${bufferOffset + byteSize}) ` +
+          `超出了 buffer「${buffer.label}」的 ${buffer.size} 字节。`,
+      );
+    }
     // DataView 没有「元素」概念，按字节计；TypedArray 用它的 BYTES_PER_ELEMENT。
     const bytesPerElement =
       data instanceof DataView
         ? 1
         : ((data as unknown as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT ?? 1);
-    const byteSize = size ?? data.byteLength - dataOffset;
     if (dataOffset % bytesPerElement !== 0 || byteSize % bytesPerElement !== 0) {
       throw new ValidationError(
         `[gpu-device-api] Queue.writeBuffer: dataOffset (${dataOffset}) and size (${byteSize}) are measured in ` +
