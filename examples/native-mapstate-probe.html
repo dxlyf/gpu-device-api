@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>原生 WebGPU GPUBuffer.mapState / mappedAtCreation 探针（批 03 #24）</title>
+    <style>
+      body { font: 13px/1.6 monospace; background: #111; color: #eee; margin: 16px; }
+      #out { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>原生的 mapState / mappedAtCreation 到底是什么语义</h1>
+    <p>
+      这个探针**不导入本库**：它只读原生 <code>GPUBuffer</code> 的 <code>mapState</code> 与
+      <code>mappedAtCreation</code>，用来核对批 03（#24）在 WebGPU 后端上的三态实现假设。
+      用法（WebGPU 需要 <code>--enable-unsafe-webgpu</code>）：
+    </p>
+    <pre>node scripts/verify-headless.mjs --chrome "&lt;chrome&gt;" \
+  --url "http://localhost:&lt;port&gt;/examples/native-mapstate-probe.html" \
+  --wait probeResult -- --enable-unsafe-webgpu</pre>
+    <p>
+      本机实测（无头 Chrome + swiftshader，批 03 记录）：<br />
+      <code>stateAfterCreate=unmapped</code>、<code>statePending=pending</code>、
+      <code>pendingRangeError=threw</code>（DOMException）、<code>stateMapped=mapped</code>、
+      <code>mapAsyncResolves=undefined</code>、<code>rangeAfterAwait=ArrayBuffer</code>、
+      <code>doubleMapError=DOMException</code>、<code>stateAfterUnmap=unmapped</code>、
+      <code>detachedByteLength=undefined</code>（detach 后读长度抛错）、
+      <code>stateAfterDestroy=unmapped</code>、<code>macStateAfterCreate=mapped</code>、
+      <code>macRangeKind=ArrayBuffer</code>、<code>macOverlapError=DOMException</code>、
+      <code>macDestroyWhileMapped=no-error</code>、<code>destroyedMapAsync=DOMException</code>。
+    </p>
+    <pre id="out"></pre>
+    <script type="module">
+      const out = document.getElementById('out');
+      const lines = [];
+      const log = (message) => {
+        lines.push(message);
+        out.textContent = lines.join('\n');
+      };
+      // ⚠️ 结论必须写在 **documentElement** 的 dataset 上：scripts/verify-headless.mjs 读的是
+      // `document.documentElement.dataset[<wait>]`，写在 body 上它会一直等不到（踩过一次）。
+      const set = (key, value) => {
+        document.documentElement.dataset[key] = String(value);
+      };
+
+      /** 收尾：把结论写到 data-* 上，供 verify-headless.mjs 抓取。 */
+      function finish(result) {
+        set('probeResult', result);
+        log(`probeResult=${result}`);
+      }
+
+      /**
+       * 给一个 Promise 加超时：headless swiftshader 下 `requestAdapter()` 有可能一直不 settle，
+       * 那样抓取端只能看到一个「超时」，什么诊断都拿不到。加上超时才能如实报「拿不到设备」。
+       */
+      function withTimeout(promise, ms, what) {
+        return Promise.race([
+          promise,
+          new Promise((_resolve, reject) => setTimeout(() => reject(new Error(`${what} 在 ${ms}ms 内没有 settle`)), ms)),
+        ]);
+      }
+
+      try {
+        if (!navigator.gpu) throw new Error('navigator.gpu 不存在（需要 --enable-unsafe-webgpu）');
+        const adapter = await withTimeout(navigator.gpu.requestAdapter(), 20000, 'requestAdapter()');
+        if (!adapter) throw new Error('requestAdapter() 返回 null');
+        const device = await withTimeout(adapter.requestDevice(), 20000, 'requestDevice()');
+        log(`设备就绪：adapter.info = ${JSON.stringify(adapter.info ?? {})}`);
+
+        const usage = GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC;
+
+        /* ---------- 1. 普通创建：mapState 的三态推移 ---------- */
+        const plain = device.createBuffer({ label: 'plain', size: 16, usage });
+        log(`1a 创建后 mapState = ${plain.mapState}`);
+        set('stateAfterCreate', plain.mapState);
+
+        // 故意不 await：先读一次，看原生在 Promise settle 之前报什么。
+        const pending = plain.mapAsync(GPUMapMode.WRITE);
+        log(`1b 刚调用 mapAsync 后（未 await）mapState = ${plain.mapState}`);
+        set('statePending', plain.mapState);
+
+        // pending 期间取范围应该报错（原生 OperationError）。
+        let pendingRangeError = 'no-error';
+        try {
+          plain.getMappedRange();
+        } catch (error) {
+          pendingRangeError = error.constructor.name + ': ' + String(error.message).slice(0, 80);
+        }
+        log(`1c pending 期间 getMappedRange -> ${pendingRangeError}`);
+        set('pendingRangeError', pendingRangeError === 'no-error' ? 'none' : 'threw');
+
+        const whole = await Promise.resolve(pending).catch(() => undefined);
+        log(
+          `1d await 之后 mapState = ${plain.mapState}，mapAsync resolve 的值 = ` +
+            (whole === undefined ? 'undefined' : (whole?.constructor?.name ?? String(whole))),
+        );
+        set('stateMapped', plain.mapState);
+        set('mapAsyncResolves', whole === undefined ? 'undefined' : (whole?.constructor?.name ?? 'other'));
+
+        // await 之后再取范围（这才是本库 getMappedRange() 的路径）。
+        const afterAwaitRange = plain.getMappedRange(0, 16);
+        log(`1d2 await 后 getMappedRange(0,16) -> ${afterAwaitRange?.constructor?.name}，byteLength=${afterAwaitRange?.byteLength}`);
+        set('rangeAfterAwait', afterAwaitRange === undefined ? 'undefined' : (afterAwaitRange?.constructor?.name ?? 'other'));
+
+        // 已映射时再 mapAsync 应该被拒。
+        let doubleMap = 'no-error';
+        try {
+          await plain.mapAsync(GPUMapMode.WRITE);
+        } catch (error) {
+          doubleMap = error.constructor.name;
+        }
+        log(`1e 已映射时再 mapAsync -> ${doubleMap}`);
+        set('doubleMapError', doubleMap);
+
+        plain.unmap();
+        log(`1f unmap() 之后 mapState = ${plain.mapState}`);
+        set('stateAfterUnmap', plain.mapState);
+
+        // unmap 之后写入被静默忽略、长度归零（本库的 detached 语义就靠这个）。
+        log(`1g unmap 之后整段 byteLength = ${whole?.byteLength}`);
+        set('detachedByteLength', whole?.byteLength ?? 'undefined');
+
+        plain.destroy();
+        log(`1h destroy() 之后 mapState = ${plain.mapState}`);
+        set('stateAfterDestroy', plain.mapState);
+
+        /* ---------- 2. mappedAtCreation ---------- */
+        // 注意：usage 里**没有** MAP_WRITE 也必须合法（规范明确允许）。
+        const mac = device.createBuffer({
+          label: 'mac',
+          size: 16,
+          usage: GPUBufferUsage.COPY_SRC,
+          mappedAtCreation: true,
+        });
+        log(`2a mappedAtCreation 创建后 mapState = ${mac.mapState}`);
+        set('macStateAfterCreate', mac.mapState);
+
+        const macRange = mac.getMappedRange(0, 16);
+        log(`2b getMappedRange(0,16) -> ${macRange.constructor.name}, byteLength = ${macRange.byteLength}`);
+        set('macRangeKind', macRange.constructor.name);
+        set('macRangeByteLength', macRange.byteLength);
+
+        // 同一个映射范围取第二次（原生会以「重叠」拒绝）。
+        let overlapError = 'no-error';
+        try {
+          mac.getMappedRange(0, 16);
+        } catch (error) {
+          overlapError = error.constructor.name;
+        }
+        log(`2c 同一段范围再取一次 -> ${overlapError}`);
+        set('macOverlapError', overlapError);
+
+        // 手动冻结映射内存（detach），这样即使忘了解映射，后续写入也不会落到 buffer 上。
+        const macBytes = new Uint8Array(macRange);
+        macBytes.set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+
+        // 创建后没 unmap 就 destroy（规范允许；原生自己负责清理）。
+        let destroyWhileMapped = 'no-error';
+        try {
+          mac.destroy();
+        } catch (error) {
+          destroyWhileMapped = error.constructor.name;
+        }
+        log(`2d mappedAtCreation 后没 unmap 就 destroy() -> ${destroyWhileMapped}`);
+        set('macDestroyWhileMapped', destroyWhileMapped);
+        // 注意：原生对象在 destroy 之后读 mapState 会抛「buffer is destroyed」，
+        // 本库的包装对象则必须回到 'unmapped'（这是包装层自己维护的状态，见测试）。
+        let stateAfterMacDestroy = 'threw';
+        try {
+          stateAfterMacDestroy = mac.mapState;
+        } catch (error) {
+          stateAfterMacDestroy = error.constructor.name;
+        }
+        set('macStateAfterDestroy', stateAfterMacDestroy);
+        log(`2e destroy 之后原生 mapState = ${stateAfterMacDestroy}`);
+
+        /* ---------- 3. 已销毁的 buffer 调 mapAsync ---------- */
+        let destroyedMapResult = 'no-error';
+        try {
+          await plain.mapAsync(GPUMapMode.WRITE);
+        } catch (error) {
+          destroyedMapResult = error.constructor.name;
+        }
+        log(`3a 已销毁 buffer 的 mapAsync -> ${destroyedMapResult}`);
+        set('destroyedMapAsync', destroyedMapResult);
+
+        finish('pass');
+      } catch (error) {
+        log('探针抛异常：' + (error && error.stack ? error.stack : String(error)));
+        finish('fail');
+      }
+    </script>
+  </body>
+</html>
