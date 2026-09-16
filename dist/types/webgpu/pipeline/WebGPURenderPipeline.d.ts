@@ -7,6 +7,8 @@
  *
  * - cache key = `{ colorFormats, sampleCount, depthFormat, vertexLayouts }`；
  * - 每个 key 对应一个 `GPURenderPipeline`，同一个 pipeline 对象可以持有多个 variant；
+ * - 解析结果另外按「入参对象身份 + 字段身份」备忘最近 4 条（见 `variantMemo`），
+ *   这样交替服务两个 target 时不必每次 draw 重新解析；
  * - `compiled` / `native` 反映真实状态：`compiled` 只表示「至少编译过一个 variant」，
  *   `native` 会触发一次默认 variant 的编译（拒绝「为了看起来有值而瞎编」）。
  *
@@ -38,14 +40,18 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
     private warnedMissingVertexLayouts;
     /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
     private defaultColorFormatsCache;
-    /** 上一次 `resolve()` 的入参与结果，用于按身份快速命中（见 {@link WebGPURenderPipeline.resolve}）。 */
-    private lastVariantInput;
-    private lastVariantColorFormats;
-    private lastVariantSampleCount;
-    private lastVariantDepthFormat;
-    private lastVariantVertexLayouts;
-    private lastVariantResolved;
-    private lastVariantKey;
+    /**
+     * 变体解析结果的二级缓存，**最近使用优先**：下标 0 就是原来那条「上一次命中」快速路径。
+     *
+     * 为什么需要多于一条：同一个材质常常交替服务两个 target（画布通道 + 离屏通道，
+     * colorFormats / sampleCount / depthFormat 都不同），而每个 render pass 各自持有一个
+     * `variantRequest` 对象。只记一条的话，两个 pass 交替 draw 时**每一次**都要重新解析、
+     * 重新拼 cache key；记住最近用过的几条即可覆盖这种模式。
+     *
+     * 容量固定为 {@link VARIANT_MEMO_LIMIT}：这是缓存而不是「记住所有变体」。真正的原生管线
+     * 缓存是 `this.cache`（64 条 LRU）：即使某个变体被挤出这里，也不会重建 GPU 对象。
+     */
+    private readonly variantMemo;
     constructor(device: WebGPUDevice, descriptor: RenderPipelineDescriptor);
     /** 至少编译过一个 variant 时为 true（不触发编译）。 */
     get compiled(): boolean;
@@ -60,11 +66,29 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
      * `variant` 里未给出的字段按以下顺序取值：pipeline descriptor → `render` 预设 → 默认值。
      *
      * 同一个 render pass 内每次 `setPipeline` 传的都是同一个 variant 请求对象
-     *（见 `WebGPURenderPassEncoder` 的 `variantRequest`），因此这里按「入参身份 + 字段值」
-     * 复用上一次的解析结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
+     *（见 `WebGPURenderPassEncoder` 的 `variantRequest`），因此这里按「入参身份 + 字段身份」
+     * 复用已解析的结果与 cache key：命中时不再新建 resolved 对象、不再 `join` colorFormats、
      * 也不再重算 vertex layout key —— 这些原本都在每 draw 的路径上。
+     *
+     * 复用范围是最近用过的 {@link VARIANT_MEMO_LIMIT} 条（见 {@link variantMemo}），而不是只有
+     * 上一次：两个 target 交替 draw 时，只记一条会让每一次 draw 都掉进解析路径。
      */
     resolve(variant?: Partial<RenderPipelineVariant>): GPURenderPipeline;
+    /**
+     * 在二级缓存里找与 `variant` 等价的条目；命中时把它提到最前（最近使用优先）。
+     *
+     * 判定与原来的单条快速路径**逐字段相同**：入参对象身份 + colorFormats / sampleCount /
+     * depthFormat / vertexLayouts 四个字段的对象身份。用身份而不是值比较是有意的（与改动前一致）：
+     * 调用方在一个 pass 内复用同一个请求对象，这里每次只做几次身份比较，不算 key、不建对象。
+     */
+    private findVariantMemo;
+    /**
+     * 记住一次解析结果；超出容量时丢掉最久未使用的那条。
+     *
+     * 条目里保存的是调用方的入参对象引用（最多 4 个，且本来就是每个 pass 一个的小对象），
+     * 不会拦住任何 render pass 的回收。
+     */
+    private rememberVariant;
     /** 已经被编译过的 variant 的 cache key；主要用于诊断。 */
     get compiledVariants(): readonly string[];
     /**

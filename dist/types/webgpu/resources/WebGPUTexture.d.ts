@@ -8,6 +8,7 @@
  *   back buffer 的帧纹理）包起来。这类 texture 由 canvas 拥有，`destroy()` 不会销毁它。
  *
  * view 的创建与缓存也在本类：同一个 subresource 组合只建一次 view，并随 texture 一起释放。
+ * mip 降采样逐级用到的原生 view / bind group 同样按**级**缓存在实例上（见 `generateMipmaps`）。
  *
  * **行序（本后端就是「基准」那一侧）**：WebGPU 规定纹素 (0, 0) 在左上角，纹理坐标 `v = 0`
  * 指向纹素第 0 行。`queue.writeTexture` 不翻数据（数据第 0 行 → 纹素第 0 行），
@@ -55,6 +56,17 @@ export declare class WebGPUTexture implements Texture {
     /** 无参 `createView()` 的解析结果与 cache key：这是最常见的热路径，只需算一次。 */
     private defaultViewResolved;
     private defaultViewKey;
+    /**
+     * mip 降采样每一级用到的原生对象缓存，键是**级**（1 .. `mipLevelCount - 1`）。
+     *
+     * 这三样东西只由 (本纹理, 级, 格式) 决定，与「第几次调用 `generateMipmaps()`」无关：反复调用
+     * 时它们逐字段相同，重建纯属浪费（原生 view 的创建与 bind group 的校验都不便宜）。
+     *
+     * 缓存**挂在纹理实例上**而不是模块级：view 是这张 texture 的 subresource，只有它自己能采样 /
+     * 渲染，跨纹理共享必然是错的；生命周期也与纹理一致，`destroy()` 时清掉。
+     * 条目数上限就是 `mipLevelCount - 1`（创建后不变），不会随调用次数增长。
+     */
+    private readonly mipPassCache;
     private _disposed;
     private constructor();
     /**
@@ -118,9 +130,21 @@ export declare class WebGPUTexture implements Texture {
      * 这里刻意用**原生** WebGPU 对象（pipeline / bind group / encoder 都是临时的），
      * 而不是 core 的工厂：core 的 `create*` 会把资源登记到 `device` 上一直追踪到设备释放，
      * 为一次 mip 生成留下几个生命周期很长的包装对象并不划算。pipeline 按 (device, format)
-     * 缓存在模块级 WeakMap 里，同一个格式只建一次。
+     * 缓存在模块级 WeakMap 里，同一个格式只建一次；逐级用到的 view / bind group 则按**级**
+     * 缓存在本实例上（见 {@link mipPassCache}），所以对同一张纹理反复调用不会重复创建。
      */
     generateMipmaps(): void;
+    /**
+     * 取出（必要时创建）某一级降采样要用的原生对象：源 view、目标 view、bind group。
+     *
+     * 创建参数与缓存引入前**逐字段一致**（label / dimension / 覆盖的 mip 范围 / 覆盖的层范围），
+     * 否则会得到「看起来一样、其实范围或格式不同」的隐蔽错误。缓存的键是级：同一级在每次调用里
+     * 的源/目标/绑定完全相同，因此只有第一次调用会真的创建。
+     *
+     * `generator` 由 (device, 纹理格式) 唯一决定，而这两者对本纹理是常量，所以缓存的 bind group
+     * 永远与当前的管线布局匹配。
+     */
+    private acquireMipPass;
     /** 销毁 texture（`owned` 为 false 时只标记包装对象失效）。幂等。 */
     destroy(): void;
     /** `Disposable` 的别名。 */

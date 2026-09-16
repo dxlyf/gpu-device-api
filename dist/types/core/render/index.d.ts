@@ -3,4 +3,5 @@ export { RowOrder, type Color, type ColorAttachment, type DepthStencilAttachment
 export { type DrawDescriptor, type DrawIndexedDescriptor, type DrawIndirectDescriptor, type DispatchDescriptor, type DispatchIndirectDescriptor, } from './DrawCommands.js';
 export { type RenderPassDescriptor, type RenderPassEncoder, } from './RenderPassEncoder.js';
 export { type ComputePassDescriptor, type ComputePassEncoder } from './ComputePassEncoder.js';
+export { toNativeScissorRect, toNativeViewportRect, type NativeRect, type ScissorImageOrigin, } from './ScissorOrigin.js';
 //# sourceMappingURL=index.d.ts.map

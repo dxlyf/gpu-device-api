@@ -23,6 +23,16 @@ export declare const GL_PRIMITIVE_MODES: Readonly<Record<PrimitiveTopology, numb
 export declare const GL_COMPARE_FUNCS: Readonly<Record<CompareFunction, number>>;
 export declare const GL_BLEND_FACTORS: Readonly<Record<BlendFactor, number>>;
 export declare const GL_BLEND_OPERATIONS: Readonly<Record<BlendOperation, number>>;
+/**
+ * `StencilOperation` → GL 常量，供 `gl.stencilOpSeparate(face, sfail, dpfail, dppass)` 使用。
+ *
+ * 逐项与 GLES 3.0 的常量核对过：容易抄错的不是 `keep` / `replace` / 两个 clamp（它们连号），
+ * 而是 `zero`（0x0000，不是 1e0x 系列）、`invert`（0x150a）以及两个 wrap（0x8507 / 0x8508）。
+ *
+ * ⚠️ 这张表曾经定义了却没有任何调用方 —— 因为 WebGL2 后端把整个模板状态丢掉了
+ * （只下发硬编码的 `stencilFunc(ALWAYS, ref, 0xff)`）。现在它由
+ * `WebGL2RenderState.resolveRenderState()` 解析、`GlStateCache.setStencilTest()` 下发。
+ */
 export declare const GL_STENCIL_OPS: Readonly<Record<StencilOperation, number>>;
 export declare const GL_CULL_FACES: Readonly<Record<Exclude<CullMode, 'none'>, number>>;
 export declare const GL_FRONT_FACES: Readonly<Record<FrontFace, number>>;

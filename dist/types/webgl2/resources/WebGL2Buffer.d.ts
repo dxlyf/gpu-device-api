@@ -26,11 +26,17 @@
  * - `read`：立即用 `getBufferSubData` 读回一段内存；
  * - `write`：先分配一段内存，`unmap()` 时用 `bufferSubData` 上传。
  *
+ * 影子内存与 WebGPU 的映射内存语义要对齐（否则「同一份代码两个后端」会出现静默差异）：
+ * - `getMappedRange()` 返回的是影子 `ArrayBuffer` 上的**视图**（部分范围是 `Uint8Array` 视图，
+ *   不是 `slice()` 出来的副本），写进视图就等于写进影子内存，`unmap()` 上传时自然带上；
+ * - `unmap()` 之后影子内存会被 detach（见 {@link detachShadow}），与 WebGPU 的
+ *   `GPUBuffer.unmap()` 一样让之前取出的视图失效。
+ *
  * 因此 `unmap()` 在 WebGL2 上是**同步生效**的，而 WebGPU 是队列时序。这个差异只影响
  * 「同一帧里改同一块 buffer 再重复读回」这种极端用法，正常的上传/读回流程两者一致。
  */
 import { BufferUsage } from '../../core/enums/BufferUsage.js';
-import type { Buffer, BufferDescriptor, MapMode } from '../../core/resources/Buffer.js';
+import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 export declare class WebGL2Buffer implements Buffer {
     readonly label: string;
@@ -63,7 +69,31 @@ export declare class WebGL2Buffer implements Buffer {
     get usageFlags(): BufferUsage;
     get mapped(): boolean;
     mapAsync(mode: MapMode, offset?: number, size?: number): Promise<ArrayBuffer>;
-    getMappedRange(offset?: number, size?: number): ArrayBuffer;
+    /**
+     * 当前已映射范围里的一段（`offset` 相对映射起点，与 WebGPU 后端一致）。
+     *
+     * ## 返回的是影子内存上的视图，不是副本
+     *
+     * - 整段范围：直接返回 `mapAsync()` 给出去的那个影子 `ArrayBuffer`；
+     * - 部分范围：返回**建在同一块影子内存上的 `Uint8Array` 视图**（等价于
+     *   `new Uint8Array(mapping.data).subarray(offset, offset + length)`）。
+     *
+     * 之前这里用 `slice()` 返回副本，于是 `mapAsync('write')` → `getMappedRange(offset, size)` →
+     * 写 → `unmap()` 的数据**上传的是零**（写进了临时副本），与 WebGPU 后端一致地错，
+     * 任何后端对比都发现不了。现在两端都是视图语义。
+     *
+     * ## 生命周期
+     *
+     * `unmap()` 之后影子内存被 detach，视图随之失效（长度归零、读得到 `undefined`、写入被静默忽略，
+     * `slice()` 之类的调用抛 `TypeError`），与 WebGPU 的 `unmap()` 一致。要在 `unmap()` **之前**
+     * 把数据拷走（`range.slice()`）；之后再访问属于未定义行为。
+     */
+    getMappedRange(offset?: number, size?: number): MappedRange;
+    /**
+     * 结束映射：`write` 映射在此把影子内存上传到 GL buffer，然后让映射视图失效。
+     *
+     * 上传必须在 detach **之前**做（detach 之后影子内存就不可读了）；未映射时是空操作。
+     */
     unmap(): void;
     /**
      * 直接上传一段数据（`Queue.writeBuffer` 与内部的拷贝/清空都走这里）。

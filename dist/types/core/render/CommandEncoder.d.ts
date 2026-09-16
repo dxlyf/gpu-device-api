@@ -80,6 +80,15 @@ export interface CommandEncoder {
     popDebugGroup(): void;
     /** 插入一个瞬时标记（不配对）。 */
     insertDebugMarker(label: string): void;
+    /**
+     * 结束录制，返回可提交的 command buffer。**这是编码器的终点**：
+     *
+     * - 之后调用本对象的任何其它方法都会抛 `ValidationError`（`finish()` 自身也是）；
+     * - 后端在这时就可以把它从设备资源追踪集合里摘掉（WebGPU 后端正是这么做的，
+     *   否则「每帧 create + finish」会让追踪集合无上限增长）；
+     * - 想显式提前释放，用后端实现上的 `dispose()`（不在本接口里：WebGL2 的 encoder 不持有
+     *   任何 GL 资源，无需释放），它在 `finish()` 之后调用仍然安全（幂等）。
+     */
     finish(): CommandBuffer;
 }
 export type { TexelCopyBufferLayout };

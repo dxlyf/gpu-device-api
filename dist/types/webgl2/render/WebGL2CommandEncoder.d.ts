@@ -7,6 +7,10 @@
  *
  * 复制类命令同样是立即生效的（`copyBufferSubData` / `blitFramebuffer`），
  * 这一点与 WebGPU 的「录制后统一提交」不同，已在 `core/sync/Queue.ts` 里写明差异。
+ *
+ * 生命周期上它与 WebGPU 的 encoder **没有同形缺陷**：这里的 encoder 不持有任何 GL 资源
+ * （命令已经下发完了），因此 `WebGL2Device.createCommandEncoder()` 从不把它登记进设备的
+ * 资源追踪集合，也没有 `dispose()`；`finish()` 只是把记账对象置为终态。
  */
 import type { BufferCopyView, CommandBuffer, CommandEncoder, CommandEncoderDescriptor, TextureCopyView } from '../../core/render/CommandEncoder.js';
 import type { QuerySet } from '../../core/resources/QuerySet.js';
@@ -60,6 +64,13 @@ export declare class WebGL2CommandEncoder implements CommandEncoder {
     pushDebugGroup(label: string): void;
     popDebugGroup(): void;
     insertDebugMarker(label: string): void;
+    /**
+     * 结束记账并返回 command buffer。
+     *
+     * 不需要（也没有）从设备追踪集合里摘自己：本类从不被登记（见类注释），
+     * 与 WebGPU 后端在 `finish()` 里 `untrack()` 的处理对应的是同一个生命周期终点 ——
+     * finish 之后本对象的其它方法都会经 `assertOpen()` 抛错。
+     */
     finish(): WebGL2CommandBuffer;
     private assertOpen;
 }

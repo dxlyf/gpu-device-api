@@ -53,6 +53,22 @@ import type { StoreOp } from '../../core/enums/StoreOp.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 import type { WebGL2Texture } from '../resources/WebGL2Texture.js';
 import type { WebGL2TextureView } from '../resources/WebGL2TextureView.js';
+/**
+ * 清屏用的共享暂存数组（#35）。
+ *
+ * 为什么可以共享：`clearBufferfv` 会**同步**把数组内容拷进 GL，调用返回之后这块数组
+ * 与 GPU 状态再无关系，所以「每次清屏 new 一块」是纯粹的白付 —— 而每个渲染通道建立时
+ * 都要清一次屏（多附件时每附件一次），长期运行就是每帧几块到十几块小数组。
+ *
+ * 唯一的使用纪律：只在本文件与 `WebGL2RenderPassEncoder` 的清屏代码里**临时写入后立刻调用**，
+ * 不要跨调用保存它，也不要把它交给用户代码（那样才会出现别名问题）。
+ * 这两块数组与 2a 的共享零缓冲（`WebGL2CommandEncoder.clearBuffer`）是同一个思路。
+ */
+export declare const CLEAR_COLOR_SCRATCH: Float32Array;
+/** 一维深度清屏值（`clearBufferfv(DEPTH, 0, ...)` 只取第一个元素）。 */
+export declare const CLEAR_DEPTH_SCRATCH: Float32Array;
+/** 把 `[r, g, b, a]` 写进共享的颜色暂存数组并返回它（避免每次清屏都分配）。 */
+export declare function writeClearColor(r: number, g: number, b: number, a: number): Float32Array;
 export interface WebGL2RenderTargetOptions {
     gl: WebGL2RenderingContext;
     state: GlStateCache;

@@ -127,6 +127,20 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
      * 清屏参数从附件列表归并而来：GL 的 `clearBuffer*` 对同一帧的所有颜色附件用同一个颜色
      * （见 `WebGL2RenderTarget.bind`），所以这里要求各附件的 `loadOp` / `clearValue` 一致，
      * 不一致就明确报错，而不是悄悄只按第一个附件清屏。
+     *
+     * 比较用**解析后的 RGBA 分量**，不再拼 `JSON.stringify`（#35）：改前每次比较要构造两条
+     * JSON 字符串，而且判据是「字面量形状」——`'#ff0000'` 与 `0xff0000`、`[1,0,0]` 这几种写法
+     * 指向同一个颜色却会被判成「不一致」而报错。清屏真正用的值是 `resolveClearColor` 的结果，
+     * 所以按那个结果逐分量比较才是正确的等价关系。
+     *
+     * 逐字段等价性（含 `undefined`）：
+     * - 「第一个**有值**的附件说了算」这条改前的判据（`clearValue === undefined`）原样保留 ——
+     *   前导的缺省值不会被当成一个待比较的颜色，而是继续看后面的附件。
+     * - 缺省值解析出来是 `[0, 0, 0, 1]`（默认黑），所以「缺省 vs 显式黑色」不再报错，
+     *   而「缺省 vs 显式红」照样报错。前者是有意的放宽（两者的清屏结果本来就相同），
+     *   后者与改前一致。
+     * - `NaN` 分量视为相等：改前的字符串比较里 `JSON.stringify(NaN)` 也是 `'null'`，
+     *   两个 `NaN` 同样会被判成一致。
      */
     private beginMultisampleTargetPass;
     /**

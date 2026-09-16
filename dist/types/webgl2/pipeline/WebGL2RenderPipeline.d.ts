@@ -33,8 +33,8 @@ export interface ResolvedVariant {
      * 否则会拿描述里的旧布局去建 VAO，属性指针就全错了。
      */
     readonly vertexLayouts: readonly VertexBufferLayout[];
-    /** 该形态下已经建好的 VAO，键里含顶点缓冲组合。 */
-    readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
+    /** 该形态下已经建好的 VAO，键里含顶点缓冲组合；有上限的 LRU（见 {@link VertexArrayStore}）。 */
+    readonly vertexArrays: VertexArrayStore;
     /**
      * 最近一次 VAO 查询的结果（一次只记一条）。
      *
@@ -47,6 +47,35 @@ export interface ResolvedVariant {
         vertexArray: WebGLVertexArrayObject;
     } | null;
 }
+/**
+ * VAO 缓存需要的容器能力。
+ *
+ * 真正的实现是 core 的 LRU（`createPipelineCache`，带上限 + 最近使用刷新，见 {@link resolveVariant}）。
+ * 类型写成结构化的而不是直接写 `PipelineCache<WebGLVertexArrayObject>`：这里只用到
+ * 「按键取值 / 存值 / 报大小 / 遍历 / 清空」这几个操作，写成结构化形式后测试里的替身
+ * （例如 `new Map()`）也能满足（`values()` 用 `Iterable` 是因为 `Map.values()` 是迭代器、
+ * `PipelineCache.values()` 是数组，两者都满足）。
+ */
+export interface VertexArrayStore {
+    get(key: string): WebGLVertexArrayObject | undefined;
+    set(key: string, value: WebGLVertexArrayObject): unknown;
+    has(key: string): boolean;
+    delete(key: string): boolean;
+    clear(): void;
+    readonly size: number;
+    values(): Iterable<WebGLVertexArrayObject>;
+}
+/**
+ * 每个管线变体缓存的 VAO 上限。
+ *
+ * 为什么必须有上限（#33）：这个缓存键里含**顶点缓冲对象与索引缓冲**，长期运行的程序
+ * （例如每帧换一块顶点缓冲的粒子系统）会让条目数无限增长，而每个 VAO 都占着驱动侧的状态对象。
+ * 复用 `createPipelineCache` 的 LRU 之后，最坏情况是「多建几个 VAO」，不会再无界增长。
+ *
+ * 取 64 的理由与 `FramebufferCache` 的默认上限一致：正常场景里「一条管线 × 一个渲染目标形态」
+ * 同时用到的顶点布局组合远少于此，而 64 个 VAO 的状态开销可以忽略。
+ */
+export declare const DEFAULT_VERTEX_ARRAY_CACHE_LIMIT = 64;
 /** 一个顶点缓冲槽的绑定内容。 */
 export interface VertexBufferBinding {
     buffer: WebGL2Buffer;
@@ -62,6 +91,11 @@ export interface WebGL2RenderPipelineOptions {
         maxVertexBufferArrayStride: number;
     };
     /**
+     * 每个变体的 VAO 缓存上限（LRU）。默认 {@link DEFAULT_VERTEX_ARRAY_CACHE_LIMIT}。
+     * 必须是 `>= 1` 的整数 —— 见 {@link WebGL2RenderPipeline.evictVertexArray} 的安全性论证（第 2 条）。
+     */
+    vertexArrayCacheLimit?: number;
+    /**
      * 释放完成后的通知回调；`WebGL2Device` 用它把自己从资源追踪集合里摘掉
      * （见 `WebGL2Device.untrack`）。不传时为空操作，管线仍可独立使用。
      */
@@ -75,6 +109,8 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
     private readonly gl;
     private readonly state;
     private readonly limits;
+    /** 每个变体的 VAO 缓存上限（构造时校验过，一定 `>= 1`）。 */
+    private readonly vertexArrayCacheLimit;
     private readonly onDispose;
     private readonly program;
     private readonly plan;
@@ -95,6 +131,28 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
      * 按渲染目标形态解析状态。同一形态只解析一次；顶点布局也在这里做一次校验。
      */
     resolveVariant(variant?: Partial<RenderPipelineVariant>): ResolvedVariant;
+    /**
+     * LRU 淘汰一个 VAO 时的收尾（#33）。
+     *
+     * ## 为什么「淘汰一个正在使用的 VAO」不会让后续 draw 用错绑定点（安全性论证）
+     *
+     * 1. GLES 3.0 里 `deleteVertexArray` 删除**当前绑定**的 VAO 会把该绑定点复位
+     *    （绑定变成「没有 VAO」，默认 VAO 生效）。所以真正的危险不是删除本身，
+     *    而是「删除之后还有谁以为它还绑着」—— 那会让后续 draw 跳过重新绑定。
+     * 2. 淘汰只发生在 `PipelineCache.set()` 里，而 `acquireVertexArray()` 的顺序一定是
+     *    **先** `state.bindVertexArray(新建的 VAO)`（`gl.createVertexArray()` 之后立刻绑、
+     *    再录属性和索引缓冲）、**后** `variant.vertexArrays.set(...)`。LRU 淘汰的是 `Map` 里
+     *    最旧的那个，刚插入的排在队尾；在构造时已强制 `limit >= 1` 的前提下，
+     *    被淘汰的**永远不是**当前绑定的那个。最坏情况只是「多建一个 VAO」。
+     * 3. 会残留「以为还绑着」的地方只有两处，都在下面处理掉了：
+     *    - {@link ResolvedVariant.vertexArrayLookup}：这条快速路径**绕过**缓存表直接返回上次的 VAO，
+     *      被淘汰后它可能仍指着已删除的对象 —— 必须清掉，否则下一次同版本的 draw 会拿它去绑定。
+     *    - `GlStateCache.vertexArray`：状态缓存里的「当前绑定」记录。GL 的删除已经解绑，
+     *      缓存若不同步就会谎称「还绑着」，后续 draw 会跳过 `bindVertexArray`（不会报错，只是画错）。
+     * 4. 被淘汰的键下次 `acquireVertexArray()` 会未命中并重建一个新对象，而 `bindVertexArray()`
+     *    是按对象身份比较的，新旧不同 → 一定重新下发。所以「淘汰正在使用的 VAO」是安全的。
+     */
+    private evictVertexArray;
     /** core 接口要求的 `resolve`；WebGL2 下它只做一次形态缓存查询。 */
     resolve(variant?: Partial<RenderPipelineVariant>): unknown;
     /**
