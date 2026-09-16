@@ -43,3 +43,7 @@ examples/*.png
 .tmp-14/*.log
 # 测量输出（内嵌完整产物代码，体积大且可重跑）与一次性的源码快照都不入库
 .tmp-14/*.json
+# 批 12（mipLevelExtent 对 3D 的 depth 减半）的临时产物目录：改动前后的实测记录、
+# 「排除 src/entries」的 tsc 检查配置。上面的 `.tmp-*/` 已经忽略了它，这一行只是照前几批的惯例
+# 写明归属；入库的证据是 `test/mip-level-extent-3d.test.ts`（改动前 5 用 4 失败）与提交信息。
+.tmp-12/
