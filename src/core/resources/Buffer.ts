@@ -8,9 +8,38 @@ export interface BufferDescriptor {
   /** 字节大小。必须大于零。 */
   size: number;
   usage: BufferUsage;
+  /**
+   * 创建即映射：`createBuffer()` 返回时 buffer 就处于 `'mapped'`，可以立刻 `getMappedRange()`，
+   * **不需要**先 `mapAsync()`。对应 WebGPU 原生的 `GPUBufferDescriptor.mappedAtCreation`。
+   *
+   * 用途是「创建后马上要填一次数据」：省掉一次 `mapAsync()` 的 await 与一次提交往返。
+   *
+   * 与原生一致的两条约定：
+   * - 映射内存的**初始内容未定义**（本库的 WebGL2 模拟实现按零初始化，这是模拟的细节，
+   *   不要依赖它 —— WebGPU 侧那块内存里可能是任意字节）；
+   * - 用完**必须** `unmap()`，否则这次「写」不会被提交给 GPU（本库会尽力在 `destroy()` 时
+   *   把状态推回 `'unmapped'`，但那是清理而不是提交，数据仍然会丢）。
+   *
+   * `mapState` 为 `'mapped'` 期间调用 `mapAsync()` 会抛 {@link ValidationError}（与原生一致）。
+   */
+  mappedAtCreation?: boolean;
 }
 
 export type MapMode = 'read' | 'write';
+
+/**
+ * buffer 的映射状态，与原生 `GPUBuffer.mapState` 同名、同语义：
+ *
+ * - `'unmapped'`：没有映射。`getMappedRange()` 抛 {@link ValidationError}；
+ * - `'pending'`：`mapAsync()` 已经发起、Promise 还没 settle。此时**还没有**映射内存，
+ *   `getMappedRange()` 同样抛错（原生的 `[[pending_map]]` 非 null 就是这个状态）；
+ * - `'mapped'`：映射已就绪，`getMappedRange()` 一定拿得到一块可用范围。
+ *
+ * WebGPU 侧由原生的三态驱动；WebGL2 没有原生映射，用 CPU 影子缓冲模拟，因此它**只有
+ * `'unmapped'` 与 `'mapped'` 两个状态**（`mapAsync()` 同步完成读回/分配，没有 pending 窗口）。
+ * 两者都不会出现「说 `'mapped'` 却取不到范围」的情况 —— 调用方可以放心用它做判断。
+ */
+export type BufferMapState = 'unmapped' | 'pending' | 'mapped';
 
 /**
  * `getMappedRange()` 的返回值：**映射内存上的视图**，绝不是副本。
@@ -38,6 +67,9 @@ export interface Buffer extends Disposable {
    * 这个 `ArrayBuffer` 就是映射内存本身（不是拷贝），往里写会真正落到 buffer 上：
    * `'write'` 映射在 `unmap()` 时上传/刷新。WebGL2 用 CPU 影子 buffer 模拟 `write` 映射，
    * 并在 `unmap()` 时上传。
+   *
+   * 映射期间（`mapState` 为 `'pending'` 或 `'mapped'`）再次调用会抛 {@link ValidationError}：
+   * 一个 buffer 同时只能有一次映射。用 `mapState` 可以提前判断，不必靠捕获异常。
    */
   mapAsync(mode: MapMode, offset?: number, size?: number): Promise<ArrayBuffer>;
   /**
@@ -58,6 +90,15 @@ export interface Buffer extends Disposable {
   getMappedRange(offset?: number, size?: number): MappedRange;
   /** 刷新（write）或释放（read）映射，并让之前取出的映射视图失效（detach）。 */
   unmap(): void;
+  /**
+   * 当前映射状态，与原生 `GPUBuffer.mapState` 同名同义（见 {@link BufferMapState}）。
+   *
+   * 这是**唯一**的状态来源：`mapped === (mapState === 'mapped')` 恒成立，而 `'mapped'`
+   * 又保证 `getMappedRange()` 拿得到范围。三者（状态 / 可取性 / `unmap()` 之后视图失效）
+   * 任何时候都一致，不会出现「状态说一套、实际另一套」。
+   */
+  readonly mapState: BufferMapState;
+  /** `mapState === 'mapped'` 的便捷写法。 */
   readonly mapped: boolean;
 
   /** 释放底层分配。 */

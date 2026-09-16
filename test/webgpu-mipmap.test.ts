@@ -6,7 +6,10 @@
  * - 级别数 = `mipLevelCount - 1`，且每级的目标 view 恰好是 `baseMipLevel = level`；
  * - 相邻两级的 view 不同（同一 pass 里一个当采样纹理、一个当附件，必须是不同 subresource）；
  * - 管线按格式缓存（同格式第二张纹理不再建管线）；
- * - 做不到的组合（没有 RenderAttachment / 不可过滤 / 级别为 1 / 多维）在提交之前就报错。
+ * - 做不到的组合（没有 RenderAttachment / 不可过滤 / 级别为 1）在提交之前就报错。
+ *
+ * `#27` 之后数组 / 3D 纹理也走这条路径（逐级逐层），这里的多层用例断言的是「真的开了 pass」，
+ * 逐层正确性与缓存键扩维的覆盖在 `webgpu-mipmap-array.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -42,13 +45,16 @@ function createMockGpu(): MockGpu {
   const passes: RecordedPass[] = [];
   const pipelines: string[] = [];
   const views: MockGpu['views'] = [];
-  const state = { submits: 0, bindGroups: 0 };
+  const state = { submits: 0, bindGroups: 0, writes: 0 };
 
   const native = {
     label: 'mock-device',
     queue: {
       submit: (): void => {
         state.submits += 1;
+      },
+      writeBuffer: (): void => {
+        state.writes += 1;
       },
     },
     lost: new Promise(() => {}),
@@ -70,6 +76,12 @@ function createMockGpu(): MockGpu {
     createShaderModule: () => ({}),
     createBindGroupLayout: () => ({}),
     createPipelineLayout: () => ({}),
+    // `#27` 之后数组 / 3D 的降采样会为「层级 uniform」建一块小 buffer；2d 路径不会用到。
+    createBuffer: (descriptor: { label?: string; size: number; usage: number }) => ({
+      label: descriptor.label,
+      size: descriptor.size,
+      usage: descriptor.usage,
+    }),
     createRenderPipeline: (descriptor: { label?: string }) => {
       pipelines.push(descriptor.label ?? 'pipeline');
       return { label: descriptor.label };
@@ -229,14 +241,18 @@ describe('WebGPUTexture.generateMipmaps()', () => {
     expect(mock.passes).toHaveLength(0);
   });
 
-  it('非单层 2d 纹理（数组层）暂不支持，明确报错而不是产出错误结果', () => {
+  it('数组纹理（多层 2d）现在逐层生成 mip 链（#27 之前这里直接报错）', () => {
     const mock = createMockGpu();
     const texture = createTexture(mock, {
       size: { width: 4, height: 4, depthOrArrayLayers: 2 },
       mipLevelCount: 2,
     });
-    expect(() => texture.generateMipmaps()).toThrowError(/only single-layer 2d textures are supported/);
-    expect(mock.passes).toHaveLength(0);
+    texture.generateMipmaps();
+    // 1 级 × 2 层 = 2 个 pass，各自的目标层不同（逐层覆盖见 webgpu-mipmap-array.test.ts）。
+    expect(mock.passes).toHaveLength(2);
+    expect((mock.passes[0]!.colorAttachment['view'] as { baseMipLevel: number }).baseMipLevel).toBe(1);
+    expect((mock.passes[1]!.colorAttachment['view'] as { baseMipLevel: number }).baseMipLevel).toBe(1);
+    texture.destroy();
   });
 
   it('销毁后再生成 mip 会报错', () => {

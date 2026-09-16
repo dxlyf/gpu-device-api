@@ -24,7 +24,8 @@
  * 3. **视图语义不退化**（`94c4bf3`）：`getMappedRange()` 返回视图而非拷贝、同一段范围重复取
  *    是**同一块内存**、`unmap()` 后视图 **detached**。`mappedAtCreation` 走的是同一条路径，
  *    不能因为「创建时就映射」而退回拷贝语义。
- * 4. **两个后端一致**：WebGL2 没有 `mappedAtCreation`，用影子缓冲模拟，对外行为要求一样。
+ * 4. **两个后端一致**：WebGL2 没有 `mappedAtCreation`，用影子缓冲模拟，对外行为要求一样
+ *    （唯一差别见 `WebGL2Buffer` 的注释：GL 侧没有 `'pending'` 窗口）。
  *
  * 本文件在实现落地**之前**先跑来复现：`mapState` / `mappedAtCreation` 根本不存在，
  * `tsc --noEmit` 会报「属性不存在」，运行时断言也会失败。这是「先复现、再修」的那一步。
@@ -77,7 +78,8 @@ interface FakeBufferDescriptor {
  * 视图，纯 JS 造不出来；这不影响要验证的性质 —— 库只能通过 `getMappedRange()` 交出去的那块内存
  * 访问映射内存，所以「往它里面写」与「往映射内存里写」等价）。
  *
- * `mapAsync()` 的完成由测试通过 {@link releaseMap} 手动放行，这样才观察得到 `'pending'`。
+ * `mapAsync()` 的完成由测试通过 {@link FakeNativeGpuBuffer.releaseMap} 手动放行，
+ * 这样才观察得到 `'pending'`。
  */
 class FakeNativeGpuBuffer {
   readonly label: string;
@@ -354,42 +356,42 @@ describe('WebGPU：mappedAtCreation 与 mapState（#24）', () => {
     gpu.device.dispose();
   });
 
-  it(
-    'mappedAtCreation 与 mapAsync 交叉使用：已映射时 mapAsync 报错，unmap 之后又能正常映射',
-    async () => {
-      const harness = createWebGpuHarness();
-      const buffer = harness.device.createBuffer({
-        label: 'wgpu-mac-then-async',
-        size: 16,
-        usage: BufferUsage.MapWrite | BufferUsage.CopySrc,
-        mappedAtCreation: true,
-      });
+  it('mappedAtCreation 与 mapAsync 交叉使用：已映射时 mapAsync 报错，unmap 之后又能正常映射', async () => {
+    const harness = createWebGpuHarness();
+    const buffer = harness.device.createBuffer({
+      label: 'wgpu-mac-then-async',
+      size: 16,
+      usage: BufferUsage.MapWrite | BufferUsage.CopySrc,
+      mappedAtCreation: true,
+    });
 
-      // 复现前 `mappedAtCreation` 被忽略，buffer 其实是 unmapped：这里的 `mapAsync` 不会被拦下，
-      // 而是挂在一个永远不会 settle 的原生映射上 —— 所以这条用例在修复前以**超时**失败。
-      const refused = buffer.mapAsync('write');
-      harness.nativeBuffer('wgpu-mac-then-async').releaseMap();
-      await expect(refused).rejects.toThrowError(ValidationError);
-      expect(buffer.mapState).toBe('mapped');
+    // 复现前 `mappedAtCreation` 被忽略，buffer 其实是 unmapped：本库不会拦下这次 mapAsync，
+    // 原生那边就真的挂上一份永远不会 settle 的映射（本用例会以超时失败）。
+    // 实现后这里应当在**调用瞬间**就被拦下（reject），状态保持 'mapped'。
+    const refused = buffer.mapAsync('write');
+    await expect(refused).rejects.toThrowError(ValidationError);
+    expect(buffer.mapState).toBe('mapped');
+    // 被拒绝的那次映射绝不能挂到原生上（否则这里会是一份等待中的映射）。
+    expect(harness.nativeBuffer('wgpu-mac-then-async').mapState).toBe('mapped');
 
-      byteView(buffer.getMappedRange()).set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
-      buffer.unmap();
-      expect(buffer.mapState).toBe('unmapped');
+    byteView(buffer.getMappedRange()).set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    buffer.unmap();
+    expect(buffer.mapState).toBe('unmapped');
 
-      // 解映射之后走正常的 mapAsync 路径，仍然是视图语义。
-      await buffer.mapAsync('write', 0, 8);
-      byteView(buffer.getMappedRange(0, 8)).set([16, 15, 14, 13, 12, 11, 10, 9]);
-      buffer.unmap();
+    // 解映射之后走正常的 mapAsync 路径，仍然是视图语义（这次真的到原生，mock 需要放行）。
+    const remapped = buffer.mapAsync('write', 0, 8);
+    harness.nativeBuffer('wgpu-mac-then-async').releaseMap();
+    await remapped;
+    byteView(buffer.getMappedRange(0, 8)).set([16, 15, 14, 13, 12, 11, 10, 9]);
+    buffer.unmap();
 
-      expectBytes(harness.nativeBuffer('wgpu-mac-then-async').contents, [
-        16, 15, 14, 13, 12, 11, 10, 9, 9, 10, 11, 12, 13, 14, 15, 16,
-      ]);
+    expectBytes(harness.nativeBuffer('wgpu-mac-then-async').contents, [
+      16, 15, 14, 13, 12, 11, 10, 9, 9, 10, 11, 12, 13, 14, 15, 16,
+    ]);
 
-      buffer.destroy();
-      harness.device.dispose();
-    },
-    10000,
-  );
+    buffer.destroy();
+    harness.device.dispose();
+  });
 
   it('destroy() 之后 mapState 是 unmapped，且再取范围报「已销毁」', () => {
     const harness = createWebGpuHarness();
@@ -521,8 +523,10 @@ describe('WebGL2：mappedAtCreation 与 mapState（#24，影子缓冲模拟）',
       usage: BufferUsage.CopyDst | BufferUsage.CopySrc,
     });
 
+    expect(['unmapped', 'mapped']).toContain(buffer.mapState);
     expect(() => buffer.getMappedRange()).toThrowError(ValidationError);
     await buffer.mapAsync('write');
+    expect(buffer.mapState).toBe('mapped');
     expect(buffer.getMappedRange()).toBeInstanceOf(ArrayBuffer);
     buffer.unmap();
     expect(() => buffer.getMappedRange()).toThrowError(ValidationError);
@@ -564,7 +568,7 @@ describe('WebGL2：mappedAtCreation 与 mapState（#24，影子缓冲模拟）',
     harness.device.dispose();
   });
 
-  it('mappedAtCreation 后没 unmap 就 destroy()：不抛异常、不把影子内容静默上传', () => {
+  it('mappedAtCreation 后没 unmap 就 destroy()：不抛异常、状态回到 unmapped', () => {
     const harness = createWebGl2Harness();
     const buffer = harness.device.createBuffer({
       label: 'gl2-mac-destroy',

@@ -74,16 +74,24 @@ export class WebGPUTexture implements Texture {
   private defaultViewResolved: TextureView['descriptor'] | null = null;
   private defaultViewKey: string | null = null;
   /**
-   * mip 降采样每一级用到的原生对象缓存，键是**级**（1 .. `mipLevelCount - 1`）。
+   * mip 降采样每一级、每一层用到的原生对象缓存，键是 **`"<级>:<层>"` 复合键**。
    *
-   * 这三样东西只由 (本纹理, 级, 格式) 决定，与「第几次调用 `generateMipmaps()`」无关：反复调用
+   * 这三样东西只由 (本纹理, 级, 层, 格式) 决定，与「第几次调用 `generateMipmaps()`」无关：反复调用
    * 时它们逐字段相同，重建纯属浪费（原生 view 的创建与 bind group 的校验都不便宜）。
+   *
+   * ## 为什么键必须带上「层」（本批最容易改出的静默错误）
+   *
+   * 数组 / 3D 纹理要**逐层**各降一遍，每一层的源 view、目标 view、bind group 都不同。
+   * 如果键仍然只有级号，第 2 层就会命中第 1 层留下的条目 —— 这一层渲染时采样的还是第 1 层的
+   * 源、写进的还是第 1 层的目标：**跨层串味**，而且 GPU 不会报任何错，只是画面悄悄错。
+   * 这与 `#32`（FBO 缓存键改对象身份）是同一类教训：**键漏字段 = 静默画错**。
+   * 单层 2d 纹理只有 `(级, 0)`，所以这个复合键对它**不多不少**就是「按级缓存」。
    *
    * 缓存**挂在纹理实例上**而不是模块级：view 是这张 texture 的 subresource，只有它自己能采样 /
    * 渲染，跨纹理共享必然是错的；生命周期也与纹理一致，`destroy()` 时清掉。
-   * 条目数上限就是 `mipLevelCount - 1`（创建后不变），不会随调用次数增长。
+   * 条目数上限是「所有级 × 该级的层数」，创建后不再变化，不会随调用次数增长。
    */
-  private readonly mipPassCache = new Map<number, MipDownsamplePass>();
+  private readonly mipPassCache = new Map<string, MipDownsamplePass>();
   private _disposed = false;
 
   private constructor(
@@ -246,7 +254,7 @@ export class WebGPUTexture implements Texture {
    * 很小的 draw —— 实测耗时见 `examples/core-texture-mipmap.ts`。
    *
    * 前置条件（不满足就抛 {@link ValidationError}，不做静默降级）：
-   * - 单采样、`mipLevelCount > 1`、`dimension: '2d'` 且只有一层（1d / 3d / 2d-array 尚未实现）；
+   * - 单采样、`mipLevelCount > 1`；
    * - usage 必须带 `TextureUsage.RenderAttachment`，因为本方法要把它当颜色附件写；
    * - 格式必须**可渲染且可过滤**：`rgba8snorm`、`rgb9e5ufloat` 这类不可渲染的格式，以及整数
    *   格式（不能线性滤波）都走不了这条路径，需要改用 `rgba8unorm` 系列或自己上 compute。
@@ -254,8 +262,22 @@ export class WebGPUTexture implements Texture {
    * 这里刻意用**原生** WebGPU 对象（pipeline / bind group / encoder 都是临时的），
    * 而不是 core 的工厂：core 的 `create*` 会把资源登记到 `device` 上一直追踪到设备释放，
    * 为一次 mip 生成留下几个生命周期很长的包装对象并不划算。pipeline 按 (device, format)
-   * 缓存在模块级 WeakMap 里，同一个格式只建一次；逐级用到的 view / bind group 则按**级**
-   * 缓存在本实例上（见 {@link mipPassCache}），所以对同一张纹理反复调用不会重复创建。
+   * 缓存在模块级 WeakMap 里，同一个格式只建一次；逐级逐层用到的 view / bind group 则按
+   * **`"<级>:<层>"` 复合键**缓存在本实例上（见 {@link mipPassCache}），所以对同一张纹理
+   * 反复调用不会重复创建，数组 / 3D 也不会跨层串味。
+   *
+   * ## 数组 / 3D 纹理怎么处理（`#27`）
+   *
+   * `2d-array` 的每一层是**互相独立**的 subresource，所以逐层各降一遍，源层与目标层是同号层
+   * （第 s 层只由第 s 层降下来）—— 与 `gl.generateMipmap` 对数组纹理的语义一致。
+   *
+   * `3d` 的层数沿 z **减半**（WebGPU 规范：`max(1, depth >> mipLevel)`，层数组则不减半），
+   * 所以第 `level` 级写 `max(1, depth >> level)` 片，目标第 s 片采样源第 `s >> 1` 片：
+   * 同一片源的两次结果分别落到两片目标上，正好覆盖整条链。
+   *
+   * 每一层的降采样复用同一套「全屏三角形 + 双线性采样」逻辑，层级由 bind group 里的一个
+   * uniform 传进着色器（**不能**靠默认的 0 层 —— 那样每一层都会采样到第 0 层的内容，
+   * 这是本特性最容易犯的静默错误）。单层 2d 走的是**原来那条两绑定管线**，指令流逐字段不变。
    */
   generateMipmaps(): void {
     if (this._disposed) {
@@ -280,13 +302,6 @@ export class WebGPUTexture implements Texture {
           'level to generate; allocate the texture with an explicit mipLevelCount (fullMipLevelCount(size)).',
       );
     }
-    if (this.dimension !== '2d' || this.depthOrArrayLayers !== 1) {
-      throw new ValidationError(
-        `[gpu-device-api] Texture "${this.label}".generateMipmaps: only single-layer 2d textures are ` +
-          `supported, got dimension "${this.dimension}" with ${this.depthOrArrayLayers} layer(s). ` +
-          'Generate the mip chain for each array layer separately (or use a compute shader).',
-      );
-    }
     if ((this.usage & TextureUsage.RenderAttachment) === 0) {
       throw new ValidationError(
         `[gpu-device-api] Texture "${this.label}".generateMipmaps: WebGPU has no generateMipmap, so the ` +
@@ -306,50 +321,74 @@ export class WebGPUTexture implements Texture {
 
     const device = this.device.native;
     const generator = acquireMipmapGenerator(device, this.format);
+    // 单层 2d 不需要层级 uniform（保留原来那条两绑定的管线，指令流与改动前逐字段一致）；
+    // 只要还有第二层（2d-array 或 3d），就必须让着色器知道当前在降哪一层。
+    const layered = this.dimension === '3d' || this.depthOrArrayLayers > 1;
     const encoder = device.createCommandEncoder({ label: `${this.label}:mipmap` });
     for (let level = 1; level < this.mipLevelCount; level++) {
-      const { target, bindGroup } = this.acquireMipPass(device, generator, level);
-      const pass = encoder.beginRenderPass({
-        label: `${this.label}:mip${level}`,
-        colorAttachments: [
-          {
-            view: target,
-            // 目标级别会被完整覆盖（全屏三角形），clear 只是为了让 loadOp 合法。
-            loadOp: 'clear',
-            storeOp: 'store',
-            clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          },
-        ],
-      });
-      pass.setPipeline(generator.pipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.draw(3);
-      pass.end();
+      // `2d-array` 的层数不随级别变化；`3d` 的深度从第 0 级开始逐级减半（规范：max(1, depth >> level)）。
+      const layers = layered ? layerCountAtLevel(this.dimension, this.depthOrArrayLayers, level) : 1;
+      for (let layer = 0; layer < layers; layer++) {
+        const pass = this.acquireMipPass(device, generator, level, layer, layered);
+        const renderPass = encoder.beginRenderPass({
+          label: `${this.label}:mip${level}`,
+          colorAttachments: [
+            {
+              view: pass.target,
+              // 目标级别会被完整覆盖（全屏三角形），clear 只是为了让 loadOp 合法。
+              loadOp: 'clear',
+              storeOp: 'store',
+              clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            },
+          ],
+        });
+        renderPass.setPipeline(pass.pipeline);
+        renderPass.setBindGroup(0, pass.bindGroup);
+        renderPass.draw(3);
+        renderPass.end();
+      }
     }
     device.queue.submit([encoder.finish()]);
   }
 
   /**
-   * 取出（必要时创建）某一级降采样要用的原生对象：源 view、目标 view、bind group。
+   * 取出（必要时创建）某一级、某一层降采样要用的原生对象：源 view、目标 view、bind group
+   * （数组 / 3D 时还包括传层号的 uniform buffer）。
    *
    * 创建参数与缓存引入前**逐字段一致**（label / dimension / 覆盖的 mip 范围 / 覆盖的层范围），
-   * 否则会得到「看起来一样、其实范围或格式不同」的隐蔽错误。缓存的键是级：同一级在每次调用里
-   * 的源/目标/绑定完全相同，因此只有第一次调用会真的创建。
+   * 否则会得到「看起来一样、其实范围或格式不同」的隐蔽错误。缓存的键是 `"<级>:<层>"` 复合键：
+   * 同一个 (级, 层) 在每次调用里的源/目标/绑定完全相同，因此只有第一次调用会真的创建；
+   * 而不同的层一定落在不同的条目上，不会互相冒充。
    *
-   * `generator` 由 (device, 纹理格式) 唯一决定，而这两者对本纹理是常量，所以缓存的 bind group
+   * `generator` 由 (device, 纹理格式) 唯一决定，而这两者对纹理是常量，所以缓存的 bind group
    * 永远与当前的管线布局匹配。
    */
-  private acquireMipPass(device: GPUDevice, generator: MipmapGenerator, level: number): MipDownsamplePass {
-    const cached = this.mipPassCache.get(level);
+  private acquireMipPass(
+    device: GPUDevice,
+    generator: MipmapGenerator,
+    level: number,
+    layer: number,
+    layered: boolean,
+  ): MipDownsamplePass {
+    const key = mipPassCacheKey(level, layer);
+    const cached = this.mipPassCache.get(key);
     if (cached !== undefined) return cached;
-    // 源与目标各建一个只覆盖单级的 view：它们属于**不同的 subresource**，
+    // 源与目标各建一个只覆盖「单级单层」的 view：它们属于**不同的 subresource**，
     // 因此可以在相邻的 pass 里一个当采样纹理、一个当颜色附件（同一 pass 内互换才是非法的）。
+    //
+    // 源层的算法：
+    // - `2d-array`：层数不随级别变化，第 s 层只由上一级的第 s 层降下来（逐层独立）；
+    // - `3d`：目标第 s 层覆盖的是源 `[2s, 2s+1]` 两片，这里取其中**离采样点最近的那一片**
+    //   （源第 `2s` 片，即 `layer << 1`）—— 与「把 3D 纹理的每一片当独立的 2D 纹理逐层降采样」
+    //   这一通行做法一致，代价是 z 方向没有做面积平均（见方法注释）。
+    const sourceLayer = this.dimension === '3d' ? layer << 1 : layer;
     const source = this.native.createView({
       label: `${this.label}:mip${level - 1}`,
       dimension: '2d',
       baseMipLevel: level - 1,
       mipLevelCount: 1,
-      baseArrayLayer: 0,
+      baseArrayLayer: sourceLayer,
+      // 目标第 s 层对 `2d-array` 就是源第 s 层；对 `3d` 是源第 2s 片（两片里的一片）。
       arrayLayerCount: 1,
     });
     const target = this.native.createView({
@@ -357,19 +396,55 @@ export class WebGPUTexture implements Texture {
       dimension: '2d',
       baseMipLevel: level,
       mipLevelCount: 1,
-      baseArrayLayer: 0,
+      baseArrayLayer: layer,
       arrayLayerCount: 1,
     });
+
+    if (!layered) {
+      const bindGroup = device.createBindGroup({
+        label: `${this.label}:mip${level}`,
+        layout: generator.bindGroupLayout,
+        entries: [
+          { binding: 0, resource: source },
+          { binding: 1, resource: generator.sampler },
+        ],
+      });
+      const pass: MipDownsamplePass = { source, target, bindGroup, pipeline: generator.pipeline };
+      this.mipPassCache.set(key, pass);
+      return pass;
+    }
+
+    /*
+     * 层级 uniform：三个 f32 —— (源层号, 0, 0)。
+     *
+     * 着色器用 `textureSampleLevel(texture_2d_array<f32>, ...)` 时必须显式给出层号，
+     * 否则默认采第 0 层：那样数组的每一层都会拿到第 0 层的内容，GPU 不报错、画面全错。
+     * 参数只与 (级, 层) 有关，所以随 pass 一起缓存，不需要每次调用重写。
+     */
+    const layerUniform = device.createBuffer({
+      label: `${this.label}:mip${level}:layer`,
+      size: 16, // uniform buffer 的最小绑定大小是 16 字节（我们只用前 4 个）。
+      usage: MIPMAP_UNIFORM_USAGE,
+    });
+    device.queue.writeBuffer(layerUniform, 0, new Float32Array([sourceLayer, 0, 0, 0]));
+    // 数组 / 3D 才需要这条三绑定管线；`layered()` 首次调用时创建，之后复用。
+    const layeredObjects = generator.layered();
     const bindGroup = device.createBindGroup({
       label: `${this.label}:mip${level}`,
-      layout: generator.bindGroupLayout,
+      layout: layeredObjects.bindGroupLayout,
       entries: [
         { binding: 0, resource: source },
         { binding: 1, resource: generator.sampler },
+        { binding: 2, resource: { buffer: layerUniform } },
       ],
     });
-    const pass: MipDownsamplePass = { source, target, bindGroup };
-    this.mipPassCache.set(level, pass);
+    const pass: MipDownsamplePass = {
+      source,
+      target,
+      bindGroup,
+      pipeline: layeredObjects.pipeline,
+    };
+    this.mipPassCache.set(key, pass);
     return pass;
   }
 
@@ -416,7 +491,7 @@ function viewCacheKey(d: TextureView['descriptor']): string {
 /* ------------------------------------------------------------------------------------------------ */
 
 /**
- * 生成 mip 用的全屏三角形着色器。
+ * 生成 mip 用的全屏三角形着色器（单层 2d）。
  *
  * 顶点着色器不发顶点缓冲：`@builtin(vertex_index)` 直接算出覆盖整个裁剪空间的大三角形，
  * 顺便把 uv 一起插值出来（三个角是 (0,0)、(2,0)、(0,2)，可见区就是 uv 的 [0,1]²）。
@@ -447,32 +522,113 @@ fn fsMain(in: VertexOutput) -> @location(0) vec4f {
 }
 `;
 
+/**
+ * 数组 / 3D mip 降采样用的着色器：与上面逐字节相同，只多一个**层级 uniform**。
+ *
+ * 为什么必须显式传层号：`texture_2d_array<f32>` 的 `textureSampleLevel(..., vec2f uv, level)`
+ * 重载**默认采第 0 层**，没有「当前附件层」这种隐式绑定（WGSL 的 `@builtin(layer)` 只在顶点
+ * 阶段可用，片元阶段不能拿来当附件层）。如果不传层号，数组的每一层都会拿到第 0 层的内容 ——
+ * GPU 不报任何错，只是画面全错。这是本特性最容易犯的静默错误，所以层号走 uniform 显式传进
+ * 片元着色器。
+ *
+ * uniform 的 `x` 就是「本层要从源纹理的哪一层采样」（见 `WebGPUTexture.acquireMipPass`）；
+ * `y` / `z` 留作扩展（目前恒为 0）。
+ */
+const MIPMAP_DOWNSAMPLE_LAYERED_WGSL = `
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) uv: vec2f,
+}
+
+struct LayerParams {
+  layer: vec3f,
+}
+
+@group(0) @binding(0) var sourceTexture: texture_2d_array<f32>;
+@group(0) @binding(1) var sourceSampler: sampler;
+@group(0) @binding(2) var<uniform> params: LayerParams;
+
+@vertex
+fn vsMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+  let uv = vec2f(f32((vertexIndex << 1u) & 2u), f32(vertexIndex & 2u));
+  var out: VertexOutput;
+  out.uv = uv;
+  out.position = vec4f(uv * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
+  return out;
+}
+
+@fragment
+fn fsMain(in: VertexOutput) -> @location(0) vec4f {
+  let coord = vec3f(in.uv, params.layer.x);
+  return textureSampleLevel(sourceTexture, sourceSampler, coord, 0.0);
+}
+`;
+
 interface MipmapGenerator {
+  /** 单层 2d 用的两绑定管线（纹理 + 采样器）。 */
   readonly pipeline: GPURenderPipeline;
   readonly bindGroupLayout: GPUBindGroupLayout;
+  /** 采样器与层级无关，两条管线共用。 */
   readonly sampler: GPUSampler;
+  /**
+   * 数组 / 3D 用的三绑定管线（多一个层级 uniform），**首次需要时才创建**。
+   *
+   * 「按时创建」不是微优化：单层 2d 的调用方（绝大多数）不该因为这条路径付出一次额外的
+   * `createBindGroupLayout` + `createRenderPipeline`，更不该在管线缓存计数上看到两条管线
+   * （既有契约测试 `webgpu-mipmap.test.ts` 明确断言「同一格式只建一条管线」）。
+   */
+  layered(): { pipeline: GPURenderPipeline; bindGroupLayout: GPUBindGroupLayout };
 }
 
 /**
- * 一级 mip 降采样需要的原生对象。
+ * 一级、一层 mip 降采样需要的原生对象。
  *
- * 三者都是「这张纹理 + 这一级」的纯函数结果，所以可以整组缓存（见 `WebGPUTexture.mipPassCache`）。
- * `source` 只覆盖 mip `level - 1`、`target` 只覆盖 mip `level`：它们必须是不同的 view，
- * 因为同一个 render pass 里不能既把某个 subresource 当采样源、又把它当颜色附件。
+ * 它们都是「这张纹理 + 这一级 + 这一层」的纯函数结果，所以可以整组缓存
+ * （见 `WebGPUTexture.mipPassCache` 的复合键）。`source` 只覆盖 mip `level - 1` 的对应层、
+ * `target` 只覆盖 mip `level` 的本层：它们必须是不同的 view，因为同一个 render pass 里不能
+ * 既把某个 subresource 当采样源、又把它当颜色附件。
  */
 interface MipDownsamplePass {
   readonly source: GPUTextureView;
   readonly target: GPUTextureView;
   readonly bindGroup: GPUBindGroup;
+  /** 本 pass 要用哪条管线（决定 bind group 的绑定数）。 */
+  readonly pipeline: GPURenderPipeline;
 }
 
 /** 每个原生 device 一份，键是 GPU 纹理格式（render pipeline 的 target format 与它绑定）。 */
 const mipmapGenerators = new WeakMap<GPUDevice, Map<string, MipmapGenerator>>();
-/** 着色器模块与格式无关，每个 device 只建一次。 */
-const mipmapShaderModules = new WeakMap<GPUDevice, GPUShaderModule>();
+/** 着色器模块与格式无关，每个 device 每种变体只建一次。 */
+const mipmapShaderModules = new WeakMap<GPUDevice, { plain: GPUShaderModule; layered: GPUShaderModule }>();
+
+/** 缓存键：**级与层都要在键里**，少一个字段就会跨层串味（见 `WebGPUTexture.mipPassCache`）。 */
+function mipPassCacheKey(level: number, layer: number): string {
+  return `${level}:${layer}`;
+}
 
 /**
- * 取出（必要时创建）某个纹理格式的降采样管线。
+ * 层级 uniform buffer 的 usage：`UNIFORM | COPY_DST`（0x40 | 0x08）。
+ *
+ * 这里刻意用字面量而不是全局的 `GPUBufferUsage`：本模块在 Node 侧（单测、SSR、离线工具）也会被
+ * 导入，那时 `GPUBufferUsage` 根本不存在 —— 用全局会在「只是创建一张纹理、根本没走多维 mip 路径」
+ * 的情况下就抛 `ReferenceError`。其它地方用全局是因为它们只在浏览器里跑，这里不是。
+ */
+const MIPMAP_UNIFORM_USAGE = 0x0040 | 0x0008;
+
+/**
+ * 某一级的有多少层要降采样。
+ *
+ * - `2d`（含 `2d-array`）：`depthOrArrayLayers` **不随级别变化**（WebGPU 规范
+ *   `Logical miplevel-specific texture extent`）—— 数组的层是彼此独立的 subresource；
+ * - `3d`：深度沿 z 减半，第 `level` 级是 `max(1, depth >> level)`（同一处规范）。
+ */
+function layerCountAtLevel(dimension: TextureDimension, depthOrArrayLayers: number, level: number): number {
+  if (dimension === '3d') return Math.max(1, depthOrArrayLayers >> level);
+  return depthOrArrayLayers;
+}
+
+/**
+ * 取出（必要时创建）某个纹理格式的降采样管线（单层 2d 与数组 / 3D 两条）。
  *
  * 用 WeakMap 挂在小写的原生 `GPUDevice` 上：设备被回收时缓存自然一起消失，不需要任何清理钩子。
  */
@@ -485,10 +641,16 @@ function acquireMipmapGenerator(device: GPUDevice, format: TextureFormat): Mipma
   const cached = generators.get(format);
   if (cached) return cached;
 
-  let shaderModule = mipmapShaderModules.get(device);
-  if (!shaderModule) {
-    shaderModule = device.createShaderModule({ label: 'mipmap-downsample', code: MIPMAP_DOWNSAMPLE_WGSL });
-    mipmapShaderModules.set(device, shaderModule);
+  let shaderModules = mipmapShaderModules.get(device);
+  if (!shaderModules) {
+    shaderModules = {
+      plain: device.createShaderModule({ label: 'mipmap-downsample', code: MIPMAP_DOWNSAMPLE_WGSL }),
+      layered: device.createShaderModule({
+        label: 'mipmap-downsample-layered',
+        code: MIPMAP_DOWNSAMPLE_LAYERED_WGSL,
+      }),
+    };
+    mipmapShaderModules.set(device, shaderModules);
   }
 
   const label = `mipmap-downsample:${format}`;
@@ -507,17 +669,19 @@ function acquireMipmapGenerator(device: GPUDevice, format: TextureFormat): Mipma
       },
     ],
   });
+  const targetFormat = toGPUTextureFormat(format);
   const pipeline = device.createRenderPipeline({
     label,
     layout: device.createPipelineLayout({ label, bindGroupLayouts: [bindGroupLayout] }),
-    vertex: { module: shaderModule, entryPoint: 'vsMain' },
+    vertex: { module: shaderModules.plain, entryPoint: 'vsMain' },
     fragment: {
-      module: shaderModule,
+      module: shaderModules.plain,
       entryPoint: 'fsMain',
-      targets: [{ format: toGPUTextureFormat(format) }],
+      targets: [{ format: targetFormat }],
     },
     primitive: { topology: 'triangle-list' },
   });
+
   // 采样器固定为 linear + clamp：目标像素中心正对源 2x2 纹素的正中，双线性采样恰好是盒式平均；
   // clamp 避免边缘像素因浮点误差采到纹理外而受 wrap 模式影响。
   const sampler = device.createSampler({
@@ -529,7 +693,51 @@ function acquireMipmapGenerator(device: GPUDevice, format: TextureFormat): Mipma
     mipmapFilter: 'nearest',
   });
 
-  const generator: MipmapGenerator = { pipeline, bindGroupLayout, sampler };
+  let layeredPair: { pipeline: GPURenderPipeline; bindGroupLayout: GPUBindGroupLayout } | null = null;
+  const generator: MipmapGenerator = {
+    pipeline,
+    bindGroupLayout,
+    sampler,
+    layered() {
+      if (layeredPair) return layeredPair;
+      const layeredLabel = `${label}:layered`;
+      const layeredBindGroupLayout = device.createBindGroupLayout({
+        label: layeredLabel,
+        entries: [
+          {
+            binding: 0,
+            visibility: GPU_SHADER_STAGE.FRAGMENT,
+            // 视图本身仍是单层的 2d view（逐层降采样），但绑定类型必须是 array ——
+            // 这样着色器才能用层号索引，而不是被固定在第 0 层。
+            texture: { sampleType: 'float', viewDimension: '2d-array' },
+          },
+          {
+            binding: 1,
+            visibility: GPU_SHADER_STAGE.FRAGMENT,
+            sampler: { type: 'filtering' },
+          },
+          {
+            binding: 2,
+            visibility: GPU_SHADER_STAGE.FRAGMENT,
+            buffer: { type: 'uniform', minBindingSize: 16 },
+          },
+        ],
+      });
+      const layeredPipeline = device.createRenderPipeline({
+        label: layeredLabel,
+        layout: device.createPipelineLayout({ label: layeredLabel, bindGroupLayouts: [layeredBindGroupLayout] }),
+        vertex: { module: shaderModules.layered, entryPoint: 'vsMain' },
+        fragment: {
+          module: shaderModules.layered,
+          entryPoint: 'fsMain',
+          targets: [{ format: targetFormat }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+      layeredPair = { pipeline: layeredPipeline, bindGroupLayout: layeredBindGroupLayout };
+      return layeredPair;
+    },
+  };
   generators.set(format, generator);
   return generator;
 }

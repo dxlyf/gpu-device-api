@@ -96,9 +96,14 @@ function createMockMipGpu(): MockMipGpu {
       submit: (): void => {
         counters.submits += 1;
       },
-      writeBuffer: (buffer: MockBuffer, offset: number, data: ArrayBuffer | Uint8Array): void => {
+      writeBuffer: (buffer: MockBuffer, offset: number, data: ArrayBuffer | ArrayBufferView): void => {
         counters.writeBuffer += 1;
-        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        // 真实的 `queue.writeBuffer` 三种入参都收（ArrayBuffer / TypedArray / DataView），
+        // mock 也照收，否则「传了视图」的写法会被 mock 静默吞掉。
+        const bytes =
+          data instanceof ArrayBuffer
+            ? new Uint8Array(data)
+            : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
         buffer.data.set(bytes, offset);
       },
     },
@@ -176,10 +181,11 @@ function createMockMipGpu(): MockMipGpu {
           },
           setBindGroup: (_index: number, bindGroup: MockBindGroup): void => {
             pass.bindGroup = bindGroup;
-            const uniform = bindGroup.entries.find((entry) => entry.binding === 2)?.resource;
-            if (uniform && typeof uniform === 'object' && 'data' in uniform) {
-              pass.uniform = uniform as MockBuffer;
-            }
+            // uniform 条目的原生形状是 `{ buffer }`（可带 offset/size），这里解出 buffer 本身。
+            const resource = bindGroup.entries.find((entry) => entry.binding === 2)?.resource as
+              | { buffer?: MockBuffer }
+              | undefined;
+            if (resource?.buffer) pass.uniform = resource.buffer;
           },
           draw: (vertexCount: number): void => {
             pass.vertexCount = vertexCount;
@@ -271,14 +277,14 @@ describe('WebGPUTexture.generateMipmaps()：2d-array 支持（#27）', () => {
 
     texture.generateMipmaps();
 
-    // 3 级 × 4 层 = 12 个 pass。
-    expect(mock.passes).toHaveLength(12);
+    // 2 级（level 1..2）× 4 层 = 8 个 pass。
+    expect(mock.passes).toHaveLength(8);
     // 每个 pass 一个目标 view + 一个源 view；每层每级各建一次。
-    expect(mock.counters.createView).toBe(24);
-    expect(mock.counters.createBindGroup).toBe(12);
+    expect(mock.counters.createView).toBe(16);
+    expect(mock.counters.createBindGroup).toBe(8);
     expect(mock.counters.submits).toBe(1);
 
-    // 缓存键必须把「层」纳进来：12 个 (级, 层) 组合各一条，而不是 2 条（只有级）。
+    // 缓存键必须把「层」纳进来：8 个 (级, 层) 组合各一条，而不是 2 条（只有级）。
     const keys = [...mipCacheSeam(texture).mipPassCache.keys()].sort();
     expect(keys).toEqual([
       '1:0',
@@ -304,7 +310,8 @@ describe('WebGPUTexture.generateMipmaps()：2d-array 支持（#27）', () => {
     texture.generateMipmaps();
 
     // 2d-array 的 depthOrArrayLayers 在每一级都不变（与 core 的 mipLevelExtent 一致），
-    // 所以 3 层 × 2 级 = 6 个 pass。
+    // 所以 3 层 × 2 个可生成级别（mipLevelCount=3 → level 1 与 2）= 6 个 pass ——
+    // 非 2 的幂的层数**不会**像 3D 的深度那样在某一级被砍掉。
     expect(mock.passes).toHaveLength(6);
     expect([...mipCacheSeam(texture).mipPassCache.keys()].sort()).toEqual([
       '1:0',
@@ -327,7 +334,7 @@ describe('WebGPUTexture.generateMipmaps()：2d-array 支持（#27）', () => {
 
     texture.generateMipmaps();
 
-    // 目标 view：baseMipLevel = 级、baseArrayLayer = 层、只覆盖 1 级 1 层。
+    // 目标 view：baseMipLevel = 级、baseArrayLayer = 层、只覆盖 1 级 1 层（2 层 × 2 级 = 4 个）。
     const targets = mock.passes.map((pass) => viewShape(pass.target));
     expect(targets).toEqual([
       { label: 'mips:mip1', dimension: '2d', baseMipLevel: 1, mipLevelCount: 1, baseArrayLayer: 0, arrayLayerCount: 1 },
@@ -370,7 +377,7 @@ describe('WebGPUTexture.generateMipmaps()：2d-array 支持（#27）', () => {
       return JSON.stringify([pass.label, target, source]);
     });
     expect(new Set(signatures).size).toBe(signatures.length);
-    expect(signatures).toHaveLength(12);
+    expect(signatures).toHaveLength(8);
 
     texture.destroy();
   });
@@ -392,8 +399,11 @@ describe('WebGPUTexture.generateMipmaps()：2d-array 支持（#27）', () => {
       expect(entries[0]!.resource).not.toBe(pass.target);
       expect(entries[1]!.resource).toBeTypeOf('object');
       // 层参数必须是「该层」的值（0..layerCount-1），不能恒为 0。
-      const uniform = entries[2]!.resource as MockBuffer;
-      expect(Array.from(uniform.data)).toEqual([index, 0, 0, 0]);
+      // 原生 bind group 的 buffer 条目形状是 `{ buffer }`（可带 offset/size），这里照形状解一层；
+      // uniform 是 16 字节的 `vec3f + padding`，只看前 4 个浮点。
+      const uniform = entries[2]!.resource as { buffer: MockBuffer };
+      const floats = new Float32Array(uniform.buffer.data.buffer, uniform.buffer.data.byteOffset, 4);
+      expect([...floats]).toEqual([index, 0, 0, 0]);
     });
 
     texture.destroy();
@@ -493,7 +503,7 @@ describe('WebGPUTexture.generateMipmaps()：3d 支持（#27）', () => {
     texture.destroy();
   });
 
-  it('3d：目标层 s 的源层是「上一级的第 s>>1 层」（沿 z 减半时不能都从第 0 层采样）', () => {
+  it('3d：目标层 s 的源层是「上一层里覆盖 s 的那一片」（沿 z 减半不能都从第 0 层采样）', () => {
     const mock = createMockMipGpu();
     const texture = createTexture(mock, {
       dimension: '3d',
@@ -503,8 +513,8 @@ describe('WebGPUTexture.generateMipmaps()：3d 支持（#27）', () => {
 
     texture.generateMipmaps();
 
-    // level 1 写 2 层（源是 level 0 的 2 层：s=0→0、s=1→1）；
-    // level 2 写 1 层（源是 level 1 的唯一一层，即 0）。
+    // 3D 的深度逐级减半：level 1 写 2 片（源是 level 0 的 4 片，目标第 s 片取源第 2s 片）；
+    // level 2 写 1 片（源是 level 1 的第 0 片）。
     const pairs = mock.passes.map((pass) => {
       const target = viewShape(pass.target);
       const source = viewShape(pass.bindGroup!.entries[0]!.resource as MockView);
@@ -512,13 +522,13 @@ describe('WebGPUTexture.generateMipmaps()：3d 支持（#27）', () => {
     });
     expect(pairs).toEqual([
       [1, 0, 0, 0],
-      [1, 1, 0, 1],
+      [1, 1, 0, 2],
       [2, 0, 1, 0],
     ]);
 
     // 「都从第 0 层采样」是这个改动最容易犯的静默错误：这里显式排除它。
     const sampledLayers = pairs.map((pair) => pair[3]);
-    expect(sampledLayers).toContain(1);
+    expect(new Set(sampledLayers).size).toBeGreaterThan(1);
 
     texture.destroy();
   });

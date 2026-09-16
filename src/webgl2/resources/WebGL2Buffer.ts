@@ -34,14 +34,34 @@
  *
  * 因此 `unmap()` 在 WebGL2 上是**同步生效**的，而 WebGPU 是队列时序。这个差异只影响
  * 「同一帧里改同一块 buffer 再重复读回」这种极端用法，正常的上传/读回流程两者一致。
+ *
+ * ## `mappedAtCreation`
+ *
+ * GL 完全没有这个概念，本后端用影子内存模拟：创建时就把影子缓冲分配好、状态置为 `'mapped'`，
+ * 于是 `getMappedRange()` 立刻可用；`unmap()` 时按 `'write'` 路径整段上传。与 WebGPU 侧
+ * （原生支持）相比，调用方看到的接口与状态机完全一致，只有一条实现细节不同：这里的初始内容
+ * 是零（影子缓冲是新分配的），而原生映射内存的内容**未定义** —— 所以任何依赖初始内容的代码
+ * 两个后端都不可靠，契约里已把这点写明。
+ *
+ * 另外 GL 的映射没有「等待」这一段：`mapAsync()` 是同步完成 CPU 侧准备的，因此本后端的
+ * `mapState` 只会是 `'unmapped'` 或 `'mapped'`，永远不出现 `'pending'`。
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { BufferUsage } from '../../core/enums/BufferUsage.js';
 import { assertNonNegativeInteger, assertPositiveInteger } from '../../utils/assert.js';
 import { nextId } from '../../utils/id.js';
-import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
+import { createLogger } from '../../utils/logger.js';
+import type {
+  Buffer,
+  BufferDescriptor,
+  BufferMapState,
+  MapMode,
+  MappedRange,
+} from '../../core/resources/Buffer.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
+
+const logger = createLogger('gpu-device-api');
 
 /** WebGL2 无法表达的 usage 位，创建时直接拦下。 */
 const UNSUPPORTED_USAGE: readonly { flag: number; name: string; reason: string }[] = [
@@ -122,6 +142,14 @@ export class WebGL2Buffer implements Buffer {
   /** 以 buffer 引用的形式登记 usage，便于调试时追踪（GL 本身不关心）。 */
   private readonly usages: BufferUsage;
   private mapping: Mapping | null = null;
+  /**
+   * 映射状态。GL 没有原生映射，本后端用影子缓冲模拟，所以只有 `'unmapped'` 与 `'mapped'`
+   * 两个状态（没有「等待原生」的 `'pending'` 窗口）。
+   *
+   * 与 WebGPU 后端一样，状态是唯一真相：`mapping` 是它的实现细节，`mapped` 由它派生，
+   * `getMappedRange()` 只看状态。
+   */
+  private _mapState: BufferMapState = 'unmapped';
   private _disposed = false;
 
   constructor(
@@ -163,6 +191,15 @@ export class WebGL2Buffer implements Buffer {
 
     // 先用 bufferData 一次性分配（内容未定义），后续用 bufferSubData 填充。
     this.withTarget(() => gl.bufferData(this.bindingTarget, descriptor.size, gl.DYNAMIC_DRAW));
+
+    if (descriptor.mappedAtCreation === true) {
+      // 模拟「创建即映射」：影子缓冲现在就有了，状态直接是 'mapped'。
+      // dirty: true ⇒ 哪怕调用方一个字节都没写，`unmap()` 也会按 'write' 路径整段上传
+      // （上传的是零），与 WebGPU 侧「这次映射的内容会被提交」的语义一致。
+      const data = new ArrayBuffer(descriptor.size);
+      this.mapping = { mode: 'write', offset: 0, size: descriptor.size, data, dirty: true };
+      this._mapState = 'mapped';
+    }
   }
 
   get disposed(): boolean {
@@ -179,14 +216,21 @@ export class WebGL2Buffer implements Buffer {
     return this.usages;
   }
 
+  get mapState(): BufferMapState {
+    return this._mapState;
+  }
+
+  /** 由 {@link WebGL2Buffer.mapState} 派生，两者任何时候都一致。 */
   get mapped(): boolean {
-    return this.mapping !== null;
+    return this._mapState === 'mapped';
   }
 
   async mapAsync(mode: MapMode, offset = 0, size = this.size - offset): Promise<ArrayBuffer> {
     this.assertUsable('mapAsync');
-    if (this.mapping) {
-      throw new ValidationError(`[gpu-device-api] buffer「${this.label}」已经处于映射状态，请先 unmap()。`);
+    if (this._mapState !== 'unmapped') {
+      throw new ValidationError(
+        `[gpu-device-api] buffer「${this.label}」已处于映射状态（mapState: "${this._mapState}"），请先 unmap()。`,
+      );
     }
     assertNonNegativeInteger(offset, 'mapAsync 的 offset');
     assertPositiveInteger(size, 'mapAsync 的 size');
@@ -209,6 +253,8 @@ export class WebGL2Buffer implements Buffer {
     } else {
       this.mapping = { mode, offset, size, data: new ArrayBuffer(size), dirty: true };
     }
+    // GL 的映射是同步准备好的，所以这里直接是 'mapped'，没有 'pending' 这个中间态。
+    this._mapState = 'mapped';
     return this.mapping.data;
   }
 
@@ -233,9 +279,11 @@ export class WebGL2Buffer implements Buffer {
    */
   getMappedRange(offset = 0, size?: number): MappedRange {
     const mapping = this.mapping;
-    if (!mapping) {
+    // 状态是唯一真相：不是 'mapped' 就一定报错（`mapState` 与这里的判断必须同源）。
+    if (this._mapState !== 'mapped' || !mapping) {
       throw new ValidationError(
-        `[gpu-device-api] buffer「${this.label}」尚未映射，请先 await mapAsync()。`,
+        `[gpu-device-api] buffer「${this.label}」尚未映射（mapState: "${this._mapState}"），` +
+          '请先 await mapAsync()（或在创建时用 mappedAtCreation: true）。',
       );
     }
     const length = size ?? mapping.size - offset;
@@ -255,8 +303,20 @@ export class WebGL2Buffer implements Buffer {
    */
   unmap(): void {
     const mapping = this.mapping;
-    if (!mapping) return;
+    if (!mapping) {
+      // 状态与实现不一致才可能走到这里；把状态复位，避免留下一个「说 mapped 却没有影子内存」
+      // 的对象（那正是本会话最忌讳的「状态撒谎」）。
+      const stale = this._mapState;
+      if (stale !== 'unmapped') {
+        this._mapState = 'unmapped';
+        logger.warn(
+          `buffer「${this.label}」的 mapState 是 "${stale}" 但内部没有映射记录；状态已复位为 'unmapped'。`,
+        );
+      }
+      return;
+    }
     this.mapping = null;
+    this._mapState = 'unmapped';
     if (mapping.mode === 'write' && mapping.dirty) {
       this.upload(mapping.offset, new Uint8Array(mapping.data));
     }
@@ -284,7 +344,20 @@ export class WebGL2Buffer implements Buffer {
 
   destroy(): void {
     if (this._disposed) return;
+    /*
+     * 与 WebGPU 后端的取舍一致：`mappedAtCreation` 创建却没 `unmap()` 就销毁时，
+     * **不**把影子内容上传（那会让一次被放弃的写法静默生效），但也不抛异常 ——
+     * `destroy()` 是清理路径，抛异常只会让资源泄漏。这里发一条 warn 说明数据丢了，
+     * 因为「创建即映射之后忘记 unmap」是本特性最容易踩的坑。
+     */
+    if (this.mapping !== null && this.mapping.mode === 'write' && this.mapping.dirty) {
+      logger.warn(
+        `buffer「${this.label}」在被映射（mapState: "${this._mapState}"）的状态下被 destroy()，` +
+          '这次写入的内容没有上传到 GPU。请在 destroy() 之前调用 unmap()。',
+      );
+    }
     this._disposed = true;
+    this._mapState = 'unmapped';
     this.mapping = null;
     this.state.forgetUniformBuffer(this.native);
     this.state.forgetIndexBuffer(this.native);

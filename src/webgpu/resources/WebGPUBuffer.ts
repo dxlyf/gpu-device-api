@@ -6,7 +6,13 @@
  * 使得在错误时机访问映射范围时能给出可读的报错，而不是 WebGPU 的通用校验失败。
  */
 
-import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
+import type {
+  Buffer,
+  BufferDescriptor,
+  BufferMapState,
+  MapMode,
+  MappedRange,
+} from '../../core/resources/Buffer.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { assertNonNegativeInteger, assertPositiveInteger } from '../../utils/assert.js';
@@ -20,7 +26,15 @@ export class WebGPUBuffer implements Buffer {
 
   private readonly device: WebGPUDevice;
   private _disposed = false;
-  private _mapped = false;
+  /**
+   * 映射状态，与原生 `GPUBuffer.mapState` 同一套语义（`'unmapped' | 'pending' | 'mapped'`）。
+   *
+   * 用一个状态而不是 `mapped` 布尔，是为了**如实反映 `mapAsync()` 还没 settle 的那一段**：
+   * 那时原生 `[[pending_map]]` 非 null、`[[mapping]]` 还是 null，`getMappedRange()` 必须报错。
+   * 若只维护布尔，`mapAsync()` 一发出就可能被读成「已映射」，调用方就会在不该取范围的时候取
+   * 范围 —— 那正是本会话反复修的「状态撒谎」。所以状态机是唯一真相，`mapped` 由它派生。
+   */
+  private _mapState: BufferMapState = 'unmapped';
   /**
    * `mapAsync` 时向原生取到的**整段映射内存**（`GPUBuffer.getMappedRange()` 的返回值）。
    *
@@ -33,6 +47,8 @@ export class WebGPUBuffer implements Buffer {
    *    后续一律在它上面建视图，不再往原生对象上问第二遍。
    * 2. 它是原生返回的、指向**映射内存**的 `ArrayBuffer`：在它上面建 TypedArray 视图就是
    *    「不拷贝地访问映射内存」，写入自然落到 buffer 上。
+   *
+   * `mappedAtCreation: true` 时这块内存同样在构造期拿到（原生创建完就已映射）。
    */
   private mappedRange: { offset: number; size: number; data: ArrayBuffer } | null = null;
 
@@ -56,19 +72,42 @@ export class WebGPUBuffer implements Buffer {
 
     this.size = descriptor.size;
     this.usage = descriptor.usage;
+    const mappedAtCreation = descriptor.mappedAtCreation === true;
     this.native = device.native.createBuffer({
       label: this.label,
       size: descriptor.size,
       usage: toGPUBufferUsage(descriptor.usage),
+      // 只有为 true 时才把字段交给原生：原生 descriptor 的形状对 native 校验有影响，
+      // 「多传一个恒为 false 的字段」没有必要。
+      ...(mappedAtCreation ? { mappedAtCreation: true } : {}),
     });
+
+    if (mappedAtCreation) {
+      /*
+       * 原生语义：`createBuffer({ mappedAtCreation: true })` 返回时 buffer 已在映射中
+       * （`[[mapping]]` 非 null），整段范围就是这次的映射范围，可以直接取。
+       *
+       * 这里主动取一次并记下来，与 `mapAsync()` 走同一条视图路径 —— 因为原生同一段范围
+       * 只能取一次，交给上层之后再想取子范围就必须从这块内存上建视图。取不到就说明设备
+       * 侧创建失败，如实报错而不是留下一个说 'mapped' 却取不到范围的对象。
+       */
+      const data = this.native.getMappedRange(0, descriptor.size);
+      this.mappedRange = { offset: 0, size: descriptor.size, data };
+      this._mapState = 'mapped';
+    }
   }
 
   get disposed(): boolean {
     return this._disposed;
   }
 
+  get mapState(): BufferMapState {
+    return this._mapState;
+  }
+
+  /** 由 {@link WebGPUBuffer.mapState} 派生，两者任何时候都一致。 */
   get mapped(): boolean {
-    return this._mapped;
+    return this._mapState === 'mapped';
   }
 
   /** 当前 buffer 是否仍然可用（未释放、device 未销毁）。 */
@@ -99,21 +138,58 @@ export class WebGPUBuffer implements Buffer {
    * 传 0 在 `offset > 0` 时会直接报错。本类对外的 `getMappedRange(offset, size)` 则采用
    * 「相对映射起点」的约定（与 WebGL2 后端一致，见 {@link WebGPUBuffer.getMappedRange}），
    * 两者之间的平移只发生在这一处。
+   *
+   * ## 状态机
+   *
+   * `mapState` 在调用后立即变成 `'pending'`（原生 `[[pending_map]]` 已设置），原生 Promise
+   * settle 之后变成 `'mapped'`。如果原生 `mapAsync()` reject（设备丢失、范围非法等），
+   * 状态**回退到 `'unmapped'`** 并把错误抛出去 —— 绝不留下一个卡在 `'pending'` 的对象
+   * （那样 `getMappedRange()` 永远报「还没映射」，而调用方又再也不能重新映射）。
    */
   async mapAsync(mode: MapMode, offset = 0, size?: number): Promise<ArrayBuffer> {
     this.assertUsable('Buffer.mapAsync');
-    if (this._mapped) {
-      throw new ValidationError(
-        `[gpu-device-api] Buffer "${this.label}" is already mapped; call unmap() before mapping it again.`,
-      );
+    if (this._mapState !== 'unmapped') {
+      const how =
+        this._mapState === 'pending'
+          ? 'a mapping is already pending; await the previous mapAsync() and call unmap() first.'
+          : 'the buffer is already mapped (mappedAtCreation or a previous mapAsync); call unmap() first.';
+      throw new ValidationError(`[gpu-device-api] Buffer "${this.label}": ${how}`);
     }
     const mapSize = size ?? this.size - offset;
     this.assertRange(offset, mapSize, 'Buffer.mapAsync');
-    await this.native.mapAsync(toGPUMapMode(mode), offset, mapSize);
-    this._mapped = true;
-    const data = this.native.getMappedRange(offset, mapSize);
-    this.mappedRange = { offset, size: mapSize, data };
-    return data;
+    this._mapState = 'pending';
+    try {
+      await this.native.mapAsync(toGPUMapMode(mode), offset, mapSize);
+      const data = this.native.getMappedRange(offset, mapSize);
+      if (this._mapState !== 'pending') {
+        /*
+         * 这次映射在等待期间已经被 `unmap()`（或 `destroy()`）放弃了。原生 `unmap()` 在映射
+         * 还没 settle 时会被忽略，所以那份映射内存此刻真的存在、必须由我们交还回去，
+         * 否则它就一直挂在这个 buffer 上（每放弃一次泄漏一块）。
+         *
+         * 交还之后本对象回到 `'unmapped'`，返回的 `data` 已经 detached —— 与「unmap() 之后
+         * 视图失效」的既有契约一致，调用方本来就不该用它。
+         */
+        try {
+          this.native.unmap();
+        } catch {
+          // 设备可能已经丢失/销毁；清理是尽力而为，不能因此让 await 的调用方拿到一个
+          // 莫名其妙的异常（本次调用已经被 unmap() 取消了）。
+        }
+        return data;
+      }
+      this.mappedRange = { offset, size: mapSize, data };
+      this._mapState = 'mapped';
+      return data;
+    } catch (error) {
+      // 只有还停在自己设置的那个 'pending' 上才回退：如果等待期间已经被 unmap() 掉，
+      // 状态已经是 'unmapped'，这里不能再把它改回去（也不能覆盖真正的取消语义）。
+      if (this._mapState === 'pending') {
+        this._mapState = 'unmapped';
+        this.mappedRange = null;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -150,9 +226,12 @@ export class WebGPUBuffer implements Buffer {
   getMappedRange(offset = 0, size?: number): MappedRange {
     this.assertUsable('Buffer.getMappedRange');
     const mapped = this.mappedRange;
-    if (!this._mapped || !mapped) {
+    // 只有 `'mapped'` 才可能有映射内存：`'pending'`（Promise 未 settle，原生 `[[mapping]]`
+    // 还是 null）与 `'unmapped'` 都必须在这里报错，而不是等原生抛一个难懂的校验错。
+    if (this._mapState !== 'mapped' || !mapped) {
       throw new ValidationError(
-        `[gpu-device-api] Buffer "${this.label}" is not mapped; await mapAsync() before calling getMappedRange().`,
+        `[gpu-device-api] Buffer "${this.label}" is not mapped (mapState: "${this._mapState}"); ` +
+          'await mapAsync() (or create it with mappedAtCreation: true) before calling getMappedRange().',
       );
     }
     const mapSize = size ?? mapped.size - offset;
@@ -169,20 +248,34 @@ export class WebGPUBuffer implements Buffer {
    *
    * 未映射时是空操作（WebGPU 的 `unmap()` 对未映射 buffer 同样是合法的空操作），
    * 这样清理路径里可以放心地无条件调用。
+   *
+   * ⚠️ `'pending'` 时**不**调用原生 `unmap()`：原生规定「映射请求还没 settle 时调用 unmap()
+   * 会被忽略」（`[[pending_map]]` 还在，`[[mapping]]` 还是 null）。所以这里只把状态推回
+   * `'unmapped'`；那次 `mapAsync()` settle 时会看到状态已经不是 `'pending'`，于是立刻把刚
+   * 拿到的映射交还给原生，而不是把它泄漏成一块谁也不管的映射内存。这样 `mapState` 既不会停在
+   * 一个用户已经放弃的 `'pending'` 上，底层资源也不会泄漏。
    */
   unmap(): void {
     if (this._disposed) return;
-    if (!this._mapped) return;
-    this._mapped = false;
+    if (this._mapState === 'unmapped') return;
+    const wasPending = this._mapState === 'pending';
+    this._mapState = 'unmapped';
     this.mappedRange = null;
-    this.native.unmap();
+    if (!wasPending) this.native.unmap();
   }
 
-  /** 释放底层分配。幂等；已映射的 buffer 会先被取消映射。 */
+  /**
+   * 释放底层分配。幂等；已映射的 buffer 会先被取消映射。
+   *
+   * 原生 `GPUBuffer.destroy()` 本身就会取消映射（并在创建时用了 `mappedAtCreation` 却没
+   * `unmap()` 的情况下负责清理），所以这里**不**额外调 `native.unmap()`：那样会在 destroy
+   * 之前把映射内存 detach 掉，而 destroy 的语义是「释放整个 buffer」，多余的一步只会让行为
+   * 更难对齐。本类只负责把自己的状态推回 `'unmapped'`，保证 `mapState` / `mapped` 不撒谎。
+   */
   destroy(): void {
     if (this._disposed) return;
     this._disposed = true;
-    this._mapped = false;
+    this._mapState = 'unmapped';
     this.mappedRange = null;
     this.native.destroy();
     // 通知设备取消追踪，否则每帧 create/destroy 的 buffer 包装对象会一直留在设备集合里。
