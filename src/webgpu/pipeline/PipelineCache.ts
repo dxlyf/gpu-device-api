@@ -14,6 +14,7 @@
 
 import type { RenderPipelineVariant } from '../../core/pipeline/RenderPipeline.js';
 import type { VertexBufferLayout } from '../../core/pipeline/VertexLayout.js';
+import type { TextureFormat } from '../../core/enums/TextureFormat.js';
 import { cacheKey, createPipelineCache, type PipelineCache as CorePipelineCache } from '../../core/pipeline/PipelineCache.js';
 import { vertexBufferLayoutsKey } from '../../core/pipeline/VertexLayout.js';
 
@@ -106,15 +107,38 @@ export function createWgpuPipelineCache<T>(
 }
 
 /**
+ * 逐位置 colorFormats 的 key 片段。
+ *
+ * 空位（`null`）写成 `none` —— 没有任何真实 `TextureFormat` 叫这个名字（`depthFormat ?? 'none'`
+ * 已经在用同一个占位符）。**必须**给空位一个占位符而不是把它跳过：`[a, null]` / `[null, a]` /
+ * `[a]` / `[a, null, null]` 是四种不同的附件布局，跳过空位就会让它们撞同一个键、
+ * 共用同一条 `GPURenderPipeline`（批 05 实测过的静默错配）。
+ *
+ * 密集列表（没有空位）拼出来的串与改动前逐字相同（`['a','b']` → `'a,b'`），
+ * 所以既有变体键不会因为这次变化而重排。
+ */
+export function colorFormatsKey(formats: readonly (TextureFormat | null)[]): string {
+  let key = '';
+  for (let index = 0; index < formats.length; index += 1) {
+    const part = formats[index] ?? 'none';
+    key = index === 0 ? part : `${key},${part}`;
+  }
+  return key;
+}
+
+/**
  * render pipeline variant 的稳定 cache key。
  *
  * 组成与 `RenderPipelineVariant` 一一对应：`colorFormats`、`sampleCount`、`depthFormat`、
  * `vertexLayouts`。attachment 格式与 sample count 变了就必须换一个 `GPURenderPipeline`，
  * 而 vertex layout 会影响 vertex buffer 的解析方式，同样必须参与 key。
+ *
+ * `colorFormats` 是**逐位置**的（空位 `null`），这里按位置拼串（见 {@link colorFormatsKey}）：
+ * 空位的位置必须体现在键里，否则 `[a, null]` 与 `[null, a]` 会共用同一条原生管线。
  */
 export function renderPipelineCacheKey(variant: RenderPipelineVariant): string {
   return cacheKey(
-    variant.colorFormats.join(','),
+    colorFormatsKey(variant.colorFormats),
     variant.sampleCount,
     variant.depthFormat ?? 'none',
     vertexBufferLayoutsKey(variant.vertexLayouts),

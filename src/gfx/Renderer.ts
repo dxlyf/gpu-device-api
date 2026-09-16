@@ -1480,7 +1480,8 @@ export class Renderer {
    *   `createRenderPipeline()` 的那份描述（材质声明几个属性就是几个槽位，顺序也一样）；
    * - `colorFormats` / `depthFormat` / `sampleCount`：来自 {@link createPassDescriptor} 的
    *   附件列表 —— 与 `beginFrame()` 调用的是同一个方法，附件来源同样是 canvas
-   *   或 `options.target`。
+   *   或 `options.target`。`colorFormats` 是**逐位置**的（空位写 `null`），与 core 的
+   *   `WebGPURenderPassLayout.colorFormats` 同一套语义。
    *
    * `sampleCount` 两个后端的解析口径不同，这里照抄各自的渲染通道解析器，而不是取「看起来对」的值：
    * WebGPU 取附件纹理的采样数（画布 MSAA 会体现在这里），WebGL2 取渲染目标声明的采样数、
@@ -1491,10 +1492,18 @@ export class Renderer {
    */
   private pipelineVariantFor(descriptor: RenderPipelineDescriptor, options: FrameOptions): RenderPipelineVariant {
     const pass = this.createPassDescriptor(options, this._clearColor);
-    // `RenderPassDescriptor` 允许某个颜色附件是 null（跳过那个 attachment），格式列表要把它们去掉。
-    const colorFormats: TextureFormat[] = [];
+    /*
+     * `RenderPassDescriptor` 允许某个颜色附件是 null（该 location 的输出被丢弃），而
+     * `RenderPipelineVariant.colorFormats` 是**逐位置**的（下标即 fragment output location），
+     * 所以这里逐个下标填：空位写 `null` 占住位置，而不是把它跳过。
+     *
+     * 跳过（压缩成密集列表）会让 `[view, null]` 与 `[null, view]` 推导出同一个变体 ——
+     * 那正是批 05 实测到的「两条布局共用同一条原生管线」。core 的 pass 布局与这里必须
+     * 用同一套语义，否则同一个通道在 gfx 路径与 core 路径下会解析成不同的变体。
+     */
+    const colorFormats: (TextureFormat | null)[] = [];
     for (const attachment of pass.colorAttachments) {
-      if (attachment) colorFormats.push(this.attachmentFormat(attachment.view));
+      colorFormats.push(attachment ? this.attachmentFormat(attachment.view) : null);
     }
     const depthView = pass.depthStencilAttachment?.view ?? null;
     return {

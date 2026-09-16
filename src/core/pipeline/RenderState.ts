@@ -94,7 +94,8 @@ export interface RenderState {
   multisample?: MultisampleState;
   blend?: BlendState;
   writeMask?: ColorWriteMask;
-  colorFormats?: readonly TextureFormat[];
+  /** 逐位置的 attachment 格式（下标即 fragment output location，空位写 `null`）；见 `RenderPipelineVariant.colorFormats`。 */
+  colorFormats?: readonly (TextureFormat | null)[];
 }
 
 /* ------------------------------------------------------------------ 默认值与预设 --------- */

@@ -64,7 +64,8 @@ export class WebGPURenderState implements RenderState {
   readonly multisample?: MultisampleState;
   readonly blend?: BlendState;
   readonly writeMask?: number;
-  readonly colorFormats?: readonly TextureFormat[];
+  /** 逐位置的 attachment 格式（下标即 fragment output location，空位写 `null`）。 */
+  readonly colorFormats?: readonly (TextureFormat | null)[];
 
   constructor(state: RenderState | undefined) {
     if (!state) return;
@@ -218,22 +219,51 @@ export class WebGPURenderState implements RenderState {
   /**
    * 组合出 `GPUFragmentState.targets`。
    *
-   * `formats` 来自当前 variant（render target），`targets` 来自 pipeline descriptor；
-   * 两者长度不一致时直接报错，因为那必然是用户的疏忽（WebGPU 的报错更难读）。
+   * `formats` 来自当前 variant（render target），**逐位置**：下标即 fragment output location，
+   * 空位是 `null`（见 `RenderPipelineVariant.colorFormats`）。`targets` 来自 pipeline descriptor，
+   * 形状与它逐位置对应。生成的原生数组同样是逐位置（每个位置都有一项，空位是 `null`）——
+   * 原生实测接受两种形状（保留尾部空位、或只给到最后一个有输出的位置），这里选前者：
+   * 位置信息完整保留，`[a, null]` 与 `[a]` 描述的就是两条不同的管线。
+   *
+   * `targets` 与 `formats` 的长度关系按**有效槽位**判定（有效槽位 = 最后一个非空格式的位置 + 1）：
+   *
+   * - `targets.length` 不能小于有效槽位数（有输出的位置必须有对应的 target 声明）；
+   * - 也不能大于 `formats.length`（多出来的 target 没有位置可放）；
+   * - 介于两者之间是允许的：`[a, null]` 的 pass 只声明一个 target
+   *   （尾部空位不携带格式信息，把它的 target 省略掉是自然的写法）；
+   * - 反过来，在**空位**处声明一个真实 target 会明确报错 —— 原生会以
+   *   `Attachment state ... is not compatible`（或「该 location 没有 fragment 输出」）失败，
+   *   而这里的报错能指出是哪一个 location。
    */
   static toGPUColorTargets(
-    formats: readonly TextureFormat[],
+    formats: readonly (TextureFormat | null)[],
     targets: readonly (ColorTargetState | null)[] | undefined,
     defaults: { blend?: BlendState; writeMask?: number } = {},
   ): (GPUColorTargetState | null)[] {
-    if (targets && targets.length !== formats.length) {
+    // 有效槽位：尾部连续的空位没有格式，也就没有「必须声明 target」的义务。
+    let effective = formats.length;
+    while (effective > 0 && formats[effective - 1] === null) effective -= 1;
+
+    if (targets && (targets.length < effective || targets.length > formats.length)) {
       throw new ValidationError(
         `[gpu-device-api] RenderPipeline: fragment.targets has ${targets.length} entries but the render target ` +
-          `has ${formats.length} color attachments.`,
+          `has ${formats.length} color attachments (${effective} of them carry a format).`,
       );
     }
     return formats.map((format, index) => {
       const target = targets ? targets[index] : undefined;
+      if (format === null) {
+        if (target) {
+          throw new ValidationError(
+            `[gpu-device-api] RenderPipeline: fragment.targets[${index}] declares a color target at ` +
+              `location ${index}, but the render target has no color attachment there (the render pass ` +
+              `colorAttachments[${index}] is null). Either give that location an attachment, declare this ` +
+              'target as null, or drop the trailing entries — a location without an attachment cannot ' +
+              'receive output.',
+          );
+        }
+        return null;
+      }
       if (target === null) return null;
       const native: GPUColorTargetState = { format: toGPUTextureFormat(target?.format ?? format) };
       const blend = target?.blend ?? defaults.blend;

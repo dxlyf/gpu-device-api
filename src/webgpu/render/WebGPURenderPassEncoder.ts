@@ -32,7 +32,14 @@ import { hasStencilAspect } from '../utils/wgpuFormatMap.js';
 
 /** 一个 render pass 的 attachment 布局，pipeline variant 由它推导。 */
 export interface WebGPURenderPassLayout {
-  readonly colorFormats: readonly TextureFormat[];
+  /**
+   * **逐位置**的颜色附件格式：下标即 fragment output location，空位（`colorAttachments[i] === null`）
+   * 为 `null`。长度等于 `colorAttachments.length`（尾部空位也占位）。
+   *
+   * 逐位置是必须的：`[view, null]` 与 `[null, view]` 需要的 `fragment.targets` 不同，
+   * 压缩成密集列表会让两者撞同一个变体键（批 05 实测 `createRenderPipeline` 只调用 1 次）。
+   */
+  readonly colorFormats: readonly (TextureFormat | null)[];
   readonly depthFormat: TextureFormat | null;
   readonly sampleCount: number;
 }
@@ -94,30 +101,27 @@ export function toGPURenderPassDescriptor(
     depthStencilAttachment = descriptor.depthStencilAttachment ?? null;
   }
 
-  const formats: TextureFormat[] = [];
+  /**
+   * 逐位置的颜色格式：下标即 fragment output location，空位进 `null`（`#11.3`，批 10 修完）。
+   *
+   * 压缩成「非空附件的密集列表」曾经让空位后面的 target 整体前移，并让 `[view, null]` 与
+   * `[null, view]` 撞成同一个变体键（批 05 实测 `createRenderPipeline` 只调用 1 次）。
+   * 批 05 的处置是「空位后面还有非空附件」时明确报错；批 10 把
+   * `RenderPipelineVariant.colorFormats` 改成逐位置之后，这条报错撤掉了 ——
+   * 位置信息现在完整地传到了变体与原生 `fragment.targets`。
+   */
+  const formats: (TextureFormat | null)[] = [];
   const nativeColors: (GPURenderPassColorAttachment | null)[] = [];
   const sampleCounts: number[] = [];
-  /**
-   * 第一个「后面还有非空附件」的空位下标（`#11.3`）。
-   *
-   * 原生数组保留空位、位置是对的；但 `layout.colorFormats` 是**非空附件的密集列表**，
-   * 而它是 `RenderPipelineVariant.colorFormats` 的唯一来源（变体键 + `fragment.targets`）。
-   * 于是空位后面的 `targets` 会整体前移一位，而且 `[view, null]` 与 `[null, view]` 会撞成
-   * 同一个变体键、共用同一条原生管线（实测 `createRenderPipeline` 只调用 1 次）。
-   * 这种组合本层无法正确表达，因此明确报错而不是静默错配（见下面的说明）。
-   */
-  let holeIndex = -1;
-  /** 已看到、但还不能确定「是空位还是尾部空位」的下标。 */
-  let pendingNull = -1;
 
   for (let index = 0; index < colorAttachments.length; index += 1) {
     const attachment = colorAttachments[index];
     if (!attachment) {
       nativeColors.push(null);
-      if (pendingNull < 0) pendingNull = index;
+      // 空位占住它的下标：`formats[i]` 与 `colorAttachments[i]` 逐位置对应。
+      formats.push(null);
       continue;
     }
-    if (pendingNull >= 0 && holeIndex < 0) holeIndex = pendingNull;
     const view = asGPUTextureView(attachment.view, `${label}.colorAttachments`);
     const texture = attachment.view.texture;
     formats.push(attachment.view.descriptor.format ?? texture.format);
@@ -146,34 +150,17 @@ export function toGPURenderPassDescriptor(
   }
 
   /*
-   * 空位后面还有非空附件 → 明确报错（`#11.3`）。
+   * 批 05 在这里加过一条闸门：空位后面还有非空附件 → 明确报错（`#11.3`）。
    *
-   * 为什么不能像原生 WebGPU 那样直接放行：本后端的 `layout.colorFormats` 是**非空附件的密集
-   * 列表**（`formats.push` 只在非空时执行），而它是 `RenderPipelineVariant.colorFormats` 的唯一
-   * 来源 —— 变体键与 `GPUFragmentState.targets` 都从它推导。于是：
+   * 那条闸门存在的唯一理由是当时的 `layout.colorFormats` 是**非空附件的密集列表**，位置信息
+   * 表达不了。批 10 把它改成**逐位置**（空位写 `null`）之后，`[view, null]` / `[null, view]` /
+   * `[view, null, view]` 各自拿到自己的变体键与 `fragment.targets`，闸门就没有存在理由了 ——
+   * 留着反而会把原生完全合法的写法（`[null, view]` 在原生 WebGPU 上可用，批 05 实测
+   * location 1 正确收到绿色）拒掉。
    *
-   * - `fragment.targets[i]` 会被应用到**第 i 个非空**附件，而不是第 i 个位置，空位后面的 target
-   *   整体前移一位；
-   * - `[view, null]` 与 `[null, view]`（同格式）推导出同一个变体键 `rgba8unorm|1|none`，
-   *   `WebGPURenderPipeline.resolve()` 会返回**同一条**原生管线（实测 `createRenderPipeline`
-   *   只调用 1 次）—— 也就是「变体错配」。
-   *
-   * 完整的修法是让 `RenderPipelineVariant.colorFormats` 变成逐位置（空位用 `null` 占位），
-   * 那要动公开类型与别的模块；在那之前这里**明确失败**，绝不静默错配。
-   * 尾部的空位不受影响（`[view, null]`）：有输出的 location 与密集列表一一对应，继续放行。
+   * 它的覆盖没有丢：批 05 那几条「中间空位报错」的用例已按「不再报错且落点正确」改写，
+   * 见 `test/webgpu-mrt-null-slots.test.ts` 与新增的 `test/webgpu-mrt-positional-formats.test.ts`。
    */
-  if (holeIndex >= 0) {
-    throw new ValidationError(
-      `[gpu-device-api] ${label}: colorAttachments[${holeIndex}] is null, but a later entry is not null. ` +
-        'The WebGPU backend builds pipeline variants from the dense list of non-null color formats ' +
-        '(RenderPipelineVariant.colorFormats), so where a null slot sits cannot be expressed: the ' +
-        'fragment targets of the following attachments would shift by one location, and e.g. ' +
-        '[view, null] and [null, view] would resolve to the same GPURenderPipeline variant. Move the ' +
-        'null slots to the end of colorAttachments (a trailing null maps correctly for every location ' +
-        'that has an output), or give every slot a real attachment — for an unused location, render ' +
-        'to a small throwaway texture instead.',
-    );
-  }
 
   const native: GPURenderPassDescriptor = { label, colorAttachments: nativeColors };
   let depthFormat: TextureFormat | null = null;

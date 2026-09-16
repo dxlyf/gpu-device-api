@@ -57,7 +57,7 @@ import { asWebGPUShaderModule } from '../resources/WebGPUShaderModule.js';
 import { assertSampleCount } from '../utils/wgpuEnumMap.js';
 import { toGPUTextureFormat } from '../utils/wgpuFormatMap.js';
 import { WebGPURenderState } from './WebGPURenderState.js';
-import { PipelineCache as WgpuPipelineCache, renderPipelineCacheKey } from './PipelineCache.js';
+import { PipelineCache as WgpuPipelineCache, colorFormatsKey, renderPipelineCacheKey } from './PipelineCache.js';
 
 /** vertex / fragment 入口点缺省名，与 core 的文档一致。 */
 export const DEFAULT_VERTEX_ENTRY_POINT = 'vsMain';
@@ -69,7 +69,7 @@ export const DEFAULT_FRAGMENT_ENTRY_POINT = 'fsMain';
  */
 const EMPTY_VARIANT: Partial<RenderPipelineVariant> = Object.freeze({});
 const EMPTY_VERTEX_LAYOUTS: readonly VertexBufferLayout[] = [];
-const EMPTY_COLOR_FORMATS: readonly TextureFormat[] = [];
+const EMPTY_COLOR_FORMATS: readonly (TextureFormat | null)[] = [];
 
 /**
  * 变体解析二级缓存的容量。
@@ -88,7 +88,7 @@ const VARIANT_MEMO_LIMIT = 4;
  */
 interface VariantMemo {
   readonly input: Partial<RenderPipelineVariant>;
-  readonly colorFormats: readonly TextureFormat[] | undefined;
+  readonly colorFormats: readonly (TextureFormat | null)[] | undefined;
   readonly sampleCount: number | undefined;
   readonly depthFormat: TextureFormat | null | undefined;
   readonly vertexLayouts: readonly VertexBufferLayout[] | undefined;
@@ -112,7 +112,7 @@ export class WebGPURenderPipeline implements RenderPipeline {
   private readonly ownsLayout: boolean;
 
   /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
-  private defaultColorFormatsCache: readonly TextureFormat[] | null = null;
+  private defaultColorFormatsCache: readonly (TextureFormat | null)[] | null = null;
 
   /**
    * 变体解析结果的二级缓存，**最近使用优先**：下标 0 就是原来那条「上一次命中」快速路径。
@@ -451,7 +451,7 @@ export class WebGPURenderPipeline implements RenderPipeline {
     // `descriptor.vertex.buffers ?? []` 原先每 draw 都会新建一个空数组；空列表共享一个常量即可。
     const vertexLayouts = partial.vertexLayouts ?? this.vertexLayouts ?? EMPTY_VERTEX_LAYOUTS;
 
-    if (descriptor.fragment && colorFormats.length === 0) {
+    if (descriptor.fragment && !hasColorOutput(colorFormats)) {
       throw new ValidationError(
         `[gpu-device-api] RenderPipeline "${this.label}" has a fragment stage but no color formats. ` +
           'Declare `colorFormats` on the descriptor, or pass them per target via ' +
@@ -475,8 +475,8 @@ export class WebGPURenderPipeline implements RenderPipeline {
     }
 
     for (const format of colorFormats) {
-      // 触发格式合法性校验（未知格式在这里就会抛错）。
-      toGPUTextureFormat(format);
+      // 触发格式合法性校验（未知格式在这里就会抛错）。空位（null）不是格式，跳过。
+      if (format !== null) toGPUTextureFormat(format);
     }
     if (depthFormat !== null) toGPUTextureFormat(depthFormat);
 
@@ -484,31 +484,43 @@ export class WebGPURenderPipeline implements RenderPipeline {
   }
 
   /**
-   * descriptor 里声明的（或从 fragment targets 推导出的）color format 列表。
+   * descriptor 里声明的（或从 fragment targets 推导出的）color format 列表，**逐位置**。
    *
    * 推导路径原先每次调用都新建一个数组；descriptor 是 readonly 的，结果缓存到实例上，
    * 与「共享空数组」一起消掉每 draw 的数组分配。
+   *
+   * `fragment.targets` 里的 `null`（该 location 不写输出）推导成 `null` 格式 —— 它和
+   * 「这个位置没有附件」是同一件事的两面（见 `RenderPipelineVariant.colorFormats`）。
+   * 只要有**非空** target 没写 `format`，就按「推导不出来」处理（与改动前返回空数组一致）。
    */
-  private defaultColorFormats(): readonly TextureFormat[] {
+  private defaultColorFormats(): readonly (TextureFormat | null)[] {
     const cached = this.defaultColorFormatsCache;
     if (cached !== null) return cached;
     const { descriptor } = this;
-    let formats: readonly TextureFormat[];
+    let formats: readonly (TextureFormat | null)[];
     if (descriptor.colorFormats) {
       formats = descriptor.colorFormats;
     } else if (descriptor.render?.colorFormats) {
       formats = descriptor.render.colorFormats;
     } else {
       const targets = descriptor.fragment?.targets;
-      const collected: TextureFormat[] = [];
+      const collected: (TextureFormat | null)[] = [];
+      let derivable = targets !== undefined;
       if (targets) {
         for (const target of targets) {
-          if (target?.format === undefined) break;
+          if (target === null) {
+            collected.push(null);
+            continue;
+          }
+          if (target.format === undefined) {
+            derivable = false;
+            break;
+          }
           collected.push(target.format);
         }
       }
-      // 任一 target 没写 format 时按「推导不出来」处理（与原先返回空数组一致）。
-      formats = targets && collected.length === targets.length ? collected : EMPTY_COLOR_FORMATS;
+      // 任一非空 target 没写 format 时按「推导不出来」处理（与原先返回空数组一致）。
+      formats = derivable ? collected : EMPTY_COLOR_FORMATS;
     }
     this.defaultColorFormatsCache = formats;
     return formats;
@@ -608,5 +620,19 @@ export function asGPURenderPipeline(
 
 /** 供 cache key 诊断使用：只列出会参与 key 的字段。 */
 export function describeRenderPipelineVariant(variant: RenderPipelineVariant): string {
-  return cacheKey(variant.colorFormats.join(','), variant.sampleCount, variant.depthFormat ?? 'none');
+  return cacheKey(colorFormatsKey(variant.colorFormats), variant.sampleCount, variant.depthFormat ?? 'none');
+}
+
+/**
+ * 这个逐位置的格式列表里有没有**任何**位置会真正输出颜色（至少一个非 `null` 格式）。
+ *
+ * 为什么不是 `length === 0`：改成逐位置之后，`[null]` 这种「长度 1、全是空位」的列表同样
+ * 表示「这条管线的 fragment stage 写不进任何附件」。用 `length === 0` 判会让它悄悄走到
+ * 原生 `createRenderPipeline`，再以「该 location 没有 fragment 输出」之类更难懂的话失败。
+ */
+function hasColorOutput(formats: readonly (TextureFormat | null)[]): boolean {
+  for (const format of formats) {
+    if (format !== null) return true;
+  }
+  return false;
 }

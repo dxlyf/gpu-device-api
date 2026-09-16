@@ -32,14 +32,17 @@
  *    必须建出 **4 条**互不相同的原生管线。这是本批最容易改出的静默错误
  *    （少比一个字段就会让两条布局共用同一条管线，画错东西却没有任何报错）。
  * 3. **原生 `fragment.targets` 按位置对齐**：`[null, a]` → `[null, {format}]`（location 0
- *    丢弃输出、location 1 是那张附件的格式）；`[a, null]` → 尾部空位被剪掉（`[{format}]`），
- *    这正是批 05 用真实原生 WebGPU 验证过、原生接受的形状。
+ *    丢弃输出、location 1 是那张附件的格式）；`[a, null]` → `[{format}, null]`（尾部空位保留在
+ *    自己的下标上）。批 10 的原生探针（`.tmp-10/mrt-positional-probe.ts`，真实 WebGPU）实测：
+ *    「保留尾部空位」与「剪掉尾部空位」**都**被原生接受，选保留是因为位置信息完整、
+ *    而且这样 `[a]` 与 `[a, null]` 的两条原生管线在描述上也确实不同。
  * 4. **descriptor 侧同样逐位置**：`fragment.targets` / `colorFormats` 现在也接受 `null`
  *    占位，并且「在空位处声明了一个真实 target」会明确报错，而不是静默错位。
  *
  * 真实渲染（两后端逐像素一致）的证据不在单测里：node 侧 mock 的 `createShaderModule`
- * 永远返回 `{}`，着色器层面的错误这里发现不了，落点结论由只读原生探针给出
- *（`.tmp-10/mrt-positional-probe.*`，结论抄在批 10 汇报里）。
+ * 永远返回 `{}`，着色器层面的错误这里发现不了，落点结论由真机探针给出
+ *（`.tmp-10/mrt-positional-probe.ts` 原生兼容性 + `.tmp-10/mrt-parity-probe.ts` 两后端逐像素，
+ *  数字抄在批 10 汇报里）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -61,16 +64,15 @@ import type { RenderPipelineVariant } from '../src/core/pipeline/RenderPipeline.
 /**
  * 逐位置格式列表 → `resolve()` 的入参。
  *
- * 之所以要有这个 helper 而不是直接写字面量：`RenderPipelineVariant.colorFormats` 从密集列表
- * 改成逐位置（`(TextureFormat | null)[]`）之前，`null` 占位在类型上是不合法的，而本文件是
- * 「先落复现证据」的那一步 —— 证据提交时这里用一次 cast 让测试**在运行时**失败（而不是
- * 在 `tsc` 阶段失败）。修复提交把 cast 去掉，这个 helper 就只剩下「把列表包成 variant 入参」。
+ * 之所以要有这个 helper 而不是直接写字面量：它把「`colorFormats` 是逐位置的」这件事写在
+ * 调用点上，读用例时不必每次去分辨哪个 `null` 是「空位」。修复提交把证据阶段用的一次
+ * cast 去掉了 —— `RenderPipelineVariant.colorFormats` 现在本来就是 `(TextureFormat | null)[]`。
  */
 function positional(
   colorFormats: readonly (TextureFormat | null)[],
   extra: Omit<Partial<RenderPipelineVariant>, 'colorFormats'> = {},
 ): Partial<RenderPipelineVariant> {
-  return { colorFormats: colorFormats as readonly TextureFormat[], ...extra };
+  return { colorFormats, ...extra };
 }
 
 /* ================================================================================================ */
@@ -268,17 +270,18 @@ describe('#11.3 变体：空位的位置必须进 cache key，四条布局必须
     const mock = createMockPipelineGpu();
     const pipeline = createPipeline(mock);
 
+    // 每个列表都至少有一个非空格式（`[null]` / `[null, null]` 是「没有颜色输出」，
+    // 单独由下一条用例覆盖）。
     const formats: readonly (TextureFormat | null)[][] = [
       ['rgba8unorm'],
-      [null],
       ['rgba8unorm', null],
       [null, 'rgba8unorm'],
       ['rgba8unorm', 'rgba8unorm'],
-      [null, null],
       ['rgba8unorm', null, null],
       [null, 'rgba8unorm', null],
       [null, null, 'rgba8unorm'],
       ['rgba8unorm', null, 'rgba8unorm'],
+      [null, 'rgba8unorm', 'rgba8unorm'],
     ];
 
     const keys = formats.map((format) => {
@@ -287,9 +290,30 @@ describe('#11.3 变体：空位的位置必须进 cache key，四条布局必须
     });
 
     expect(new Set(keys).size).toBe(formats.length);
-    // `[null]` 与 `[null, null]` 都是「没有颜色输出」的 pass，但键仍然不同（长度即槽位数）。
-    expect(keys[1]).toBe('none|1|none');
-    expect(keys[5]).toBe('none,none|1|none');
+    // 空位的位置直接写在键里：尾部空位（`[a, null]`）与两个尾部空位（`[a, null, null]`）都不同。
+    expect(keys[0]).toBe('rgba8unorm|1|none');
+    expect(keys[1]).toBe('rgba8unorm,none|1|none');
+    expect(keys[2]).toBe('none,rgba8unorm|1|none');
+    expect(keys[4]).toBe('rgba8unorm,none,none|1|none');
+    expect(keys[7]).toBe('rgba8unorm,none,rgba8unorm|1|none');
+
+    pipeline.dispose();
+    mock.device.dispose();
+  });
+
+  it('一个非空格式都没有（[null] / [null, null]）→ 仍然明确报错，不建管线', () => {
+    const mock = createMockPipelineGpu();
+    const pipeline = createPipeline(mock);
+
+    // 逐位置之后「长度 0」不再是唯一的「没有颜色格式」，判据换成「没有任何非空格式」：
+    // 否则 `[null]` 会走到原生，再以「该 location 没有 fragment 输出」之类更难懂的话失败。
+    expect(() => pipeline.resolve(positional([null], { sampleCount: 1, depthFormat: null }))).toThrowError(
+      /has a fragment stage but no color formats/,
+    );
+    expect(() =>
+      pipeline.resolve(positional([null, null], { sampleCount: 1, depthFormat: null })),
+    ).toThrowError(/has a fragment stage but no color formats/);
+    expect(mock.natives).toHaveLength(0);
 
     pipeline.dispose();
     mock.device.dispose();
@@ -300,7 +324,7 @@ describe('#11.3 变体：空位的位置必须进 cache key，四条布局必须
 /* 3. 原生 fragment.targets 按位置对齐                                                                 */
 /* ================================================================================================ */
 
-describe('#11.3 原生 targets：位置对齐（空位写 null、尾部空位剪掉）', () => {
+describe('#11.3 原生 targets：逐位置（每个下标都有一项，空位是 null）', () => {
   it('[null, a] → targets = [null, {rgba8unorm}]（location 0 丢弃输出）', () => {
     const mock = createMockPipelineGpu();
     const pipeline = createPipeline(mock);
@@ -315,16 +339,19 @@ describe('#11.3 原生 targets：位置对齐（空位写 null、尾部空位剪
     mock.device.dispose();
   });
 
-  it('[a, null] → targets 把尾部空位剪掉（批 05 实测原生接受的形状）', () => {
+  it('[a, null] → targets = [{rgba8unorm}, null]（尾部空位保留在自己的下标上）', () => {
     const mock = createMockPipelineGpu();
     const pipeline = createPipeline(mock);
 
     pipeline.resolve(positional(['rgba8unorm', null], { sampleCount: 1, depthFormat: null }));
     const targets = nativeTargets(mock.descriptors[0]!);
-    // 尾部空位不携带信息（原生本来就允许管线的 targets 比 pass 的槽位短，
-    // 前提是多出来的槽位是空的），所以剪掉它能让 `[a, null]` 沿用改前已被验证的形状。
-    expect(targets).toHaveLength(1);
+    // 批 10 的原生探针实测：`[{fmt}, null]` 与剪掉尾部空位的 `[{fmt}]` **都**被原生接受
+    // （`.tmp-10/mrt-positional-probe.ts` 的 trailing-null-uncut-targets / -trimmed-targets）。
+    // 这里选「不剪」：位置信息完整保留，于是 `[a, null]` 与 `[a]` 的两条管线在描述上也确实不同，
+    // 而不是两条内容相同的重复管线。
+    expect(targets).toHaveLength(2);
     expect(targets[0]?.format).toBe('rgba8unorm');
+    expect(targets[1]).toBeNull();
 
     pipeline.dispose();
     mock.device.dispose();
@@ -384,8 +411,8 @@ describe('#11.3 descriptor 侧：逐位置的 targets 与 colorFormats', () => {
       label: 'positional',
       layout: 'auto',
       vertex: { module, entryPoint: 'vsMain', buffers: [] },
-      fragment: { module, entryPoint: 'fsMain', targets: descriptor.targets as never },
-      colorFormats: descriptor.colorFormats as never,
+      fragment: { module, entryPoint: 'fsMain', targets: descriptor.targets },
+      colorFormats: descriptor.colorFormats,
     });
   }
 
@@ -439,11 +466,14 @@ describe('#11.3 descriptor 侧：逐位置的 targets 与 colorFormats', () => {
     const pipeline = pipelineWith(mock, { targets: [{ format: 'rgba8unorm' }] });
 
     // pass 是 [a, null]（逐位置长度 2），而 descriptor 只声明了 1 个 target ——
-    // 尾部的空位不携带信息，所以这条应该继续放行（改前也是放行的）。
+    // 尾部的空位不携带格式，所以这条应该继续放行（改前也是放行的）。
     expect(() =>
       pipeline.resolve(positional(['rgba8unorm', null], { sampleCount: 1, depthFormat: null })),
     ).not.toThrow();
-    expect(nativeTargets(mock.descriptors[0]!)).toHaveLength(1);
+    const targets = nativeTargets(mock.descriptors[0]!);
+    expect(targets).toHaveLength(2);
+    expect(targets[0]?.format).toBe('rgba8unorm');
+    expect(targets[1]).toBeNull();
 
     pipeline.dispose();
     mock.device.dispose();

@@ -97,8 +97,13 @@ export interface RenderPipelineDescriptor {
   /**
    * pipeline 目标的 attachment 格式。省略时，后端在首次使用时从 render target 推导，
    * 从而保持 pipeline 可跨 target 复用。
+   *
+   * **逐位置**：下标即 fragment output location，空位（该 location 没有附件）写 `null`。
+   * 通常写成密集列表（`['rgba8unorm', 'rgba16float']` 就是 location 0 / 1），
+   * 只有确实要跳过某个 location 时才需要 `null` 占位（见
+   * {@link RenderPipelineVariant.colorFormats}）。
    */
-  colorFormats?: readonly TextureFormat[];
+  colorFormats?: readonly (TextureFormat | null)[];
   /** 便捷组合；上面的各单独字段优先于这里的值。 */
   render?: RenderState;
 }
@@ -158,8 +163,38 @@ function isBindGroupLayoutLike(
   return !Array.isArray(candidate.bindGroupLayouts);
 }
 
-/** 首次使用时才发现的其他状态，属于具体 pipeline 的 cache key 的一部分。 */export interface RenderPipelineVariant {
-  colorFormats: readonly TextureFormat[];
+/** 首次使用时才发现的其他状态，属于具体 pipeline 的 cache key 的一部分。 */
+export interface RenderPipelineVariant {
+  /**
+   * 当前 render target 的颜色附件格式，**逐位置**：下标即 fragment output location，
+   * 该 location 没有附件时是 `null`。
+   *
+   * ## 为什么必须是逐位置而不是「非空附件的密集列表」（公开语义变化）
+   *
+   * `RenderPassDescriptor.colorAttachments` 允许空位（`null` 表示该 location 的输出被丢弃，
+   * 与原生 WebGPU 同一个语义），而**空位在哪个下标**是语义的一部分：
+   * `[view, null]` 与 `[null, view]` 需要的 `fragment.targets` 分别是 `[state, null]` 与
+   * `[null, state]`，也就是**两条不同的原生管线**。
+   *
+   * 改成逐位置之前，这一层只收非空格式，于是两者都变成 `['rgba8unorm']`：
+   * 变体键相同 => 命中同一个缓存条目 => 两条布局拿到**同一条**原生管线
+   * （实测 `createRenderPipeline` 只被调用 1 次），画面上表现为「附件错位」而没有任何报错。
+   * 尾部的空位尤其隐蔽：`[a]` 与 `[a, null]` 也会撞成同一个变体。
+   *
+   * 因此：
+   *
+   * - **下标就是 location**，与原生 `GPUFragmentState.targets` / `GPURenderPassDescriptor.colorAttachments`
+   *   的下标完全一致；
+   * - `null` 表示「这个 location 没有附件」，后端会为该位置生成 `null` 的 target（输出被丢弃）；
+   * - **尾部的 `null` 也是信息**（槽位数量不同就是不同的变体）。它不携带格式，但后端仍然
+   *   按位置对齐（原生实测接受「管线 targets 比 pass 槽位短，只要多出来的槽位是空的」，
+   *   而保留尾部空位同样被接受，见批 10 的原生探针）。
+   *
+   * 对既有代码来说这是**公开类型语义的变化**：密集列表的写法（`['rgba8unorm', 'rgba16float']`）
+   * 含义不变（就是 location 0 / 1），只是列表元素类型放宽到 `TextureFormat | null`。
+   * 类型上这是**放宽**（`readonly TextureFormat[]` 是它的子类型），但读取方必须按位置解释。
+   */
+  colorFormats: readonly (TextureFormat | null)[];
   sampleCount: number;
   /**
    * **当前 render target 的**深度附件格式，`null` 表示这次渲染通道没有深度附件。
