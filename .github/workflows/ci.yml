@@ -1,0 +1,97 @@
+# gpu-device-api 的持续集成。
+#
+# 这是本仓库面向「可被商业项目信赖地依赖」补齐的第一道自动防线：在此之前，
+# tsc / vitest / 像素基线全靠人工跑，推送到 GitHub 没有任何拦截。
+#
+# 它跑什么：
+#   1. 安装依赖：pnpm + --frozen-lockfile（严格按 pnpm-lock.yaml，lockfile 过期即失败）
+#   2. pnpm exec tsc --noEmit     类型检查（strict + noUnusedLocals/noUnusedParameters，0 错误才算过）
+#   3. pnpm exec vitest run       全部单测（test/**/*.test.ts）
+#   4. pnpm run build             vite build + tsc -p tsconfig.build.json + scripts/postbuild.mjs
+#   5. 重建后 dist 必须与提交的 dist 一致（见文件末尾「为什么校验 dist」）
+#
+# 它**故意不跑**什么（不要为了「看起来完整」加进来）：
+#
+#   * 无头 Chrome 像素基线（examples/*.html 的 data-* 数值）。
+#     它们依赖 SwiftShader 参数（--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader）、
+#     本机固定的 Chrome 路径，以及「两个后端参数不能同时传」这类细节；在 GitHub runner 上的行为未知。
+#     在评估 Playwright / 官方 Chrome 容器之前，五条锁定基线**只能在本地跑**，
+#     步骤与期望值见 docs/releasing.md「三、本地跑五条锁定基线」。
+#   * 任何 npm publish 与相关凭据。发布由维护者手动执行，见 docs/releasing.md。
+#   * 任何 secrets：本工作流不引用任何 secret，只需要默认的 GITHUB_TOKEN（且仅申请只读权限）。
+#
+# 说明（诚实标注）：本文件编写时**没有在真实 GitHub runner 上跑过**（本机无法执行 Actions）。
+# 降低风险的做法，逐条可复核：
+#   * actionlint v1.7.12（下载后核对过 sha256）对「工作流语义 + YAML 语法」报 0 问题；
+#   * 三个 action 的 with: 输入名与 using 运行时（node24）逐个核对过官方 action.yml；
+#   * 每条命令都在本机用同一套依赖（Node 24.20.0 / pnpm 12.3.4）实跑通过；
+#   * 最后一个步骤的 shell 逻辑在临时 git 仓库里做过行为测试：干净 → 0，产物被改 → 1，
+#     产物里多出未跟踪文件 → 1。
+# 首次推送后请以 GitHub 上的实际结果为准。
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# 只读：工作流不需要写仓库（不推送、不发版、不留 artifact）。
+permissions:
+  contents: read
+
+# 同一分支连续推送时取消上一次未跑完的运行：省 runner，结论只反映最新提交。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 类型检查 / 单测 / 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      # pnpm 必须先于 setup-node：后者的 cache: pnpm 会调用 pnpm store path。
+      # 版本与本机开发环境一致（12.3.4，实测可读写本仓库 lockfileVersion 9.0 的 pnpm-lock.yaml）。
+      # 这里显式指定版本，因此 package.json 里**不需要**（也没有）packageManager 字段 ——
+      # 两者同时存在时 pnpm/action-setup 会因为「版本被指定了两次」而报错。
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.3.4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: 安装依赖（严格按 lockfile）
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查（strict，0 错误）
+        run: pnpm exec tsc --noEmit
+
+      - name: 单元测试
+        run: pnpm exec vitest run
+
+      - name: 构建产物
+        run: pnpm run build
+
+      # 为什么校验 dist：本仓库选择**跟踪** dist（用户决定），于是「src 改了但产物没重建」
+      # 会直接导致「仓库里的内容 ≠ npm 上实际发布的包」。历史上真发生过，靠人工复核才发现。
+      # 用 git status 而不是 git diff：前者还能抓到构建新产出的未跟踪文件。
+      # 如果这一步在别人机器上频繁误报（不同工具链产出逐字节不同的 bundle），
+      # 正确的处理是退化成「只检查构建成功」，而不是关掉整个工作流。
+      - name: 校验 dist 与 src 一致
+        run: |
+          if [ -n "$(git status --porcelain -- dist)" ]; then
+            echo "::error::重建后的 dist 与提交的 dist 不一致：src 改了但产物没有重建。请本地执行 pnpm run build，并把 dist 一起提交。"
+            git status --porcelain -- dist
+            git --no-pager diff --stat -- dist
+            exit 1
+          fi
+          echo "dist 与 src 一致。"
