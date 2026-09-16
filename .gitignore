@@ -57,3 +57,5 @@ examples/*.png
 # 已经忽略了它，这一行只是照前几批的惯例写明归属；入库的证据是 `test/entry-surface-dist.test.ts`
 # （7 条 → 9 条强制校验）与 `.tmp-15/RESULT.md` 里的原始数字。
 .tmp-15/
+# Vite 的依赖预打包缓存（启动 dev server 时生成、可随时重建），不属于源码
+.vite/

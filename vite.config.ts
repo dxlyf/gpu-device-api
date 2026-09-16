@@ -47,12 +47,16 @@ export default defineConfig({
     outDir: 'dist',
     // 见文件头第 3 段：vite 是 `pnpm run build` 的第一步，清空动作由它负责。
     emptyOutDir: true,
-    // 与模块树（`tsconfig.build.json` 的 `sourceMap` / `declarationMap`）保持一致：
-    // 单文件包里 UMD 是完全压缩的，没有 map 就只能看到 `at ni (...:1:20345)`。
-    // 体积代价已实测：两份 map 合计 4,094,526 B（gzip 1,155,304 B），约占 `dist` 总字节的 49%
-    // —— 见 `.tmp-15/RESULT.md`；若要省这份体积，把这一行改成 `false` 即可
-    // （npm tarball 会从 2,410,524 B 降到 ≈1.26 MB）。
-    sourcemap: true,
+    // **单文件包不出 sourcemap，只有模块树出**（`tsconfig.build.json` 的 `sourceMap` 保持 `true`）。
+    //
+    // 两者面向的场景不同：真正需要断点调试的是**模块树** —— 消费方经自己的打包器走这条路，
+    // 它自带 356 个 `.map`，调试体验完整。而 UMD / ES 单文件包面向的是**没有打包器**的场景
+    // （CDN 直引、`<script src>`、`require()`），这里塞进去的 map 是纯负重。
+    //
+    // 代价已实测（`.tmp-15/RESULT.md`）：这两份 map 合计 4,094,526 B（gzip 1,155,304 B），
+    // 占 `dist` 总字节的 49%、占 npm tarball 增量的 93%。关掉后 tarball 从 2,410,524 B
+    // 降到 ≈1.26 MB，只比「只有模块树」时多约 90 KB，却多出两个可直引的单文件包。
+    sourcemap: false,
     lib: {
       entry: 'src/index.ts',
       // UMD 的全局名（沿用批 14 之前的名字，仓库里没有别处引用它）。
