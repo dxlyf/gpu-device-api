@@ -53,9 +53,10 @@ export default defineConfig({
     // 它自带 356 个 `.map`，调试体验完整。而 UMD / ES 单文件包面向的是**没有打包器**的场景
     // （CDN 直引、`<script src>`、`require()`），这里塞进去的 map 是纯负重。
     //
-    // 代价已实测（`.tmp-15/RESULT.md`）：这两份 map 合计 4,094,526 B（gzip 1,155,304 B），
-    // 占 `dist` 总字节的 49%、占 npm tarball 增量的 93%。关掉后 tarball 从 2,410,524 B
-    // 降到 ≈1.26 MB，只比「只有模块树」时多约 90 KB，却多出两个可直引的单文件包。
+    // 代价已实测（`.tmp-15/RESULT.md`）：那两份 map 合计 4,094,526 B（gzip 1,155,304 B），
+    // 占带 map 版 `dist` 总字节的 49%、占 npm tarball 增量的 93%。关掉后：
+    // npm tarball 从 2,410,524 B（720 个条目）降到 **1,252,641 B**（718 个条目），
+    // 比批 14 之前的 1,165,739 B 只多 86,902 B（+7.5%），却多出两个可直引的单文件包。
     sourcemap: false,
     lib: {
       entry: 'src/index.ts',

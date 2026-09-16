@@ -127,8 +127,12 @@ describe.skipIf(!distEntriesPresent)('批 14：dist 模块树与 package.json ex
     }
   });
 
-  it('`main` / `module` / `types` 也指向新的模块树入口', () => {
-    expect(manifest.main).toBe('./dist/index.js');
+  it('`main` 指向 UMD 单文件包（`module` / `types` 仍指向模块树入口）', () => {
+    // 批 15：`main` 服务于 `require()` / 老工具链，因此指向 `vite build` 产出的 UMD 单文件包；
+    // 打包器走的 `module` / `types` 仍指向模块树入口（保证树摇）。
+    // UMD 必须落在 `.cjs`：`package.json` 是 `"type": "module"`，同名 `.js` 会被当成 ESM 解析，
+    // `require()` 拿到的是**空命名空间**（实测见 `.tmp-15/RESULT.md`）。
+    expect(manifest.main).toBe('./dist/gpu-device-api.umd.cjs');
     expect(manifest.module).toBe('./dist/index.js');
     expect(manifest.types).toBe('./dist/index.d.ts');
   });
