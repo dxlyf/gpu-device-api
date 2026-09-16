@@ -4,6 +4,31 @@ import type { Extent3D, TexelCopyBufferLayout } from '../../types/internal.js';
 import type { BufferCopyView, CommandBuffer, TextureCopyView } from '../render/CommandEncoder.js';
 /** {@link Queue.copyExternalImageToTexture} 接受的浏览器图像来源。 */
 export type ExternalImageSource = ImageBitmap | HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | ImageData | VideoFrame | HTMLVideoElement;
+/**
+ * {@link Queue.copyExternalImageToTexture} 的编码参数。
+ *
+ * 对应原生 `GPUCopyExternalImageDestInfo` 的 `premultipliedAlpha` / `colorSpace` 两个字段
+ * （`flipY` 在原生属于 **source** 那一侧，本库按既有签名把它单独作为一个位置参数保留）。
+ */
+export interface CopyExternalImageOptions {
+    /**
+     * 写进目标纹理的 RGB 是否先乘以 alpha。**默认 `true`**，与原生一致。
+     *
+     * 两端都能表达：
+     * - WebGPU 原样转发（原生默认值也是 true）；
+     * - WebGL2 走 `UNPACK_PREMULTIPLY_ALPHA_WEBGL`（见 `WebGL2Queue` 的状态处理）。
+     */
+    premultipliedAlpha?: boolean;
+    /**
+     * 目标纹理的颜色空间（编码空间）。**默认 `'srgb'`**，与原生一致。
+     *
+     * - WebGPU 原样转发（原生默认值也是 `'srgb'`）；
+     * - **WebGL2 无对应能力 → 传非 `'srgb'` 值时明确报错**，绝不静默忽略：
+     *   `UNPACK_COLORSPACE_CONVERSION_WEBGL` 只能表达「要不要做浏览器默认的色彩空间转换」，
+     *   表达不了「转成哪一个空间」；GL 侧的颜色空间由纹理内部格式（`-srgb` 后缀）决定。
+     */
+    colorSpace?: 'srgb' | 'display-p3';
+}
 export interface Queue {
     /**
      * 将主机端数据写入 buffer。
@@ -34,8 +59,14 @@ export interface Queue {
     size?: number): void;
     /** 将主机端像素上传到 texture（`texSubImage2D` 在 WebGPU 中的对应接口）。 */
     writeTexture(destination: TextureCopyView, data: ArrayBufferView, layout: TexelCopyBufferLayout, size: Extent3D): void;
-    /** 直接上传图像来源；支持 WebGPU 无法以其他方式表达的 `flipY`。 */
-    copyExternalImageToTexture(source: ExternalImageSource, destination: TextureCopyView, copySize: Extent3D, flipY?: boolean): void;
+    /**
+     * 直接上传图像来源；支持 WebGPU 无法以其他方式表达的 `flipY`。
+     *
+     * `flipY` 之后是编码参数（见 {@link CopyExternalImageOptions}）：两个字段的默认值都与原生
+     * 逐字段一致（`premultipliedAlpha: true`、`colorSpace: 'srgb'`），**省略时后端不向原生传
+     * 这两个字段**，因此既有调用的行为与改动前完全相同。
+     */
+    copyExternalImageToTexture(source: ExternalImageSource, destination: TextureCopyView, copySize: Extent3D, flipY?: boolean, options?: CopyExternalImageOptions): void;
     copyBufferToBuffer(source: Buffer, sourceOffset: number, destination: Buffer, destinationOffset: number, size: number): void;
     copyBufferToTexture(source: BufferCopyView, destination: TextureCopyView, copySize: Extent3D): void;
     /** 提交 command buffer。WebGL2 后端在此刷新挂起的写入和 GL 命令。 */

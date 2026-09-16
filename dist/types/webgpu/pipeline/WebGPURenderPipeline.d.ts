@@ -38,6 +38,8 @@ export declare class WebGPURenderPipeline implements RenderPipeline {
     private readonly sampleCountContext;
     private _disposed;
     private warnedMissingVertexLayouts;
+    /** `#39`：构造时是否由本管线合成了 layout（合成的那份由本管线负责释放）。 */
+    private readonly ownsLayout;
     /** `defaultColorFormats()` 的结果只依赖 readonly descriptor，缓存后避免每次解析都新建数组。 */
     private defaultColorFormatsCache;
     /**

@@ -12,6 +12,14 @@
  * `stencilWriteMask` 全部落到 GL 的 `*Separate` 入口上（GLES 3.0 支持双面模板，
  * 单面的 `stencilFunc` / `stencilOp` / `stencilMask` 表达不了 WebGPU 的双面状态）。
  * 两边对「不使用深度/模板」的解析形状也刻意保持一致，详见 {@link resolveRenderState}。
+ *
+ * ## 逐附件状态（`#10`）：能归约就归约，不能归约就**明确报错**
+ *
+ * WebGPU 侧是**逐 target** 下发混合与写掩码的（见 {@link reduceColorTargetState} 的说明）；
+ * WebGL2 只有一组全局的 `BLEND` / `blendFuncSeparate` / `colorMask` 状态，GLES 3.0 既没有
+ * `blendFunci` 也没有 `colorMaski`，逐附件的混合/写掩码**根本表达不了**。
+ * 所以这里把 `fragment.targets` 归约成一份全局状态：**所有非空 target 逐字段相同**时正常下发，
+ * 只要有一项不同就抛带 `[gpu-device-api] ` 前缀的英文错误 —— 绝不静默按附件 0 执行。
  */
 import type { RenderPipelineDescriptor } from '../../core/pipeline/RenderPipeline.js';
 import type { GlBlendState, GlStateCache, GlStencilFaceState } from '../utils/glStateCache.js';

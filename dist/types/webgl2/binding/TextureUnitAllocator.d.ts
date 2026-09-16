@@ -14,7 +14,7 @@
  * 2. 同一 group 内 binding 等于 `纹理 binding + 1` 的 sampler 条目。
  * 这与 WGSL 里 `@binding(2i)` / `@binding(2i+1)` 的常见写法天然吻合。
  */
-import type { BindGroupLayoutEntry } from '../../core/binding/BindingTypes.js';
+import type { BindGroupLayoutEntry, TextureSampleType } from '../../core/binding/BindingTypes.js';
 /** 一个 uniform block 在 GL 里的落点。 */
 export interface UniformBlockSlot {
     group: number;
@@ -39,6 +39,15 @@ export interface TextureSlot {
     /** 配对 sampler 条目的 binding；没有声明 sampler 时为 `null`。 */
     samplerBinding: number | null;
     samplerName: string | null;
+    /**
+     * 布局声明的采样类型（`BindGroupLayoutEntry.texture.sampleType`，缺省 `'float'`）。
+     *
+     * 为什么必须带进槽位：WebGL2 的 program 是**静态编译**的，绑定点上拿不到 sampler 的类型，
+     * 而 GLSL 里 `sampler2D` 去读一张整数纹理（`RGBA8UI`）不会报错 —— 只会读到无意义的整数。
+     * WebGPU 会在创建 bind group 时用 layout 的 `sampleType` 校验，WebGL2 这边靠这个字段
+     * 在真正绑定纹理时做同一件事（见 `WebGL2RenderPassEncoder.applyBindGroups`）。
+     */
+    sampleType: TextureSampleType;
 }
 export interface BindingPlanLimits {
     /** 可用纹理单元上限（取 `MAX_COMBINED_TEXTURE_IMAGE_UNITS`）。 */

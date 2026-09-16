@@ -7,7 +7,7 @@
  *    使 `dispose()` 能一次性释放设备创建的全部资源；
  * 2. **错误通道**：`device.onuncapturederror` 被路由到 `Device.onError` 注册的回调，
  *    原始 `GPUValidationError` / `GPUOutOfMemoryError` / `GPUInternalError` 会被翻译成
- *    core 的 `ValidationError` / `OutOfMemoryError` / `GpuError`；
+ *    core 的 `ValidationError` / `OutOfMemoryError` / `GPUInternalError`；
  * 3. **设备丢失**：`device.lost` 映射为 {@link DeviceLostInfo}，并在非主动销毁的情况下
  *    额外上报一个 {@link DeviceLostError}。
  *
@@ -35,6 +35,7 @@ import type { RenderTargetDescriptor } from '../core/render/RenderTarget.js';
 import type { ComputePipelineDescriptor } from '../core/pipeline/ComputePipeline.js';
 import type { RenderPipelineDescriptor } from '../core/pipeline/RenderPipeline.js';
 import type { BufferDescriptor } from '../core/resources/Buffer.js';
+import type { ExternalTextureDescriptor } from '../core/resources/ExternalTexture.js';
 import type { QuerySet, QuerySetDescriptor } from '../core/resources/QuerySet.js';
 import type { QueryResult, QuerySetReadOptions } from '../core/sync/QueryResult.js';
 import type { SamplerDescriptor } from '../core/resources/Sampler.js';
@@ -42,9 +43,11 @@ import type { ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
 import type { TextureDescriptor } from '../core/resources/Texture.js';
 import type { Disposable } from '../utils/Disposable.js';
 import { GpuError } from '../core/errors/GpuError.js';
+import { type ErrorScopeFilter, type ErrorScopeHandle } from '../core/errors/ErrorScope.js';
 import { type WebGPUAdapterRequestOptions } from './utils/wgpuCapabilities.js';
 import { WebGPUBuffer } from './resources/WebGPUBuffer.js';
 import { WebGPUTexture } from './resources/WebGPUTexture.js';
+import { WebGPUExternalTexture } from './resources/WebGPUExternalTexture.js';
 import { WebGPUSampler } from './resources/WebGPUSampler.js';
 import { WebGPUShaderModule } from './resources/WebGPUShaderModule.js';
 import { WebGPUQuerySet } from './resources/WebGPUQuerySet.js';
@@ -103,6 +106,14 @@ export declare class WebGPUDevice implements Device {
     private readonly resources;
     private readonly canvasContexts;
     private readonly errorCallbacks;
+    /**
+     * `#20` 已压入、尚未弹出的错误作用域（栈顶即最内层）。
+     *
+     * 与原生的 `[[errorScopeStack]]` **一一对应**：这里只在 push 成功、pop 成功时同步增删，
+     * 任何原生调用失败都会把本地这一层回滚掉，因此 `scopeDepth` 永远不会与原生栈不一致
+     * （「状态撒谎」是本库反复修过的一类问题）。
+     */
+    private readonly scopeStack;
     private readonly resolveLost;
     private lostInfoValue;
     private _disposed;
@@ -144,6 +155,29 @@ export declare class WebGPUDevice implements Device {
     createShaderModule(descriptor: ShaderModuleDescriptor): WebGPUShaderModule;
     createQuerySet(descriptor: QuerySetDescriptor): WebGPUQuerySet;
     /**
+     * 把一个图像来源导入成外部纹理（原生 `GPUDevice.importExternalTexture`）。
+     *
+     * ## 为什么先探测方法在不在，而不是无脑转发
+     *
+     * `GPUDevice.importExternalTexture` 在**部分实现上没有**（原生接口本身也是可选的：
+     * Chrome 很早就有了，其它实现未必）。直接调用会得到一句 `is not a function`，而调用方
+     * 完全没有上下文。这里显式探测并给出一条带替代方案的消息 —— 这也是本库对
+     * 「能力可能在也可能不在」的一贯做法（对照 `readTimingSupport()`）。
+     *
+     * ## 过期语义
+     *
+     * 返回的对象是**一帧有效**的：原生把它绑到自动过期任务源，之后任何使用都会失败。
+     * 本类只提供 {@link ExternalTexture.expired} 的透传查询，不自己计时（见
+     * `WebGPUExternalTexture` 的说明）。**每帧重新导入**是调用方的契约。
+     *
+     * ## `colorSpace` 明确报错而不是静默忽略
+     *
+     * `ExternalTextureDescriptor.colorSpace` 是**本库刻意保留但未实现**的字段
+     * （规范的 `GPUExternalTextureDescriptor` 现在只有 `source` / `label`）。既然它在
+     * 类型里存在，传了却什么都不做就是本库最忌讳的静默忽略，所以这里直接报错并给出替代方案。
+     */
+    importExternalTexture(descriptor: ExternalTextureDescriptor): WebGPUExternalTexture;
+    /**
      * 读回 query set 的结果：`resolveQuerySet` → `copyBufferToBuffer` → `mapAsync`。
      *
      * 两个中转 buffer 都通过 `this.createBuffer()` 创建，因此被设备的资源追踪覆盖：
@@ -172,6 +206,41 @@ export declare class WebGPUDevice implements Device {
      * 「设备还能不能用」，也应该注册一次。
      */
     onError(callback: (error: GpuError) => void): () => void;
+    /**
+     * `#20` 压入错误作用域：**原生转发** `GPUDevice.pushErrorScope(filter)`。
+     *
+     * ## 为什么这一侧可以直接转发
+     *
+     * WebGPU 的错误作用域本来就是为这个场景设计的，栈、filter 匹配、不匹配时向外层穿透、
+     * `pop` 的异步性全部由实现保证。本层**不重新实现**那套语义（那只会引入偏差），
+     * 只做两件原生不做的事：
+     *
+     * 1. 记住**入栈顺序**（{@link WebGPUDevice.scopeStack}），这样未配对的 `pop` 能在本地
+     *    被明确拒绝，而不是把原生那句 `OperationError` 原样漏给调用方；
+     * 2. 让 `dispose()` 能把被遗弃的作用域一起清掉（否则它们会一直挂在栈上，
+     *    并且原生栈也只在设备销毁时才消失）。
+     *
+     * ## 能力缺失时如实报错
+     *
+     * `GPUDevice.pushErrorScope` 在**部分实现上没有**（原生接口本身也是可选的，
+     * mock / 残缺实现同样如此）。直接调用会得到一句 `is not a function`，调用方没有任何上下文，
+     * 所以这里显式探测并按本库惯例给出带替代方案的英文错误 —— **不假装记录**，
+     * 也不会退化成「本地记一个长度、`pop` 恒返回 null」那种会撒谎的等价物。
+     */
+    pushErrorScope(filter: ErrorScopeFilter): ErrorScopeHandle;
+    /**
+     * `#20` 弹出错误作用域：原生 `popErrorScope()` 的结果映射成本库错误类型。
+     *
+     * 归属由原生保证（入栈时的那一层），所以这里只处理「没有作用域可弹」这一种本地错误：
+     * 它**拒绝**，而不是 resolve 成 `null` —— 后者会让「忘了配对」看起来像「作用域里没有错误」。
+     */
+    popErrorScope(): Promise<GpuError | null>;
+    /** 当前仍在栈上的错误作用域层数（诊断与测试用）。 */
+    get scopeDepth(): number;
+    /** 作用域句柄的默认 label（与其它资源一样走 `nextResourceId`，便于日志对照）。 */
+    private scopeLabel;
+    /** {@link WebGPUDevice.popErrorScope} 与作用域句柄 `pop()` 共用的唯一实现。 */
+    private popScope;
     /** 通过已注册的回调上报错误，不抛异常。回调自身抛错不会影响其它回调。 */
     reportError(error: GpuError): void;
     /** 释放设备创建的全部资源，然后销毁 device。幂等。 */
@@ -193,6 +262,17 @@ export declare class WebGPUDevice implements Device {
      * 丢失后 `GPUDevice` 上的所有调用都会被实现**静默丢弃**（命令不执行、也不报错），
      * 表现就是「画不出来但一切正常」；所以这里必须主动抛出带 `[gpu-device-api] ` 前缀的
      * {@link DeviceLostError}，并带上丢失原因。
+     *
+     * ## `#16`：「已 dispose」抛的也是 `DeviceLostError`，两个后端一致
+     *
+     * 改前这里对 `_disposed` 抛的是 `ValidationError`，而 WebGL2 后端抛 `DeviceLostError`
+     * —— 同一段上层代码（例如「拿旧 device 的资源去创建东西」的错误恢复分支）在 WebGPU 上
+     * 只会看到 `ValidationError`，跨后端写 `instanceof DeviceLostError` 的恢复逻辑就会漏掉这一支。
+     *
+     * 「已 dispose」与「设备丢失」是两件事，但**归类**是同一类：设备已经不能再用、
+     * 调用方该做的是丢弃它并重建。所以这里也抛 `DeviceLostError`，用 `reason: 'destroyed'`
+     * 表示「是调用方主动释放的、属于预期情形」（`isExpected === true`），
+     * 而真正的丢失（`GPUDevice.lost` / `webglcontextlost`）仍然带它自己的 reason。
      *
      * 公开（而不是 private）是因为 `WebGPUQueue` 的提交路径也要用它 —— 设备丢失后
      * `queue.submit()` 是唯一「静默无效」的提交入口，必须在那一层拦下。

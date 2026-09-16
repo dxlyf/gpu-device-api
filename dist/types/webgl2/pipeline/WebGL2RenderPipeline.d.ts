@@ -115,6 +115,17 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
     private readonly program;
     private readonly plan;
     private readonly topologyMode;
+    /**
+     * `MultisampleState.alphaToCoverageEnabled`（`#13`）。
+     *
+     * WebGPU 侧会把它翻成 `GPUMultisampleState.alphaToCoverageEnabled`，而 WebGL2 后端以前
+     * **完全不读**这个字段 —— 于是「用 alpha 做覆盖率抗锯齿」的管线在 WebGL2 上静默地不生效
+     * （画面上表现为边缘没有柔化，只有 MSAA 的普通效果）。GL 有 `SAMPLE_ALPHA_TO_COVERAGE`，
+     * 能表达，所以这里**实现**它。
+     */
+    private readonly alphaToCoverage;
+    /** 描述里声明的采样数（WebGPU 的默认值是 1）；`alphaToCoverage` 只能配 `> 1`。 */
+    private readonly declaredSampleCount;
     private readonly variantCache;
     private _disposed;
     constructor(descriptor: RenderPipelineDescriptor, program: CompiledProgram, layout: PipelineLayout | 'auto', options: WebGL2RenderPipelineOptions);
@@ -179,7 +190,15 @@ export declare class WebGL2RenderPipeline implements RenderPipeline {
      * `linePos` 恒为 `null`（GL 的日志只有行号，没有列号）。
      */
     getCompilationInfo(): Promise<CompilationInfo>;
-    /** 把该管线的固定功能状态写入 GL 状态缓存。 */
+    /**
+     * 把该管线的固定功能状态写入 GL 状态缓存。
+     *
+     * `SAMPLE_ALPHA_TO_COVERAGE`（`#13`）是个**上下文级**开关（不是逐 draw 状态的一部分），
+     * 所以直接在这里下发：每次 draw 多一次廉价的 `enable/disable` 是刻意选的 ——
+     * 走 `GlStateCache` 需要一个新字段，而这条路径的调用者（渲染通道）已经知道本帧的采样数，
+     * 在这里判断不会有歧义。采样数不合法时明确报错（与 WebGPU 的
+     * `toGPUMultisampleState` 同形：`alphaToCoverageEnabled` 要求 `sampleCount > 1`）。
+     */
     applyState(variant: ResolvedVariant, stencilReference?: number): void;
     /**
      * 取得（必要时创建）一个顶点数组对象。

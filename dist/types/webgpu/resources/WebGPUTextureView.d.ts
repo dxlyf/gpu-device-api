@@ -6,7 +6,7 @@
  * depth aspect，WebGPU 对这两种情况的报错很难定位，因此在这里提前抛出。
  */
 import type { TextureFormat } from '../../core/enums/TextureFormat.js';
-import type { TextureView, TextureViewDescriptor } from '../../core/resources/TextureView.js';
+import type { TextureSwizzleString, TextureView, TextureViewDescriptor } from '../../core/resources/TextureView.js';
 import type { WebGPUTexture } from './WebGPUTexture.js';
 /** view descriptor 的完整形态（`resolveTextureViewDescriptor` 的返回值）。 */
 export type ResolvedTextureViewDescriptor = TextureView['descriptor'];
@@ -23,6 +23,8 @@ export declare class WebGPUTextureView implements TextureView {
     constructor(texture: WebGPUTexture, descriptor?: TextureViewDescriptor, preResolved?: ResolvedTextureViewDescriptor);
     /** view 覆盖的格式（可能是重解释后的格式）。 */
     get format(): TextureFormat;
+    /** 实际生效的通道重排；未指定时为 `'rgba'`（与原生默认值一致）。 */
+    get swizzle(): TextureSwizzleString;
     get disposed(): boolean;
     /** GPUTextureView 没有 destroy；释放只是把本包装对象标记为不可用。 */
     dispose(): void;

@@ -34,9 +34,20 @@
  *
  * 因此 `unmap()` 在 WebGL2 上是**同步生效**的，而 WebGPU 是队列时序。这个差异只影响
  * 「同一帧里改同一块 buffer 再重复读回」这种极端用法，正常的上传/读回流程两者一致。
+ *
+ * ## `mappedAtCreation`
+ *
+ * GL 完全没有这个概念，本后端用影子内存模拟：创建时就把影子缓冲分配好、状态置为 `'mapped'`，
+ * 于是 `getMappedRange()` 立刻可用；`unmap()` 时按 `'write'` 路径整段上传。与 WebGPU 侧
+ * （原生支持）相比，调用方看到的接口与状态机完全一致，只有一条实现细节不同：这里的初始内容
+ * 是零（影子缓冲是新分配的），而原生映射内存的内容**未定义** —— 所以任何依赖初始内容的代码
+ * 两个后端都不可靠，契约里已把这点写明。
+ *
+ * 另外 GL 的映射没有「等待」这一段：`mapAsync()` 是同步完成 CPU 侧准备的，因此本后端的
+ * `mapState` 只会是 `'unmapped'` 或 `'mapped'`，永远不出现 `'pending'`。
  */
 import { BufferUsage } from '../../core/enums/BufferUsage.js';
-import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
+import type { Buffer, BufferDescriptor, BufferMapState, MapMode, MappedRange } from '../../core/resources/Buffer.js';
 import type { GlStateCache } from '../utils/glStateCache.js';
 export declare class WebGL2Buffer implements Buffer {
     readonly label: string;
@@ -60,6 +71,14 @@ export declare class WebGL2Buffer implements Buffer {
     /** 以 buffer 引用的形式登记 usage，便于调试时追踪（GL 本身不关心）。 */
     private readonly usages;
     private mapping;
+    /**
+     * 映射状态。GL 没有原生映射，本后端用影子缓冲模拟，所以只有 `'unmapped'` 与 `'mapped'`
+     * 两个状态（没有「等待原生」的 `'pending'` 窗口）。
+     *
+     * 与 WebGPU 后端一样，状态是唯一真相：`mapping` 是它的实现细节，`mapped` 由它派生，
+     * `getMappedRange()` 只看状态。
+     */
+    private _mapState;
     private _disposed;
     constructor(gl: WebGL2RenderingContext, state: GlStateCache, descriptor: BufferDescriptor, onDestroy: (buffer: WebGL2Buffer) => void);
     get disposed(): boolean;
@@ -67,6 +86,8 @@ export declare class WebGL2Buffer implements Buffer {
     get isIndexBuffer(): boolean;
     /** 该 buffer 创建时声明的 usage（只读，便于调试）。 */
     get usageFlags(): BufferUsage;
+    get mapState(): BufferMapState;
+    /** 由 {@link WebGL2Buffer.mapState} 派生，两者任何时候都一致。 */
     get mapped(): boolean;
     mapAsync(mode: MapMode, offset?: number, size?: number): Promise<ArrayBuffer>;
     /**

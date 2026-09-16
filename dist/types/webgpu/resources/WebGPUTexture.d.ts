@@ -57,14 +57,22 @@ export declare class WebGPUTexture implements Texture {
     private defaultViewResolved;
     private defaultViewKey;
     /**
-     * mip 降采样每一级用到的原生对象缓存，键是**级**（1 .. `mipLevelCount - 1`）。
+     * mip 降采样每一级、每一层用到的原生对象缓存，键是 **`"<级>:<层>"` 复合键**。
      *
-     * 这三样东西只由 (本纹理, 级, 格式) 决定，与「第几次调用 `generateMipmaps()`」无关：反复调用
+     * 这三样东西只由 (本纹理, 级, 层, 格式) 决定，与「第几次调用 `generateMipmaps()`」无关：反复调用
      * 时它们逐字段相同，重建纯属浪费（原生 view 的创建与 bind group 的校验都不便宜）。
+     *
+     * ## 为什么键必须带上「层」（本批最容易改出的静默错误）
+     *
+     * 数组 / 3D 纹理要**逐层**各降一遍，每一层的源 view、目标 view、bind group 都不同。
+     * 如果键仍然只有级号，第 2 层就会命中第 1 层留下的条目 —— 这一层渲染时采样的还是第 1 层的
+     * 源、写进的还是第 1 层的目标：**跨层串味**，而且 GPU 不会报任何错，只是画面悄悄错。
+     * 这与 `#32`（FBO 缓存键改对象身份）是同一类教训：**键漏字段 = 静默画错**。
+     * 单层 2d 纹理只有 `(级, 0)`，所以这个复合键对它**不多不少**就是「按级缓存」。
      *
      * 缓存**挂在纹理实例上**而不是模块级：view 是这张 texture 的 subresource，只有它自己能采样 /
      * 渲染，跨纹理共享必然是错的；生命周期也与纹理一致，`destroy()` 时清掉。
-     * 条目数上限就是 `mipLevelCount - 1`（创建后不变），不会随调用次数增长。
+     * 条目数上限是「所有级 × 该级的层数」，创建后不再变化，不会随调用次数增长。
      */
     private readonly mipPassCache;
     private _disposed;
@@ -122,7 +130,7 @@ export declare class WebGPUTexture implements Texture {
      * 很小的 draw —— 实测耗时见 `examples/core-texture-mipmap.ts`。
      *
      * 前置条件（不满足就抛 {@link ValidationError}，不做静默降级）：
-     * - 单采样、`mipLevelCount > 1`、`dimension: '2d'` 且只有一层（1d / 3d / 2d-array 尚未实现）；
+     * - 单采样、`mipLevelCount > 1`；
      * - usage 必须带 `TextureUsage.RenderAttachment`，因为本方法要把它当颜色附件写；
      * - 格式必须**可渲染且可过滤**：`rgba8snorm`、`rgb9e5ufloat` 这类不可渲染的格式，以及整数
      *   格式（不能线性滤波）都走不了这条路径，需要改用 `rgba8unorm` 系列或自己上 compute。
@@ -130,18 +138,34 @@ export declare class WebGPUTexture implements Texture {
      * 这里刻意用**原生** WebGPU 对象（pipeline / bind group / encoder 都是临时的），
      * 而不是 core 的工厂：core 的 `create*` 会把资源登记到 `device` 上一直追踪到设备释放，
      * 为一次 mip 生成留下几个生命周期很长的包装对象并不划算。pipeline 按 (device, format)
-     * 缓存在模块级 WeakMap 里，同一个格式只建一次；逐级用到的 view / bind group 则按**级**
-     * 缓存在本实例上（见 {@link mipPassCache}），所以对同一张纹理反复调用不会重复创建。
+     * 缓存在模块级 WeakMap 里，同一个格式只建一次；逐级逐层用到的 view / bind group 则按
+     * **`"<级>:<层>"` 复合键**缓存在本实例上（见 {@link mipPassCache}），所以对同一张纹理
+     * 反复调用不会重复创建，数组 / 3D 也不会跨层串味。
+     *
+     * ## 数组 / 3D 纹理怎么处理（`#27`）
+     *
+     * `2d-array` 的每一层是**互相独立**的 subresource，所以逐层各降一遍，源层与目标层是同号层
+     * （第 s 层只由第 s 层降下来）—— 与 `gl.generateMipmap` 对数组纹理的语义一致。
+     *
+     * `3d` 的层数沿 z **减半**（WebGPU 规范：`max(1, depth >> mipLevel)`，层数组则不减半），
+     * 所以第 `level` 级写 `max(1, depth >> level)` 片，目标第 s 片采样源第 `s >> 1` 片：
+     * 同一片源的两次结果分别落到两片目标上，正好覆盖整条链。
+     *
+     * 每一层的降采样复用同一套「全屏三角形 + 双线性采样」逻辑，层级由 bind group 里的一个
+     * uniform 传进着色器（**不能**靠默认的 0 层 —— 那样每一层都会采样到第 0 层的内容，
+     * 这是本特性最容易犯的静默错误）。单层 2d 走的是**原来那条两绑定管线**，指令流逐字段不变。
      */
     generateMipmaps(): void;
     /**
-     * 取出（必要时创建）某一级降采样要用的原生对象：源 view、目标 view、bind group。
+     * 取出（必要时创建）某一级、某一层降采样要用的原生对象：源 view、目标 view、bind group
+     * （数组 / 3D 时还包括传层号的 uniform buffer）。
      *
      * 创建参数与缓存引入前**逐字段一致**（label / dimension / 覆盖的 mip 范围 / 覆盖的层范围），
-     * 否则会得到「看起来一样、其实范围或格式不同」的隐蔽错误。缓存的键是级：同一级在每次调用里
-     * 的源/目标/绑定完全相同，因此只有第一次调用会真的创建。
+     * 否则会得到「看起来一样、其实范围或格式不同」的隐蔽错误。缓存的键是 `"<级>:<层>"` 复合键：
+     * 同一个 (级, 层) 在每次调用里的源/目标/绑定完全相同，因此只有第一次调用会真的创建；
+     * 而不同的层一定落在不同的条目上，不会互相冒充。
      *
-     * `generator` 由 (device, 纹理格式) 唯一决定，而这两者对本纹理是常量，所以缓存的 bind group
+     * `generator` 由 (device, 纹理格式) 唯一决定，而这两者对纹理是常量，所以缓存的 bind group
      * 永远与当前的管线布局匹配。
      */
     private acquireMipPass;

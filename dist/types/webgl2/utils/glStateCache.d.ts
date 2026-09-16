@@ -104,6 +104,14 @@ export declare class GlStateCache {
     private scissorEnabled;
     private viewport;
     private scissor;
+    /**
+     * 最近一次 {@link setScissor} 看到的「整个附件」的矩形（`0, 0, width, height`）。
+     *
+     * 存在的意义是让 {@link resetScissor} 能在**已经处于复位状态**时一次 GL 调用都不发：
+     * 只要「开关已关」且「当前矩形就是这个尺寸的整个附件」，复位就是空操作。
+     * 初值 `null` 表示还不知道 —— 那就老老实实下发。
+     */
+    private scissorWholeBox;
     /** `UNIFORM_BUFFER_OFFSET_ALIGNMENT` 的记忆值（设备常量，见同名方法）。 */
     private uniformAlignment;
     /**
@@ -192,6 +200,15 @@ export declare class GlStateCache {
      * 摘掉（`framebufferTexture2D(..., null)`）不影响纹理本身，只是解除引用。
      */
     attachReadbackTexture(texture: WebGLTexture, attachment: number, mipLevel: number): void;
+    /**
+     * 忘掉「读回 framebuffer 上挂着什么」的记录，**不动 GL 状态**。
+     *
+     * 给直接操作附着点的调用方用：`WebGL2CommandEncoder.copyTextureToBuffer` 要逐层读回，
+     * 于是自己用 `framebufferTextureLayer` 换层号（那条路径不走 {@link attachReadbackTexture}）。
+     * 不遗忘的话，下一次 `attachReadbackTexture` 会以为附件还是老样子而跳过重新挂载 ——
+     * 实际附着点上已经是另一层（甚至另一张）纹理了。
+     */
+    forgetReadbackTexture(): void;
     /**
      * 释放状态缓存自己持有的 GL 对象（目前只有复用的读回 framebuffer）。
      *
@@ -311,7 +328,41 @@ export declare class GlStateCache {
     setStencilTest(state: GlStencilState): void;
     setCull(enabled: boolean, face: number, frontFace: number): void;
     setViewport(x: number, y: number, width: number, height: number): void;
+    /**
+     * 设置 scissor 的开关与矩形（`setScissorRect` 与内部复位都走这里）。
+     *
+     * `enabled === false` 时只关开关、**不设矩形**（矩形交给 {@link resetScissor} 管理，
+     * 因为 GL 的矩形只有在开关打开时才影响结果，而比较矩形也只在打开时才有意义）。
+     */
     setScissor(enabled: boolean, x: number, y: number, width: number, height: number): void;
+    /**
+     * 把 scissor 复位成「**整个附件**、且关闭」（批 06 `#14`）。
+     *
+     * 每个渲染通道开始时调用一次（`WebGL2RenderTarget.bind()` 的三条目标路径 +
+     * `WebGL2RenderPassEncoder` 的默认帧缓冲 / 原始附件两条路径）。
+     *
+     * ## 为什么必须每次复位
+     *
+     * WebGPU 的 `GPURenderPassEncoder` 在**每个 pass 开始时**把 scissor 重置成整个附件；
+     * 而 WebGL2 这边 `SCISSOR_TEST` 与矩形都是**上下文状态**，会跨 pass 保留。改前的复位
+     * 只在「要清屏」的分支里做，于是「上一个 pass 设过 `setScissorRect` → 本 pass 颜色与深度
+     * 都是 `load`」这条缝里，上一个 pass 的矩形会继续生效 —— 而且
+     * `WebGL2RenderPassEncoder.end()` 的 `invalidate()` 让缓存**声称** scissor 是关的，
+     * 缓存与驱动不一致，后续绘制被静默裁进旧矩形。
+     *
+     * ## 为什么是「关闭」而不是「开着 + 整个附件」
+     *
+     * 两者对画面的效果相同（整个附件的裁剪框裁不掉任何像素），但「关闭」与本后端
+     * 其余路径的默认状态一致（默认帧缓冲路径、原始附件路径改前就是关的），
+     * 也不会让一条从未用过 scissor 的管线白白走上裁剪路径。
+     * 关键的一点是**矩形必须同时被复位**：`setScissor()` 只在 `enabled === true` 时比较矩形，
+     * 而 `invalidate()` 会清掉矩形记录，所以只关不设会让「矩形已经变了」这件事被漏掉 ——
+     * 某个 pass 里第一次 `setScissorRect` 就可能跳过 `gl.scissor()`，继续用更早的矩形。
+     *
+     * 调用是**幂等且免 GL 调用**的：已经在复位状态上（矩形与「整个附件」相同 + 已经关掉）
+     * 时直接返回，所以每个 pass 多加这一次调用不会带来任何 JS→GL 开销。
+     */
+    resetScissor(width: number, height: number): void;
     /** 当前生效的 program（未设置时为 `null`）。 */
     get currentProgram(): WebGLProgram | null;
     /** 当前生效的顶点数组对象。 */

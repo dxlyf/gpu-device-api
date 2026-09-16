@@ -5,7 +5,7 @@
  * 不能同时请求 `MapRead` 与 `MapWrite`。映射状态（`mapped`）由本类维护，
  * 使得在错误时机访问映射范围时能给出可读的报错，而不是 WebGPU 的通用校验失败。
  */
-import type { Buffer, BufferDescriptor, MapMode, MappedRange } from '../../core/resources/Buffer.js';
+import type { Buffer, BufferDescriptor, BufferMapState, MapMode, MappedRange } from '../../core/resources/Buffer.js';
 import type { WebGPUDevice } from '../WebGPUDevice.js';
 export declare class WebGPUBuffer implements Buffer {
     readonly label: string;
@@ -14,7 +14,15 @@ export declare class WebGPUBuffer implements Buffer {
     readonly native: GPUBuffer;
     private readonly device;
     private _disposed;
-    private _mapped;
+    /**
+     * 映射状态，与原生 `GPUBuffer.mapState` 同一套语义（`'unmapped' | 'pending' | 'mapped'`）。
+     *
+     * 用一个状态而不是 `mapped` 布尔，是为了**如实反映 `mapAsync()` 还没 settle 的那一段**：
+     * 那时原生 `[[pending_map]]` 非 null、`[[mapping]]` 还是 null，`getMappedRange()` 必须报错。
+     * 若只维护布尔，`mapAsync()` 一发出就可能被读成「已映射」，调用方就会在不该取范围的时候取
+     * 范围 —— 那正是本会话反复修的「状态撒谎」。所以状态机是唯一真相，`mapped` 由它派生。
+     */
+    private _mapState;
     /**
      * `mapAsync` 时向原生取到的**整段映射内存**（`GPUBuffer.getMappedRange()` 的返回值）。
      *
@@ -27,10 +35,14 @@ export declare class WebGPUBuffer implements Buffer {
      *    后续一律在它上面建视图，不再往原生对象上问第二遍。
      * 2. 它是原生返回的、指向**映射内存**的 `ArrayBuffer`：在它上面建 TypedArray 视图就是
      *    「不拷贝地访问映射内存」，写入自然落到 buffer 上。
+     *
+     * `mappedAtCreation: true` 时这块内存同样在构造期拿到（原生创建完就已映射）。
      */
     private mappedRange;
     constructor(device: WebGPUDevice, descriptor: BufferDescriptor);
     get disposed(): boolean;
+    get mapState(): BufferMapState;
+    /** 由 {@link WebGPUBuffer.mapState} 派生，两者任何时候都一致。 */
     get mapped(): boolean;
     /** 当前 buffer 是否仍然可用（未释放、device 未销毁）。 */
     get usable(): boolean;
@@ -57,6 +69,13 @@ export declare class WebGPUBuffer implements Buffer {
      * 传 0 在 `offset > 0` 时会直接报错。本类对外的 `getMappedRange(offset, size)` 则采用
      * 「相对映射起点」的约定（与 WebGL2 后端一致，见 {@link WebGPUBuffer.getMappedRange}），
      * 两者之间的平移只发生在这一处。
+     *
+     * ## 状态机
+     *
+     * `mapState` 在调用后立即变成 `'pending'`（原生 `[[pending_map]]` 已设置），原生 Promise
+     * settle 之后变成 `'mapped'`。如果原生 `mapAsync()` reject（设备丢失、范围非法等），
+     * 状态**回退到 `'unmapped'`** 并把错误抛出去 —— 绝不留下一个卡在 `'pending'` 的对象
+     * （那样 `getMappedRange()` 永远报「还没映射」，而调用方又再也不能重新映射）。
      */
     mapAsync(mode: MapMode, offset?: number, size?: number): Promise<ArrayBuffer>;
     /**
@@ -99,9 +118,22 @@ export declare class WebGPUBuffer implements Buffer {
      *
      * 未映射时是空操作（WebGPU 的 `unmap()` 对未映射 buffer 同样是合法的空操作），
      * 这样清理路径里可以放心地无条件调用。
+     *
+     * ⚠️ `'pending'` 时**不**调用原生 `unmap()`：原生规定「映射请求还没 settle 时调用 unmap()
+     * 会被忽略」（`[[pending_map]]` 还在，`[[mapping]]` 还是 null）。所以这里只把状态推回
+     * `'unmapped'`；那次 `mapAsync()` settle 时会看到状态已经不是 `'pending'`，于是立刻把刚
+     * 拿到的映射交还给原生，而不是把它泄漏成一块谁也不管的映射内存。这样 `mapState` 既不会停在
+     * 一个用户已经放弃的 `'pending'` 上，底层资源也不会泄漏。
      */
     unmap(): void;
-    /** 释放底层分配。幂等；已映射的 buffer 会先被取消映射。 */
+    /**
+     * 释放底层分配。幂等；已映射的 buffer 会先被取消映射。
+     *
+     * 原生 `GPUBuffer.destroy()` 本身就会取消映射（并在创建时用了 `mappedAtCreation` 却没
+     * `unmap()` 的情况下负责清理），所以这里**不**额外调 `native.unmap()`：那样会在 destroy
+     * 之前把映射内存 detach 掉，而 destroy 的语义是「释放整个 buffer」，多余的一步只会让行为
+     * 更难对齐。本类只负责把自己的状态推回 `'unmapped'`，保证 `mapState` / `mapped` 不撒谎。
+     */
     destroy(): void;
     /** `Disposable` 的别名，语义与 {@link WebGPUBuffer.destroy} 相同。 */
     dispose(): void;

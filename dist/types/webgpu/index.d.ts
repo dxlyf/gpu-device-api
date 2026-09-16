@@ -20,6 +20,7 @@ export { WebGPUCanvasContext, isWebGPUCanvasContext, type WebGPUCanvasContextOpt
 export { WebGPUBuffer, asGPUBuffer, describeUnknown, isNativeGPUBuffer, isWebGPUBuffer, } from './resources/WebGPUBuffer.js';
 export { WebGPUTexture, asGPUTexture, isNativeGPUTexture, isWebGPUTexture, type ResolvedTextureDescriptor, } from './resources/WebGPUTexture.js';
 export { WebGPUTextureView, asGPUTextureView, isNativeGPUTextureView, isWebGPUTextureView, type ResolvedTextureViewDescriptor, } from './resources/WebGPUTextureView.js';
+export { WebGPUExternalTexture, asGPUExternalTexture, isNativeGPUExternalTexture, isWebGPUExternalTexture, } from './resources/WebGPUExternalTexture.js';
 export { WebGPUSampler, asGPUSampler, isNativeGPUSampler, isWebGPUSampler, } from './resources/WebGPUSampler.js';
 export { WebGPUShaderModule, asWebGPUShaderModule, isWebGPUShaderModule, } from './resources/WebGPUShaderModule.js';
 export { WebGPUQuerySet, asGPUQuerySet, isWebGPUQuerySet, TIMESTAMP_INSIDE_PASSES_FEATURES, TIMESTAMP_QUERY_FEATURE, toGPUTimestampWrites, } from './resources/WebGPUQuerySet.js';

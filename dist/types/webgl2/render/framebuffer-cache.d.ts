@@ -27,6 +27,27 @@
  * 帧缓冲（WebGL2 里默认帧缓冲用 `null` 表示），所以不会留下「绑着一个已删除对象」的状态；
  * 而且本层每次 `beginRenderPass()` 与 `pass.end()` 都会重设 framebuffer 绑定
  * （见 `WebGL2RenderPassEncoder`），不会出现「以为还绑着旧对象」的情形。
+ *
+ * ## 下标语义：**数组下标就是片元 output location**（`#11`）
+ *
+ * `RenderPassDescriptor.colorAttachments` 允许出现 `null`，而 `null` **占位置**：它表示
+ * 「这个 location 的片元输出被丢弃」，与 WebGPU 的
+ * `GPURenderPassDescriptor.colorAttachments` 完全同形。所以这里的三件事必须一一对应：
+ *
+ * 1. 附件挂到 `COLOR_ATTACHMENT0 + 原始下标`（**不压缩**）；
+ * 2. `drawBuffers[i]` 给出 `location i` 落到哪个附着点，空位给 `NONE`；
+ * 3. 清屏用原始下标（见 `WebGL2RenderPassEncoder.clearRawAttachments`）。
+ *
+ * 改前第 1、2 项用的是「非空附件的压缩序号」而第 3 项用的是原始下标，于是
+ * `[null, view]` 会把 `view` 挂在 attachment 0、却去清 attachment 1，
+ * 而 `location 0` 的片元输出又写进 `view` —— 三处互相矛盾且**没有任何报错**。
+ *
+ * ## 为什么「建立时下发一次 drawBuffers」在复用（LRU 命中）时也是安全的
+ *
+ * `drawBuffers` 是 **framebuffer 对象自身的状态**（不像 `BLEND` 那样是上下文状态），
+ * 而缓存里的每个 framebuffer 由本类独占、键里含**完整的位置信息**（空位记 `-`），
+ * 所以同一组附件组合只会有一个 framebuffer、它的 `drawBuffers` 建立后不会被别人改写
+ * （`WebGL2RenderTarget` 只对自己的 FBO 调 `drawBuffers`）。命中缓存时不重复下发不会跑偏。
  */
 import type { RenderPassDescriptor } from '../../core/render/RenderPassEncoder.js';
 import type { WebGL2Texture } from '../resources/WebGL2Texture.js';
@@ -39,8 +60,23 @@ export declare class FramebufferCache {
     private readonly framebuffers;
     /** 每个条目引用了哪些纹理，用于 `releaseTexture()` 的精准淘汰。 */
     private readonly references;
+    /**
+     * `MAX_DRAW_BUFFERS` 的惰性查询结果。
+     *
+     * `drawBuffers` 的参数个数不能超过它（GLES 3.0 的下限是 4），而本层现在按**逐位置**下发，
+     * 所以附件槽数一旦超限就是「必然无效」的组合 —— 明确报错好过让 GL 报 `INVALID_VALUE`。
+     * 查询一次就记住（与 `GlStateCache.uniformBufferOffsetAlignment()` 同样的做法）。
+     */
+    private maxDrawBuffersValue;
     constructor(gl: WebGL2RenderingContext, options?: FramebufferCacheOptions);
     get size(): number;
+    /**
+     * `MAX_DRAW_BUFFERS`：查询失败时退回 GLES 3.0 的下限 4。
+     *
+     * 退回而不是「放行」：一个实现没有暴露这个常量时，4 是**规范保证**的最小可用值，
+     * 用 4 做上限不会误拒合法输入（超过 4 的组合在那种实现上本来就不保证成立）。
+     */
+    private maxDrawBuffers;
     /** 取得（必要时创建）与这组附件匹配的 framebuffer。 */
     acquire(descriptor: RenderPassDescriptor): WebGLFramebuffer;
     /**

@@ -1,0 +1,1 @@
+{"version":3,"file":"GPUInternalError.d.ts","sourceRoot":"","sources":["../../../../src/core/errors/GPUInternalError.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,QAAQ,EAAE,KAAK,eAAe,EAAE,MAAM,eAAe,CAAC;AAE/D;;;;;;;;;;;;;GAaG;AACH,qBAAa,gBAAiB,SAAQ,QAAQ;gBAChC,OAAO,EAAE,MAAM,EAAE,OAAO,GAAE,IAAI,CAAC,eAAe,EAAE,MAAM,CAAM;CAIzE"}

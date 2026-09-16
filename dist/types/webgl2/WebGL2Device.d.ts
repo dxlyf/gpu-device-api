@@ -23,11 +23,13 @@
  */
 import { BufferUsage } from '../core/enums/BufferUsage.js';
 import { GpuError } from '../core/errors/GpuError.js';
+import { type ErrorScopeFilter, type ErrorScopeHandle } from '../core/errors/ErrorScope.js';
 import { type Logger } from '../utils/logger.js';
 import type { Device, DeviceDescriptor, DeviceFeatures, DeviceLimits, DeviceLostInfo, DeviceTimingSupport } from '../core/Device.js';
 import type { BackendKind } from '../core/Adapter.js';
 import type { CanvasConfig, CanvasContext } from '../core/CanvasContext.js';
 import type { Buffer, BufferDescriptor } from '../core/resources/Buffer.js';
+import type { ExternalTexture, ExternalTextureDescriptor } from '../core/resources/ExternalTexture.js';
 import type { Texture, TextureDescriptor } from '../core/resources/Texture.js';
 import type { Sampler, SamplerDescriptor } from '../core/resources/Sampler.js';
 import type { ShaderModule, ShaderModuleDescriptor } from '../core/resources/ShaderModule.js';
@@ -82,6 +84,18 @@ export declare class WebGL2Device implements Device {
     private readonly logger;
     private readonly resources;
     private readonly errorCallbacks;
+    /**
+     * `#20` 已压入、尚未弹出的错误作用域（栈顶即最内层）。
+     *
+     * ## 为什么默认完全零开销
+     *
+     * 只有这个数组非空时，{@link WebGL2Device.drainGlErrors} 才会把读到的错误往作用域里记账。
+     * 不调用 `pushErrorScope` 的代码路径上，唯一的额外工作是一次 `length === 0` 判断 ——
+     * 既不多一次 `gl.getError()`，也不改变既有 debug 轮询的读取次数。
+     */
+    private readonly scopeStack;
+    /** `gl.getError()` 真正被调用的次数（诊断与测试用：用来证明「默认零开销」与「只有一个消费者」）。 */
+    private glErrorReads;
     /** 上下文恢复事件的订阅者；与 `errorCallbacks` 一样在 `dispose()` 时清空。 */
     private readonly contextRestoredCallbacks;
     private readonly canvasContexts;
@@ -145,6 +159,22 @@ export declare class WebGL2Device implements Device {
      */
     createQuerySet(descriptor: QuerySetDescriptor): QuerySet;
     /**
+     * `#22`：WebGL2 后端**做不到**导入外部纹理，这里明确报错并给出替代方案。
+     *
+     * 为什么做不到：GL 里没有「外部纹理」这个概念。`OES_EGL_image_external` 是
+     * EGL / GLES 的扩展（把 EGLImage 包成 `GL_TEXTURE_EXTERNAL_OES`），浏览器端的
+     * `WebGL2RenderingContext` **不暴露**它 —— 本机无头 Chrome + SwiftShader 实测：
+     * `gl.importExternalTexture` 是 `undefined`，`OES_EGL_image_external` /
+     * `OES_EGL_image_external_essl3` / `WEBGL_external_texture` 三个扩展名全部拿不到
+     * （探针页 `.tmp-02/probe/api-surface.html?backend=webgl2`）。
+     *
+     * 也**不**退化成「把当前帧拷进一张普通纹理」：那个替代方案在语义上不等价
+     * （每帧多一次全量上传、拿不到原生的平面/色彩空间处理，而且句柄不能跨帧复用），
+     * 偷偷替调用方换实现正是本库明确拒绝的做法。想这么做的调用方可以自己调
+     * `queue.copyExternalImageToTexture()`（两个后端都支持），差别是显式的。
+     */
+    importExternalTexture(descriptor: ExternalTextureDescriptor): ExternalTexture;
+    /**
      * 读回 query set 的结果：轮询 `QUERY_RESULT_AVAILABLE` 后逐条 `getQueryParameter`。
      *
      * 轮询本身是异步的（每轮让出一拍），不会像 `gl.finish()` 那样强制同步 GPU；
@@ -164,10 +194,101 @@ export declare class WebGL2Device implements Device {
     createFence(): WebGL2Fence;
     onError(callback: (error: GpuError) => void): () => void;
     reportError(error: GpuError): void;
+    /**
+     * `#20` 压入错误作用域：WebGL2 **没有**这个概念，这里给出等价物。
+     *
+     * ## 与 WebGPU 侧的语义差异（先说清楚，不假装一样）
+     *
+     * - 作用域只覆盖「`getError()` 读到的错误」，而 GL 的错误是**异步**产生的：
+     *   一次 `gl.getError()` 可能读到上一次无关调用留下的错误。所以这里回答的是
+     *   「这段时间内出现过某类错误」，**不是**「就是那一行错了」；
+     * - `filter` 无法真正筛选类型（GL 错误码分不出 validation / out-of-memory / internal），
+     *   它只决定「这条错误留在这一层，还是穿透给外层作用域」；
+     * - 每个作用域内 GL 只保留**一条**错误状态，所以 `errors` 的长度是下界而不是精确计数。
+     *
+     * 详见 `WebGL2ErrorScope` 与 `glErrorScope.ts` 的文件头。
+     *
+     * ## push 时先排空
+     *
+     * 入栈前把 GL 队列里**已有的**错误排掉（走既有的 `onError` 通道），否则上一段代码留下的
+     * 错误会被算进新作用域，作用域就变成「永远有错」。这一步同时也是「不消费掉别人错误」的
+     * 前提：排空走的是同一个消费者。
+     */
+    pushErrorScope(filter: ErrorScopeFilter): ErrorScopeHandle;
+    /**
+     * `#20` 弹出错误作用域：同步排空 GL 错误队列，再按 filter 决定错误留在哪一层。
+     *
+     * 栈为空时**拒绝**（而不是 resolve 成 `null`）——「没有作用域」与「作用域里没有错误」
+     * 是两件必须区分的事，后者才是 `null`。
+     *
+     * 出栈动作放在 {@link WebGL2Device.settleScope} 里，且**必须**在排空之后 —— 这一层要
+     * 留在栈顶才能接收「最后一次 `checkGlError` 到 `pop` 之间」产生的错误。
+     */
+    popErrorScope(): Promise<GpuError | null>;
+    /** 当前仍在栈上的错误作用域层数（诊断与测试用）。 */
+    get scopeDepth(): number;
+    /**
+     * `gl.getError()` 被调用的总次数。
+     *
+     * 暴露它是为了能**断言**「默认零开销」与「只有一个消费者」这两条契约：
+     * 不 push 作用域时不比改动前多读一次；push 之后 debug 轮询不会再多读一遍（那正是
+     * 「两个消费者互相抢错误」的形态）。
+     */
+    get glErrorReadCount(): number;
+    /**
+     * GL 错误**唯一**的读取入口。`#20` 之后所有 `gl.getError()` 调用都必须走这里。
+     *
+     * ## 为什么必须收敛成一个消费者
+     *
+     * GL 的错误是「读一次消费一条」的状态位。改动前有两个潜在消费者：
+     * debug 模式下的轮询（{@link WebGL2Device.checkGlError}）与（本批新增的）错误作用域。
+     * 如果各自直接调 `gl.getError()`，先跑的那个会把错误读走，后跑的那个读到 `NO_ERROR` ——
+     * 于是**作用域会误报「无错」**（或 debug 轮询漏报），而两边都不会有任何异常。
+     * 这正是本批最容易出的静默错误。收敛成一个消费者之后，读到什么就同时给两边记账，
+     * 谁都不会把对方的结果吃掉。
+     *
+     * ## 记账规则
+     *
+     * - 读到错误时：交给栈顶作用域记账（若有），**并且**走 debug 上报通道（若 debug 打开），
+     *   两边拿到的是**同一条**错误；
+     * - 作用域是否「命中」由 `pop` 时按 filter 判定（见 {@link WebGL2Device.settleScope}），
+     *   这里只负责如实记账；
+     * - **本函数不做「要不要读」的判断**，那是调用方的事（`checkGlError` 看 `debug`、
+     *   `pushErrorScope` 看是否需要清残留）。这样职责单一：一读就必然两边都记账，
+     *   不会出现「守卫条件写错 → 读了却没人收」这种静默漏报
+     *   （本批第一次实现就踩了：`settleScope` 先把作用域出栈，导致这里的守卫以为无人关心）。
+     *
+     * 无限循环不会发生：读到 `NO_ERROR` 就停，而驱动对空队列恒返回 `NO_ERROR`。
+     */
+    private drainGlErrors;
+    /**
+     * 作用域出栈时的归属判定（原生语义：错误归最内层；filter 不匹配则向外层穿透）。
+     *
+     * 返回本层 `pop()` 要交出去的那条错误；`null` 表示这一层没有可交的错误。
+     * 没有被交出去的错误不会被吞掉：它们要么留给外层（穿透），要么作为**未捕获错误**
+     * 走 `onError`（与 WebGPU 的 `uncapturederror` 同义）。
+     *
+     * ## 为什么「穿透」这件事在 GL 上仍然要做
+     *
+     * GL 本身没有 filter，但调用方写的是跨后端代码。若这里把 filter 当空气，
+     * `pushErrorScope('out-of-memory')` 内层就会把一条 validation 错误吃掉，
+     * 外层 `pushErrorScope('validation')` 拿到 `null` —— 同一段代码在 WebGPU 上拿得到错误、
+     * 在 WebGL2 上拿不到，那是最难查的一类不一致。
+     */
+    private settleScope;
+    /** 把作用域没有交出去的错误交给 `onError` 通道（与未捕获错误同一条路）。 */
+    private reportUnconsumed;
     dispose(): void;
     /**
      * 在 debug 模式下轮询 `gl.getError()` 并转成统一错误。
-     * 注意这会强制 CPU/GPU 同步，所以只在 debug 打开时调用。
+     *
+     * ## `#20`：这里不再直接调 `gl.getError()`
+     *
+     * 读取收敛到 {@link WebGL2Device.drainGlErrors} 一个消费者，否则它与错误作用域会互相
+     * 抢错误（先跑的读到错误、后跑的读到 `NO_ERROR`，于是其中一边静默误报）。语义不变：
+     * 关掉 debug 时依旧一次 GL 调用都不产生；开着 debug 时读到的错误依旧逐条走 `onError`。
+     *
+     * 注意它会强制 CPU/GPU 同步，所以只在 debug 打开（或显式排空）时调用。
      */
     checkGlError(context: string): void;
     private track;

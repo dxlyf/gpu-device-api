@@ -7,7 +7,7 @@
  * `native` 为 `null`，渲染通道看到它会直接绑定 framebuffer 0 而不是某个 FBO。
  */
 import { type Texture } from '../core/resources/Texture.js';
-import type { TextureView } from '../core/resources/TextureView.js';
+import { type TextureView } from '../core/resources/TextureView.js';
 import { type FrameTarget, type CanvasConfig, type CanvasContext, type CanvasPassDescriptor, type CanvasPassOptions } from '../core/CanvasContext.js';
 import type { WebGL2Device } from './WebGL2Device.js';
 /** 标记：这个 view 代表默认帧缓冲。 */
@@ -36,6 +36,13 @@ export declare class WebGL2CanvasContext implements CanvasContext {
     private depthRequested;
     /** 默认帧缓冲的采样数；`SAMPLES` 是 context 创建时定下的常量，查一次即可（见 sampleCount()）。 */
     private samples;
+    /**
+     * GL context 的创建属性（`alpha` / `premultipliedAlpha` …）。
+     *
+     * 这些属性**在 context 创建之后改不了**，所以在 `configure()` 里只能读回来对照调用方
+     * 要求的 `alphaMode` —— 对不上就明确报错，而不是让 alphaMode 静默失效（`#13`）。
+     */
+    private attributes;
     constructor(options: WebGL2CanvasContextOptions);
     get device(): WebGL2Device | null;
     get deviceRef(): WebGL2Device | null;
@@ -78,6 +85,16 @@ export declare class WebGL2CanvasContext implements CanvasContext {
      * `antialias` 决定、在 context 生命周期内不会变，所以这里只查一次并记住。
      */
     private sampleCount;
+    /**
+     * 把调用方要的 `alphaMode` 与 GL context 的**创建属性**对照。
+     *
+     * GL context 的属性在创建后就固定了，所以这里只有两种结果：一致（放行）或明确报错。
+     * 以前这里什么都不查，于是 `alphaMode` 静默失效 —— 调用方以为画布是不透明的，
+     * 实际合成结果带着 alpha（视觉上表现为「背景透出底下的东西」）。
+     */
+    private assertAlphaModeSupported;
+    /** 读（并缓存）GL context 的创建属性。 */
+    private contextAttributes;
     private applyBackingSize;
 }
 //# sourceMappingURL=WebGL2CanvasContext.d.ts.map

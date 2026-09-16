@@ -176,7 +176,25 @@ export declare class WebGL2RenderPassEncoder implements RenderPassEncoder {
      * 不是绑定点状态。为了避免同一张纹理被两个 view 以不同 mip 范围采样时结果错乱，这里直接报错。
      */
     private assertViewRangeSupported;
-    /** 原始附件（不走 RenderTarget）路径下的清屏。 */
+    /**
+     * 原始附件（不走 RenderTarget）路径下的清屏。
+     *
+     * ## 下标语义（`#11`）：`clearBufferfv(COLOR, i)` 的 `i` 是 **location 下标**，不是附着点枚举
+     *
+     * `clearBuffer*` 的 `drawbuffer` 参数是「第几个 draw buffer」，清的是 `drawBuffers[i]` 指向的
+     * 附着点。`FramebufferCache` 现在按**逐位置**挂附件（`drawBuffers[i] = COLOR_ATTACHMENT0 + i`，
+     * 空位为 `NONE`），所以这里用**原始数组下标**清屏才是对的，三处必须一致：
+     *
+     * | 处 | 语义 |
+     * | --- | --- |
+     * | `FramebufferCache.acquire` 挂附件 | `COLOR_ATTACHMENT0 + 原始下标` |
+     * | `FramebufferCache.acquire` 的 `drawBuffers` | 逐位置，空位 `NONE` |
+     * | 这里 | `clearBufferfv(COLOR, 原始下标)` |
+     *
+     * 任何一处改用「非空附件的压缩序号」，`colorAttachments: [null, view]` 这类组合就会
+     * 静默地画错（改前正是如此：附件挂在 0、清屏清 1、draw 的 location 0 又写进 view）。
+     * `null` 空位**不清屏**：那个 location 没有片元输出，清它没有意义。
+     */
     private clearRawAttachments;
     /**
      * 画进默认帧缓冲（canvas）。

@@ -5,7 +5,7 @@
  * 提交的命令**执行前**统一生效。因此本后端的时序契约与 WebGL2 不同（详见
  * {@link WebGPUQueue.writeBuffer} 的说明），core 在 `Queue` 的文档里已经如实记录了这个差异。
  */
-import type { Queue, ExternalImageSource } from '../../core/sync/Queue.js';
+import type { Queue, ExternalImageSource, CopyExternalImageOptions } from '../../core/sync/Queue.js';
 import type { Buffer } from '../../core/resources/Buffer.js';
 import type { BufferCopyView, CommandBuffer, TextureCopyView } from '../../core/render/CommandEncoder.js';
 import type { Extent3D, TexelCopyBufferLayout } from '../../types/internal.js';
@@ -39,8 +39,17 @@ export declare class WebGPUQueue implements Queue {
      *
      * `flipY` 是 WebGPU 唯一能在拷贝阶段翻转垂直方向的地方（`writeTexture` 做不到），
      * 因此需要「图片坐标系 ↔ GPU 坐标系」转换时优先用它。
+     *
+     * ## `premultipliedAlpha` / `colorSpace`（`#25`）
+     *
+     * 两个参数都属于原生的 **destination**（`GPUCopyExternalImageDestInfo`），
+     * 默认值与原生的 IDL 默认值逐字段一致：`premultipliedAlpha = true`、`colorSpace = 'srgb'`。
+     *
+     * **未指定时不下发这两个字段**：调用形状仍是改动前的 `{ source, flipY }`，
+     * 于是「没写新参数」的行为与改动前逐字段相同（默认值由原生实现填，我们不去重复一遍
+     * 再传回去）。只有在调用方显式给了值时，才把值原样放进 destination。
      */
-    copyExternalImageToTexture(source: ExternalImageSource, destination: TextureCopyView, copySize: Extent3D, flipY?: boolean): void;
+    copyExternalImageToTexture(source: ExternalImageSource, destination: TextureCopyView, copySize: Extent3D, flipY?: boolean, options?: CopyExternalImageOptions): void;
     /**
      * buffer → buffer 的拷贝。
      *
