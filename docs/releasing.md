@@ -182,7 +182,8 @@ git ls-remote --tags origin | Select-String "<新版本 tag>"   # tag 真的在�
 ```
 
 建议顺手确认「发布出来的包确实是刚构建的产物」（可选）：
-解包后看 `dist/types/index.d.ts` 第一行是不是 `/// <reference types="@webgpu/types" />`
+解包后看 `dist/index.d.ts`（0.5.0 起类型声明与 `.js` 同级，不再有 `dist/types/`）第一行是不是
+`/// <reference types="@webgpu/types" />`
 （`scripts/postbuild.mjs` 补的那一行；`tsc` 会丢弃它，所以这一行缺失意味着 postbuild 没跑）。
 
 发布当版本对应的 tag 状态（截至 0.3.0）：npm 上 `latest = 0.3.0`，版本列表为 `0.1.0 / 0.1.1 / 0.2.0 / 0.3.0`。

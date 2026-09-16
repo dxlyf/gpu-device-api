@@ -1,0 +1,1 @@
+{"version":3,"file":"CompareFunction.js","sourceRoot":"","sources":["../../../src/core/enums/CompareFunction.ts"],"names":[],"mappings":"AAAA;;;GAGG;AACH,MAAM,CAAC,MAAM,eAAe,GAAG;IAC7B,KAAK,EAAE,OAAO;IACd,IAAI,EAAE,MAAM;IACZ,KAAK,EAAE,OAAO;IACd,SAAS,EAAE,YAAY;IACvB,OAAO,EAAE,SAAS;IAClB,QAAQ,EAAE,WAAW;IACrB,YAAY,EAAE,eAAe;IAC7B,MAAM,EAAE,QAAQ;CACR,CAAC"}

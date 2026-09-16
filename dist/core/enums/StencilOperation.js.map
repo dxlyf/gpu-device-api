@@ -1,0 +1,1 @@
+{"version":3,"file":"StencilOperation.js","sourceRoot":"","sources":["../../../src/core/enums/StencilOperation.ts"],"names":[],"mappings":"AAAA,sCAAsC;AACtC,MAAM,CAAC,MAAM,gBAAgB,GAAG;IAC9B,IAAI,EAAE,MAAM;IACZ,IAAI,EAAE,MAAM;IACZ,OAAO,EAAE,SAAS;IAClB,MAAM,EAAE,QAAQ;IAChB,cAAc,EAAE,iBAAiB;IACjC,cAAc,EAAE,iBAAiB;IACjC,aAAa,EAAE,gBAAgB;IAC/B,aAAa,EAAE,gBAAgB;CACvB,CAAC"}

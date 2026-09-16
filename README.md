@@ -97,10 +97,15 @@ npm i @dxyl/gpu-device-api
 import { createDevice, BufferUsage, vec3, mat4, quat } from '@dxyl/gpu-device-api';
 ```
 
-上面这段按**包根**导入：便捷层与 core / shaders / factories 一起由 `src/index.ts` 导出，
-`package.json` 的 `exports` 也只声明了 `"."`，所以 `@dxyl/gpu-device-api` 就是唯一入口
-（没有 `@dxyl/gpu-device-api/gfx` 这种子路径）。仓库内的示例为了改一行就能看到效果，
-按源码路径导入（`./src/index.js`、`./src/gfx/index.js`），两者指向同一份代码。
+上面这段按**包根**导入：便捷层与 core / shaders / factories 一起由 `src/index.ts` 导出。
+
+**自 0.5.0 起**，`package.json` 的 `exports` 除 `"."` 外还声明了三个**单后端子入口**：
+`@dxyl/gpu-device-api/core`、`/webgl2`、`/webgpu`。只用其中一个后端时**请走子入口** ——
+打包器才能把另一个后端整棵摇掉（实测 gzip −39~41%）。走包根则两个后端都会进来
+（主入口的树摇实测**无效**，原因与数字见下面「打包与产物形态」）。`/gfx` 之类的其它子路径**仍然不存在**。
+
+仓库内的示例为了改一行就能看到效果，按源码路径导入（`./src/index.js`、`./src/gfx/index.js`），
+两者指向同一份代码。
 
 在仓库里开发：
 
@@ -109,10 +114,43 @@ pnpm install
 
 pnpm dev          # 启动示例站（vite dev server），打开 /examples/gallery.html
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（当前 44 个文件 / 715 条用例，node 环境；数字以 pnpm test 打印的为准）
-pnpm build        # 产出 dist/gpu-device-api.js（ESM）+ dist/types
+pnpm test         # vitest run（当前 48 个文件 / 751 条用例，node 环境；数字以 pnpm test 打印的为准）
+pnpm build        # vite 出 UMD + ES 单文件包，tsc 出模块树与 .d.ts（见下面「打包与产物形态」）
 pnpm build:demo   # 产出静态示例站到 dist-demo/
 ```
+
+> `pnpm test` 的数字里有 **7 条**是校验发布形态的（`test/entry-surface-dist.test.ts`）：
+> 它们需要先跑过一次 `pnpm build`；若磁盘上的 `dist/` 还是旧形态，这 7 条会**整体跳过**并打印缺了什么，
+> 此时是 744 通过 + 7 跳过。
+
+### 打包与产物形态（0.5.0 起）
+
+`pnpm build` 是两条路并存，各有明确职责（`package.json` 的 `build` 就是把这两步串起来）：
+
+```bash
+vite build && tsc -p tsconfig.build.json && node scripts/postbuild.mjs
+```
+
+| 产物 | 由谁产出 | 给谁用 |
+| --- | --- | --- |
+| **模块树** `dist/**.js` + 同级 `.d.ts` + `.map`（入口平铺在 `dist/` 根下：`index` / `core` / `webgl2` / `webgpu`） | `tsc` | 有打包器的使用方 —— 按**模块粒度**摇树，这是「只用 WebGL2 就不必背上 WebGPU」的正解 |
+| **UMD** `dist/gpu-device-api.umd.cjs` | `vite` | `require()`、老工具链、CDN 直引 |
+| **ES 单文件** `dist/gpu-device-api.es.js` | `vite` | 无打包器时用 `<script type="module">` 直引 |
+
+**顺序不能反**：`vite build` 会先清空 `dist/`，紧随的 `tsc` 只写自己的文件，两者文件名不重叠。
+
+几个**实测过的**关键点，避免踩坑：
+
+- **UMD 必须落在 `.cjs`**。`package.json` 是 `"type": "module"`，若叫 `.js` 会被 Node 当 ESM 解析 ——
+  `require()` **不报错**，只是**静默拿到一个空命名空间**（同一份字节实测：`.cjs` 下 251 个导出，`.js` 下 **0** 个）。
+- **单文件包必然包含两个后端**（它打的是主入口）。想要小就用子入口 + 打包器；想要单文件就得接受这一点。
+- **走包根的树摇实测无效**：只用 WebGL2 的消费方与同时用两个后端的消费方，产物只差 **−2 字节**
+  （rollup / esbuild / vite 三家一致），因为 `src/factories/default-registry.ts` 静态导入了两个适配器、
+  而「用哪个后端」是**运行时字符串**。切到子入口后 esbuild `291738 → 167843`（gzip −39.2%）。
+- **单文件包不出 sourcemap**，只有模块树出（详见 `vite.config.ts` 里的取舍说明）。
+
+发布产物在**每个版本**都会用真实产物验证：入口字段指向的文件确实存在、模块树的每条相对说明符都能解析、
+入口真的能被 `import` / `require`（`test/entry-surface-dist.test.ts`）。
 
 包入口 `src/index.ts` 导出 **core + shaders + factories + utils** 四层：
 

@@ -1,0 +1,1 @@
+{"version":3,"file":"TextureUsage.js","sourceRoot":"","sources":["../../../src/core/enums/TextureUsage.ts"],"names":[],"mappings":"AAAA,8CAA8C;AAC9C,MAAM,CAAC,MAAM,YAAY,GAAG;IAC1B,IAAI,EAAE,MAAM;IACZ,OAAO,EAAE,MAAM;IACf,OAAO,EAAE,MAAM;IACf,kCAAkC;IAClC,cAAc,EAAE,MAAM;IACtB,sCAAsC;IACtC,cAAc,EAAE,MAAM;IACtB,gDAAgD;IAChD,gBAAgB,EAAE,MAAM;CAChB,CAAC"}

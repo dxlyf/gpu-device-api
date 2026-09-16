@@ -1,1 +1,0 @@
-{"version":3,"file":"plan-provider.d.ts","sourceRoot":"","sources":["../../../../src/webgl2/binding/plan-provider.ts"],"names":[],"mappings":"AAAA;;;GAGG;AAEH,OAAO,KAAK,EAAE,gBAAgB,EAAE,MAAM,2BAA2B,CAAC;AAElE,MAAM,WAAW,mBAAmB;IAClC,QAAQ,CAAC,SAAS,EAAE,gBAAgB,CAAC;CACtC"}
