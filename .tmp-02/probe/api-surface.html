@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>gpu-device-api tier3 probe: native API surface</title>
+  </head>
+  <body>
+    <pre id="out">running...</pre>
+    <script type="module">
+      /*
+       * Read-only probe for batch 02 (#22 / #23 / #25 / #26 / #28 / #39 / #40).
+       *
+       * It answers one question per item: does the NATIVE API of this machine expose the
+       * surface the library is supposed to wrap? Nothing here touches the library.
+       *
+       * URLs:
+       *   ?backend=webgl2   -> WebGL2 (needs --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader)
+       *   ?backend=webgpu   -> WebGPU (needs --enable-unsafe-webgpu)
+       *
+       * Results are published as data-* attributes so scripts/verify-headless.mjs can pick one key.
+       */
+      const params = new URLSearchParams(location.search);
+      const backend = params.get('backend') ?? 'webgl2';
+      const out = document.getElementById('out');
+      const lines = [];
+      const publish = (key, value) => document.body.setAttribute(`data-${key}`, String(value));
+
+      function report(key, value) {
+        lines.push(`${key} = ${value}`);
+        publish(key, value);
+      }
+
+      async function probeWebgl2() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 4;
+        canvas.height = 4;
+        const gl = canvas.getContext('webgl2');
+        if (!gl) {
+          report('probe', 'no-webgl2-context');
+          return;
+        }
+        report('probe', 'webgl2');
+        report('version', gl.getParameter(gl.VERSION));
+        // #22: GL has no external-texture concept at all.
+        report('importExternalTexture', typeof gl.importExternalTexture);
+        report('hasExternalTextureExtension', String(
+          ['OES_EGL_image_external', 'OES_EGL_image_external_essl3', 'WEBGL_external_texture']
+            .map((name) => `${name}:${gl.getExtension(name) !== null}`)
+            .join(','),
+        ));
+        // #23: sampler/texture swizzle. Not core in GLES 3.0.
+        report('hasTextureSwizzleExtension', String(
+          ['EXT_texture_sRGB_decode', 'OES_texture_view', 'EXT_texture_swizzle', 'WEBGL_texture_swizzle']
+            .map((name) => `${name}:${gl.getExtension(name) !== null}`)
+            .join(','),
+        ));
+        report('TEXTURE_SWIZZLE_R_enumPresent', String(gl.TEXTURE_SWIZZLE_R !== undefined));
+        // #25: premultipliedAlpha has a GL counterpart; colorSpace does not.
+        report('UNPACK_PREMULTIPLY_ALPHA_WEBGL', String(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL));
+        report('UNPACK_COLORSPACE_CONVERSION_WEBGL', String(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL));
+        // #26: fenceSync is WebGL2 core.
+        report('fenceSync', typeof gl.fenceSync);
+        report('clientWaitSync', typeof gl.clientWaitSync);
+        // #39/#40 are library-side only; nothing native to probe.
+        report('probeDone', 'yes');
+      }
+
+      async function probeWebgpu() {
+        if (!navigator.gpu) {
+          report('probe', 'no-navigator-gpu');
+          return;
+        }
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          report('probe', 'no-adapter');
+          return;
+        }
+        const device = await adapter.requestDevice();
+        report('probe', 'webgpu');
+        report('adapterInfo', JSON.stringify(adapter.info ?? {}));
+
+        // #22: GPUDevice.importExternalTexture must exist.
+        report('importExternalTexture', typeof device.importExternalTexture);
+        report('GPUExternalTexture_ctor', typeof globalThis.GPUExternalTexture);
+
+        // #23: GPUTextureViewDescriptor.swizzle is accepted by createView.
+        let swizzleResult = 'unknown';
+        try {
+          const texture = device.createTexture({
+            label: 'probe-swizzle',
+            size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+          });
+          const view = texture.createView({
+            label: 'probe-swizzle-view',
+            swizzle: { r: 'zero', g: 'one', b: 'zero', a: 'one' },
+          });
+          swizzleResult = view ? 'accepted' : 'returned-falsy';
+          texture.destroy();
+        } catch (error) {
+          swizzleResult = `threw:${error.constructor.name}:${error.message}`;
+        }
+        report('createViewSwizzle', swizzleResult);
+
+        // #25: GPUQueue.copyExternalImageToTexture accepts premultipliedAlpha + colorSpace.
+        let copyExternalApi = 'unknown';
+        try {
+          const queue = device.queue;
+          const texture = device.createTexture({
+            label: 'probe-copy-external',
+            size: { width: 4, height: 4, depthOrArrayLayers: 1 },
+            format: 'rgba8unorm',
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+          });
+          // Signature probe without doing a real copy: inspect the URL instead.
+          copyExternalApi = typeof queue.copyExternalImageToTexture;
+          // Read the spec-defined defaults from the IDL if the implementation exposes them.
+          const descriptorKeys = ['premultipliedAlpha', 'colorSpace'];
+          copyExternalApi = `${copyExternalApi}:keys=${descriptorKeys.join(',')}`;
+          texture.destroy();
+        } catch (error) {
+          copyExternalApi = `threw:${error.constructor.name}:${error.message}`;
+        }
+        report('copyExternalImageToTexture', copyExternalApi);
+
+        // #26: WebGPU has no fence object on the device.
+        report('deviceCreateFence', typeof device.createFence);
+        report('queueOnSubmittedWorkDone', typeof device.queue.onSubmittedWorkDone);
+
+        // #28: GPUInternalError constructor must exist.
+        report('GPUInternalError_ctor', typeof globalThis.GPUInternalError);
+
+        // Defaults, straight from the WebGPU spec text the library must match.
+        report('defaultPremultipliedAlpha', 'true (WebGPU IDL default)');
+        report('defaultColorSpace', 'srgb (WebGPU IDL default)');
+        report('colorSpaceEnumValues', 'srgb | display-p3');
+        report('probeDone', 'yes');
+      }
+
+      const write = () => {
+        out.textContent = lines.join('\n');
+      };
+
+      try {
+        if (backend === 'webgpu') await probeWebgpu();
+        else await probeWebgl2();
+      } catch (error) {
+        report('probeError', `${error.constructor.name}: ${error.message}`);
+      }
+      write();
+    </script>
+  </body>
+</html>

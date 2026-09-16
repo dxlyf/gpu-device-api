@@ -11,6 +11,9 @@ examples/*.png
 !.tmp-probe/
 .tmp-2a/
 .tmp-2b/
+.tmp-02/
+# 批 02 的原生 API 面探针页要入库：它是「原生在本机有没有这个 API」的可复现证据
+!.tmp-02/probe/
 .tmp-04/
 .tmp-05/
 .tmp-06/
