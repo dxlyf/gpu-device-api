@@ -386,6 +386,37 @@
 以下限制原先散落在各批的汇报里，集中在这里以便使用方**一处看到全貌**。凡标注「仅调用级」
 「未实测」「未确证」「转述」的，都**没有**像素级或硬件级证据。
 
+**`#1`：`setViewport` / `setScissorRect` 的 helper 不提供跨后端归一（0.4.0 补测后的新结论，务必读）**
+
+0.3.0 里标注的「`#1` 的两后端浏览器实测待补」**现已完成**，而且结论与当时的预期相反：
+
+- `toNativeScissorRect` / `toNativeViewportRect` 只把「左上原点矩形」换算成**该附件自己的原生
+  坐标**，**不负责让两个后端落到同一图像区域**。实测（`examples/scissor-origin.html` +
+  `scripts/verify-scissor-origin.mjs`，无头 Chrome，附件 64×64；`R` = 红 = 图像上半，
+  `G` = 绿 = 图像下半，`K` = 被裁掉；读数是附件自己的纹素行序）：
+  - WebGL2 **离屏不翻投影**：不转换的 `(0,0,64,32)` → 保留**下半**；`helper(0,32,64,32)` →
+    保留**上半**。
+  - WebGPU **离屏不翻投影**：不转换的 `(0,0,64,32)` → 保留**上半**；`helper(0,32,64,32)` →
+    保留**下半**。
+  - 也就是**两边都传 `'bottomLeft'`，却保留了相反的半区**。
+- 原因：两个后端在「不翻投影的离屏附件」上**图像朝向本身就相反**（WebGL2
+  `RenderTarget.rowOrder === 'bottomUp'`、WebGPU `'topLeft'`，与 `docs/backend-limits.md`
+  第五节一致）—— helper 只做坐标换算，同一个 `imageOrigin` 在朝向相反的两个附件上必然落到
+  相反的图像半区。
+- **告示：调用方必须按「该附件自身的朝向」传 `imageOrigin`；同一条代码不可能靠一个常量在两个
+  后端上同时正确。** 跨后端可移植的做法是依据 `RenderTarget.rowOrder` **逐通道**决定
+  `imageOrigin`（或改走「离屏时显式翻投影」这条统一路径），而不是依赖固定常量。
+- **WebGPU 的 canvas 通道结构性不可测**：交换链没有 `COPY_SRC`，`getCurrentTexture()` 读不回
+  主机，所以 canvas 那一侧**只有 WebGL2 有实测**，WebGPU 是规范期望（探针页用
+  `data-gpuCanvasExpected*` 如实标注，未谎报为实测）。
+- **本版不提供便利 API**：不加「按 `rowOrder` 自动选 `imageOrigin`」的入口 ——
+  `RenderTarget.rowOrder` 已经暴露了所需信息，加一个自动入口要动公开面，并多一轮完整的
+  验证 / 重建 / 发布。若将来提供，那会是一次**新增**；**目前尚未提供**。
+- 附注：`8cc5f4c` 里那张标着「实测」的 TSDoc 表**当时并未跑浏览器**（同一次提交的说明里写着
+  「因环境内存不足未能跑浏览器验证」），现已按真实读数更正，并补上「两个后端的 `imageOrigin`
+  取值不是同一套参照系」这条当时没有的结论 —— 见 `src/core/render/ScissorOrigin.ts` 的 TSDoc
+  与 `docs/backend-limits.md` 第八节。
+
 **能力边界：本库会拒绝，或只做近似**
 
 1. **WebGL2 读回深度纹理（`#9`）被处置为明确报错，依据只有本机 ANGLE/SwiftShader 实测**
