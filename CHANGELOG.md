@@ -75,6 +75,62 @@
   | `MultisampleState.alphaToCoverageEnabled` | **实现** | GL 有 `SAMPLE_ALPHA_TO_COVERAGE`，下发 `enable`/`disable`；`sampleCount === 1` 时报错（与 WebGPU 的 `toGPUMultisampleState` 同形） |
   | layout 的 `texture.sampleType` | **实现** | `sampleTypeMatchesFormat` 早就写好了却无人调用；现在把它带进绑定计划槽位，供渲染通道在绑定时校验 |
 
+### 修复（MRT：逐附件状态与 `null` 空位下标，不再静默降级）
+
+本批三项都属于「MRT 的状态或下标被静默降级」：改前既不报错、也不是数值差一点，而是**画到了别的
+地方**（或用了别的状态），且 `glError` 始终为 `0`。改动前的证据单独提交在 `f13396e`
+（三个测试文件共 26 条用例、**14 条失败**：`#10` 六条、`#11` 五条、`#11.3` 三条）。
+
+- **WebGL2 逐附件 blend / writeMask 曾被静默当成附件 0（`#10`）**
+  改前把 `fragment.targets` 的逐附件状态当成整帧唯一的全局状态：blend 取「第一个带 blend 的
+  `target`」、`writeMask` 取 `targets[0].writeMask`。实测 `targets: [{ blend: alpha }, { blend: additive }]`
+  不报错且两个附件都用 alpha；`[null, { writeMask: Blue }]` 更是把写掩码**静默退回 `All`**。
+  - 本机只读原生探针实测（真实渲染）：`gl.blendFunci` / `gl.blendEquationSeparatei` / `gl.colorMaski`
+    **全为 `undefined`** —— WebGL2 的 GLES 3.0 基线表达不了逐附件状态。
+  - 因此改为把 targets **归约**成一份全局状态：所有非空 target 逐字段相同就正常下发（可归约）；
+    只要有一项不同，就抛带 `[gpu-device-api] ` 前缀的英文错误（说明原因与替代方案）。
+    `null` 空位不参与比较（它表示「这个 location 没有输出」），所以
+    `[null, { writeMask: Blue }]` 这类写法现在是**可表达**的。
+  - 回归：`test/webgl2-mrt-target-state.test.ts`。
+
+- **WebGL2 `colorAttachments` 的 `null` 空位让三处下标互相矛盾（`#11`，逐像素验证）**
+  选定语义：**数组下标即 fragment output location**（与 WebGPU 同形，`null` 表示该 location 丢弃输出）。
+  改前附件被压缩挂到 `COLOR_ATTACHMENT0..n`、`drawBuffers` 也被压缩，清屏却用原始下标 ——
+  于是 `[null, view]` 变成「附件挂在 0、清屏清 1、location 0 又写进 view」。实测 `[view, null]` 的
+  `drawBuffers` 只有 1 项（尾部空位被丢掉）、`[view, null, view]` 的第二个附件被挂到 1 而不是 2。
+  - **改前的真实逐像素证据**（WebGL2 + SwiftShader，只读原生探针，逐像素读回）：
+    `a=[255,0,0,255] b=[0,255,0,255] c=[255,0,0,255] d=[0,255,0,255] e=[255,0,0,255] f=[255,0,0,255]`，
+    且 **`glError=0`**。其中 `d` 该是洋红却保持绿（**洋红清屏没落地**），`e` / `f` 该得蓝 / 绿却都
+    拿到红（**location 0 串味**）—— 全部静默。
+  - **改后**同一探针：
+    `a=[255,0,0,255] b=[0,255,0,255] c=[255,0,0,255] d=[0,255,255,255] e=[0,0,255,255] f=[0,255,0,255]`，
+    `glError=0`，**6/6 逐条命中**。
+  - 三处对齐：附件挂 `COLOR_ATTACHMENT0 + 原始下标`；`drawBuffers` 逐位置（空位 `GL_NONE`）；
+    清屏用原始下标。
+  - 另补两层守卫：① `MAX_DRAW_BUFFERS` 校验（**槽位数含空位**，超限时在创建任何 GL 对象之前就
+    明确报错，而不是让 GL 报 `INVALID_VALUE`；假 GL 查不到该枚举时退回 GLES 3.0 下限 **4**，
+    真机实测该值是 **8**）；② 多重采样路径的对齐校验（那条路径的 `drawBuffers` 与 resolve blit
+    固定在渲染目标自己的附件顺序上，空位会被静默忽略 —— 空位 / 子集 / 换序都明确报错，
+    整组按序继续放行）。
+  - 回归：`test/webgl2-mrt-attachment-slots.test.ts`。
+
+- **WebGPU 侧 `[a, null]` 与 `[null, a]` 曾撞同一个变体键（`#11.3`）—— 处置为明确报错**
+  pass 布局的 `formats` 只收非空附件（而原生 `colorAttachments` 保留空位），所以 `[a, null]` 与
+  `[null, a]` 推导出**同一个变体键**（`rgba8unorm|1|none`）：实测 `createRenderPipeline` 只被调用
+  **1** 次，两条布局共用**同一条原生管线**，空位后面的 targets 整体前移一位。
+  - 完整修法要动公开类型 `RenderPipelineVariant.colorFormats`（把密集列表改成**逐位置**），
+    不在本批所有权内，因此本批改为：**「空位后面还有非空附件」直接明确报错，尾部空位继续放行**。
+  - 浏览器实测原生 WebGPU（Chrome / DX12）确认了这条边界：`[view, null]` + 密集 `targets` →
+    原生**接受**（像素 `255,0,0,255`，无 validation error）；`[null, view]` + 密集 `targets` →
+    原生报 `Attachment state ... { colorTargets: [0=Undefined, 1=RGBA8Unorm] } ... { colorTargets: [0=RGBA8Unorm] }`
+    （正是「密集列表表达不了空位」）；而 `targets: [null, state]`（**逐位置**）+ `[null, view]` →
+    原生**接受**，且 location 1 正确收到绿色。**结论：「逐位置 `targets`」是正解**，
+    完整修法见下面的「已知限制」。
+  - 回归：`test/webgpu-mrt-null-slots.test.ts`。
+
+- **本批验证状态**：`tsc --noEmit` 0 错误；`vitest run` **39 文件 / 591 用例全过**
+  （基线 36 / 557；本批三个新测试文件到修复提交为止共 34 条用例）。
+
 ### 修复（两后端行为与校验的一致性对齐：同一份代码不该一边正常一边抛错）
 
 本批七项的共同点是**同一份上层代码在两个后端上表现不同**，或者**校验只有一侧有**。
@@ -120,6 +176,43 @@
     `#17` 的 cube view 结论基于 GLES 3.0 的纹理目标模型与本后端的实现方式，
     没有在真实驱动上尝试「用 `TEXTURE_2D_ARRAY` 当 `samplerCube`」这种不合法组合去反证。
 
+### 工程与文档（CI 与发布流程从无到有，附仓库清理）
+
+- **新增 CI：本仓库的第一道自动防线（`0794e7a`）**
+  `.github/workflows/ci.yml`（push / pull_request / 手动触发，Node 24 + pnpm 12.3.4）跑五步：
+  `pnpm install --frozen-lockfile` → `tsc --noEmit` → `vitest run` → `pnpm run build` →
+  **`git status --porcelain -- dist` 必须为空**。此前仓库完全没有 CI：`tsc` / `vitest` / 像素基线
+  全靠人工跑，推送到 GitHub 没有任何自动拦截。
+  - 最后一步的价值是**机械拦住「改了 `src` 却没重建 `dist`」**。该缺陷在本项目**真实发生过两次**，
+    其中一次导致「仓库里的产物 ≠ npm 上实际发布的包」，而且是**发布之后**才发现的。
+    「工作区干净」不等于「`dist` 与 `src` 同步」—— 这两个概念混过一次。
+  - 「校验 dist」这一步不是推测出来的：把构建重定向到一个不写 `dist` 的临时目录后，与提交的
+    `dist` 逐文件比对 —— **340/340 文件同集合，339 个逐字节相同**，唯一差异是
+    `scripts/postbuild.mjs` 补的那行 `/// <reference types="@webgpu/types" />`（CI 跑的是完整
+    build，故该差异不存在）；另确认 `dist` 全部为 LF、bundle 未压缩（没有 esbuild minify
+    这类与平台相关的步骤）。
+  - **像素基线故意不进 CI**：它们依赖 SwiftShader 参数、本机固定的 Chrome 路径，以及「两个后端的
+    参数不能同时加」，在 GitHub runner 上行为未知；放一个不稳定的必过项会把「红」变成常态。
+    五条锁定基线仍按 `docs/releasing.md` 第三节在本地手跑。
+  - ⚠️ **未在真实 GitHub runner 上验证**（本机无法执行 Actions）。降风险的做法：`actionlint`
+    v1.7.12（下载后核对过 sha256）对工作流报 0 问题；工作流里每条命令都在本机用同一套依赖实跑过；
+    三个 action 的 `with:` 输入名与 `using` 运行时逐个核对过。首次推送后以 GitHub 的实际结果为准。
+
+- **新增 `docs/releasing.md`**：发版前清单（含本地跑五条基线的完整命令与期望值）、版本号与
+  `CHANGELOG.md` 的约定、tag 现状、`npm publish` 与 `prepublishOnly` 的关系、发布后核对、
+  「`dist/` 是否入库」的取舍，以及 CI 覆盖什么 / 不覆盖什么。
+
+- **`engines.node` 声明曾被加上又撤掉（`da69c03`）**：本库的产物是**预构建的浏览器 ESM bundle**，
+  `engines` 是对**使用方**的运行时要求；而 Node 24 只是本仓库的**构建工具链**版本，从未作为
+  使用方运行时验证过。声明一个未验证的下限，只会让 Node 20 / 22 的使用方收到 `EBADENGINE` 警告。
+  构建工具链要求改为在 CI 与 `docs/releasing.md` 里钉死（`package.json` 里也**不加**
+  `packageManager` —— 它与 `pnpm/action-setup` 的 version 同时存在会被判为「版本被指定了两次」
+  而报错）。**净效果：0.4.0 相对 0.3.0 不新增 `engines` 声明。**
+
+- **仓库清理**：删掉误入库的临时探针目录 `.tmp-probe/`（3 个被跟踪文件：`README.md` /
+  `gl-probe.html` / `gl-probe.ts`；内容仍在 git 历史里，需要时可恢复），以及散落截图
+  `image.png`（275 KB、966x678、**无任何文件引用**）。
+
 ### 验证状态（如实标注）
 
 - 判别依据：node 侧假 GL 的**逐字节**断言（假 GL 按 GL 的契约自己检查输入：数据够不够、
@@ -127,9 +220,90 @@
 - 五条锁定像素基线两后端**逐字命中**，另有 `rtt-orientation`(core) 与 `stencil` 两后端通过。
 - `tsc --noEmit` 0 错误；`vitest run` **36 文件 / 557 用例全过**（本批新增 2 个测试文件、42 条用例）。
   （这是**本批合入当时**的数字；后续批次继续增长，见上面「一致性对齐」那一节的标注。）
-- ⚠️ **没有验证的点**：深度读回「WebGL2 上完全不可行」这一结论只在本机 ANGLE/SwiftShader 上实测过
-  （规范层面吻合，但未在硬件驱动上复核）；`alphaToCoverageEnabled` 只做了调用级验证
-  （断言 `enable`/`disable` 真的下发），**没有像素级验证**（没有跑抗锯齿前后对比截图）。
+- ⚠️ 本节原有的两条未验证点（`#9` 深度读回只在本机 ANGLE/SwiftShader 上实测、
+  `alphaToCoverageEnabled` 只有调用级验证）**已并入下面「已知限制（如实标注）」** ——
+  那里还集中了其余批次如实标注的限制，并区分了「实测」「仅调用级」「未确证 / 推理」。
+
+### 已知限制（如实标注）
+
+以下限制原先散落在各批的汇报里，集中在这里以便使用方**一处看到全貌**。凡标注「仅调用级」
+「未实测」「未确证」「转述」的，都**没有**像素级或硬件级证据。
+
+**能力边界：本库会拒绝，或只做近似**
+
+1. **WebGL2 读回深度纹理（`#9`）被处置为明确报错，依据只有本机 ANGLE/SwiftShader 实测**
+   （4 种深度格式 × 5 种 `readPixels` format/type 组合**全部 `0x500 INVALID_ENUM`**，
+   目标缓冲全 0；显式把 READ 与 DRAW 都挂到同一个完整深度 FBO 上仍然如此）。规范层面吻合
+   （WebGL2 的 read format 不接受 `DEPTH_COMPONENT` / `UNSIGNED_INT`），但**若某个硬件驱动
+   额外支持深度读回，本库会误拒**。「保守拒绝」优于「静默给错数据」，代价就是这个误拒 ——
+   这是已知限制。
+2. **多颜色附件的 MSAA resolve 未实测**：`resolve()` 用 `blitFramebuffer`，而 GLES 3.0 的 read
+   buffer 默认是 `COLOR_ATTACHMENT0`，所以**怀疑它只解析附件 0**（多目标 MSAA 时其余附件
+   可能根本没被解析）。这一条**未做实验确证** —— 是批 `05` 提出的怀疑，不是实测结论。
+   后续要碰 MSAA 多目标时**先实测这一点**。
+3. **`#8`（`copyTextureToTexture` 的 `origin.z` / 数组层）与 `alphaToCoverageEnabled`
+   只有调用级证据，无像素级验证**：前者断言的是**下发的 GL 调用**真的落到了
+   `framebufferTextureLayer` 上（逐层 blit）；后者只断言 `enable` / `disable` 真的下发，
+   **没有**跑抗锯齿前后对比截图。
+4. **`#39`（`layout` 接受 `BindGroupLayout`）的 WebGL2 管线路径没有真实跑通**：WebGPU 侧用
+   mock 原生设备验证了布局合成、顺序（下标即 bind group index）与随管线释放；WebGL2 侧只有
+   类型 / 归一化测试，加上「合成走的是与手写 `createPipelineLayout()` 完全相同的共享 helper」
+   这一**代码论证**，没有真正创建过 WebGL2 管线（批 `02` 自标为「本批最弱的一环」）。
+5. **`#27` 数组 / 3D mip 的像素级结果没验成**：本机 SwiftShader 的数组采样**错位**（连「层号写死
+   `0u` + 源 view 只覆盖第 0 层」都采到第 1 层的值），因此**无法区分环境错位与本库行为**；
+   正确性目前只由 node mock 的 subresource 断言覆盖 —— `test/webgpu-mipmap-array.test.ts` 的
+   文件头已自述「mock 只能证明下发给 GPU 的 subresource 选择是对的，证明不了真实采样值」。
+   另外 **3D 的 z 向滤波两后端语义不同**：GL 是面积平均，本实现取最近源片，属**已知近似**。
+6. **WebGPU 侧「`null` 之后的附件」目前只明确报错**，完整修法（把
+   `RenderPipelineVariant.colorFormats` 从密集列表改成**逐位置**，空位用 `null` 占位）已推迟；
+   原生实测已确认该修法可行（见上文 `#11.3`）。
+7. **`#12` 对齐 WebGPU 后：忘记 `pass.end()` 不再报错**（两后端都隐式结束）—— 这是**有意偏离**
+   「早暴露调用方错误」的选择。代价见上文「一致性对齐」一节的 `#12` 提醒：通道仍会走完收尾，
+   所以「少了一次 resolve」这类症状没有任何异常提示。
+
+**验证覆盖面上的限制**
+
+8. **`#20` 错误作用域在 WebGL2 上的四条限制**（由 GL 的错误模型决定，不是实现取舍）：
+   **无法分类**（GL 错误码分不出 validation / out-of-memory / internal）、
+   **无法归属**（只能回答「这段时间内出现过某类错误」，不能回答「就是那一行」）、
+   **计数只是下界**（`getError()` 队列只保留一条，同一次调用产生的多个错误会互相覆盖；实测连续
+   3 次非法调用只读到 1 条 `0x500`，其余为 `0x0`）、
+   **`filter` 只表示「这条错误留在哪一层」**（不改变错误类型，`filterMatched` 可能是 `false`
+   而 `pop()` 仍有值）。
+   两后端一致的一条：**库自身的参数错误是在调用点同步 `throw` 的**，不经过原生错误通道，
+   因此 `pushErrorScope` / `popErrorScope` **抓不到**。
+9. **多数像素证据来自 SwiftShader 软件光栅化**（本机无头 Chrome + ANGLE/SwiftShader）；
+   WebGPU 探针跑在真机 Intel gen-9 适配器上 —— **桌面独显 / Metal / Vulkan 后端未验证**。
+10. **闸门批量跑时偶发 `depth-gpu` 瞬时 `fail`**（本机同时有用户自己的十余个 Chrome 进程）：
+    **单独重跑同一 URL + flags 即过**，判为并发争用，不是回归。记录在此以免日后被误当 bug 追。
+11. 上文各节还留有若干**未验证点标注**（`#12` 隐式结束的观测深度、`#14` 只断言下发的 GL 状态、
+    `#17` cube 结论的论证方式，以及批 `06` 那一节列出的三条），此处不重复。
+
+**探针方法论：为什么结论都来自实测，而不是规范推演**
+
+12. `createBuffer({ size: 0 })` 被原生**接受** —— 拿它当「非法调用」的触发器会得到误导性结论。
+    ⚠️ 这一条**转述自批次汇报，仓库里没有留档的探针文件或提交信息，本条未复核**。
+13. **负数 mip level 被驱动报成 `INVALID_OPERATION`（`0x502`）**，而不是规范暗示的
+    `INVALID_VALUE`（本机只读原生探针实测）。
+14. **node 侧 mock 的 `createShaderModule` 永远返回 `{}`**，`getCompilationInfo` 不存在、
+    `createRenderPipeline` 也不校验 —— **着色器层面的错误在单测里一个都发现不了**：批 `03` 的
+    一道错 WGSL（`texture_2d_array` 用了不存在的 `vec3` 坐标重载）通过了全部单测，只在浏览器
+    第一次真正生成数组 / 3D 的 mip 时才被原生编译器拒绝。为此补了原生探针页
+    `examples/native-mipmap-shader-probe.html`。**结论：不要靠规范推演，要用只读原生探针实测。**
+15. 探针本身也有两个已知的坑（批 `03` 留档）：`copyTextureToBuffer` 的 `bytesPerRow` 必须是
+    **256 的倍数**（传 32 会让整个 command buffer 作废、读回**静默全 0**）；源纹理必须带
+    `COPY_SRC`。
+
+**已推迟 / 已决定不做**
+
+16. **`mipLevelExtent` 对 3D 的 `depth` 处理仍不符合 WebGPU 规范**：目前对 `2d` / `2d-array` /
+    `3d` 一律把 `depthOrArrayLayers` 当作「不减半」（`src/core/resources/Texture.ts` 的注释也这么
+    写着），而规范对 3D 是 `max(1, depth >> level)`。批 `03` 的实现**绕开了这个 helper**
+    （自己算 `max(1, depth >> level)`），所以 `#27` 的行为不受影响，但该导出 helper 本身对 3D
+    会算错 —— 推迟（派工书 `.tmp-briefs/12-*.md`）。WebGPU 空位的完整修法见第 6 条
+    （派工书 `.tmp-briefs/10-*.md`）。
+17. **`#21` render bundle 已决定不做**：纯能力新增，对「能放心使用」贡献最小、成本最高
+    （约 3 h），且 WebGL2 侧本就表达不了。
 
 ---
 
