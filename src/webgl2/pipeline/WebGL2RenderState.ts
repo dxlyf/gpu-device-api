@@ -12,10 +12,19 @@
  * `stencilWriteMask` 全部落到 GL 的 `*Separate` 入口上（GLES 3.0 支持双面模板，
  * 单面的 `stencilFunc` / `stencilOp` / `stencilMask` 表达不了 WebGPU 的双面状态）。
  * 两边对「不使用深度/模板」的解析形状也刻意保持一致，详见 {@link resolveRenderState}。
+ *
+ * ## 逐附件状态（`#10`）：能归约就归约，不能归约就**明确报错**
+ *
+ * WebGPU 侧是**逐 target** 下发混合与写掩码的（见 {@link reduceColorTargetState} 的说明）；
+ * WebGL2 只有一组全局的 `BLEND` / `blendFuncSeparate` / `colorMask` 状态，GLES 3.0 既没有
+ * `blendFunci` 也没有 `colorMaski`，逐附件的混合/写掩码**根本表达不了**。
+ * 所以这里把 `fragment.targets` 归约成一份全局状态：**所有非空 target 逐字段相同**时正常下发，
+ * 只要有一项不同就抛带 `[gpu-device-api] ` 前缀的英文错误 —— 绝不静默按附件 0 执行。
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
 import { ColorWriteMask, STENCIL_FACE_DEFAULT } from '../../core/pipeline/RenderState.js';
+import type { BlendState, ColorTargetState } from '../../core/pipeline/RenderState.js';
 import type { CompareFunction } from '../../core/enums/CompareFunction.js';
 import type { StencilOperation } from '../../core/enums/StencilOperation.js';
 import type { StencilFaceState } from '../../core/pipeline/RenderState.js';
@@ -87,8 +96,13 @@ export function resolveRenderState(
 
   const blendDescriptor = descriptor.render?.blend;
   const targets = descriptor.fragment?.targets;
-  const targetBlend = targets?.find((target) => target?.blend)?.blend;
-  const blendSource = targetBlend ?? blendDescriptor;
+  const global = reduceColorTargetState(
+    descriptor.label ?? 'renderPipeline',
+    targets,
+    blendDescriptor,
+    descriptor.render?.writeMask,
+  );
+  const blendSource = global.blend;
 
   let blend: ResolvedBlendState | null = null;
   if (blendSource) {
@@ -124,7 +138,7 @@ export function resolveRenderState(
         writeMask: 0,
       };
 
-  const writeMaskValue = targets?.[0]?.writeMask ?? descriptor.render?.writeMask ?? ColorWriteMask.All;
+  const writeMaskValue = global.writeMask;
   const cullMode = descriptor.primitive?.cullMode ?? 'none';
 
   return {
@@ -189,6 +203,116 @@ export function applyRenderState(
     writeMask: state.stencilWriteMask,
   });
   cache.setCull(state.cullEnabled, state.cullFace, state.frontFace);
+}
+
+/**
+ * 把 `fragment.targets` 的**逐附件** blend / writeMask 归约成 WebGL2 唯一的那一份全局状态（`#10`）。
+ *
+ * ## WebGPU 侧是逐 target 的
+ *
+ * `WebGPURenderState.toGPUColorTargets()` 把每个 `ColorTargetState` 的 `blend` / `writeMask`
+ * 分别写进 `GPUFragmentState.targets[i]`，缺省值来自 `RenderState.blend` / `RenderState.writeMask`
+ * （与 WebGPU 原生一致：某个 target 没写时回落到处方上的全局值，都没有就是「不混合」/ `All`）。
+ * 所以「两个附件用不同混合」在 WebGPU 上是合法的、会真的生效。
+ *
+ * ## WebGL2 侧只有一份
+ *
+ * GLES 3.0 的 `BLEND` / `blendFuncSeparate` / `blendEquationSeparate` / `colorMask` 都是
+ * **上下文级**状态，一次 draw 里对所有 draw buffer 一视同仁；逐附件的
+ * `blendFunci` / `blendEquationSeparatei` / `colorMaski` 是 GL 4.0 / ES 3.2 才有的，
+ * WebGL2 没有（本机审计实测 `gl.blendFunci === undefined`、`gl.colorMaski === undefined`）。
+ * `drawBuffers` 也改不了这一点 —— 它只决定每个 location 落到哪个附着点。
+ *
+ * ## 因此：相同就放行，不同就报错
+ *
+ * - 所有**非空** target 的 (blend, writeMask) 逐字段相同（包括都从 `render.blend` /
+ *   `render.writeMask` 缺省而来）→ 完全可表达，正常下发那一份全局状态；
+ * - 只要有一项不同 → 抛错。**不**允许像以前那样取「第一个带 blend 的 target」与
+ *   `targets[0].writeMask` 静默当成全局状态：那会让第二个附件按别人的状态绘制，
+ *   画面错了却没有任何报错（`#10` 的原始缺陷）。
+ * - `targets[i] === null` 表示「location i 没有输出」，它的状态没有意义，不参与比较 ——
+ *   所以 `[{blend: A}, null]` 与 `[null, {blend: A}]` 都是可表达的，不该被拒绝。
+ *
+ * 比较用**结构**而不是解析后的 GL 数值：`GL_BLEND_FACTORS` / `GL_BLEND_OPERATIONS` 是单射，
+ * 两者等价；用结构比较可以避免为了「比较」而把每个 target 的 blend 都解析一遍
+ * （解析会对未知因子抛错，那会把「状态不一致」这个真正的问题盖掉）。
+ */
+function reduceColorTargetState(
+  label: string,
+  targets: readonly (ColorTargetState | null)[] | undefined,
+  defaultBlend: BlendState | undefined,
+  defaultWriteMask: number | undefined,
+): { blend: BlendState | undefined; writeMask: number } {
+  const fallbackWriteMask = defaultWriteMask ?? ColorWriteMask.All;
+  // 没有逐 target 声明时，`render` 上那一份就是全局状态（与改前一致）。
+  if (!targets) return { blend: defaultBlend, writeMask: fallbackWriteMask };
+
+  let blend = defaultBlend;
+  let writeMask = fallbackWriteMask;
+  let firstIndex = -1;
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index];
+    if (!target) continue;
+    const targetBlend = target.blend ?? defaultBlend;
+    const targetWriteMask = target.writeMask ?? fallbackWriteMask;
+    if (firstIndex < 0) {
+      // 第一个**有输出**的 target 定下这一份全局状态。
+      firstIndex = index;
+      blend = targetBlend;
+      writeMask = targetWriteMask;
+      continue;
+    }
+    if (targetWriteMask !== writeMask) {
+      throw new ValidationError(
+        perTargetStateError(
+          label,
+          `writeMask differs between fragment.targets[${firstIndex}] and fragment.targets[${index}] ` +
+            `(0x${writeMask.toString(16)} vs 0x${targetWriteMask.toString(16)})`,
+        ),
+      );
+    }
+    if (!sameBlendState(blend, targetBlend)) {
+      throw new ValidationError(
+        perTargetStateError(
+          label,
+          `blend differs between fragment.targets[${firstIndex}] and fragment.targets[${index}]`,
+        ),
+      );
+    }
+  }
+  // 全部是空位（没有任何有输出的 target）时 `firstIndex` 仍是 -1，此时退回 `render` 上的全局状态。
+  return { blend, writeMask };
+}
+
+/** 逐附件的 blend / writeMask 在 WebGL2 上无法表达时的错误消息。 */
+function perTargetStateError(label: string, detail: string): string {
+  return (
+    `[gpu-device-api] RenderPipeline "${label}": ${detail}. WebGL2 has only one global blend state ` +
+    'and one global color write mask: GLES 3.0 has no blendFunci() / blendEquationSeparatei() / ' +
+    'colorMaski(), so per-attachment blending and per-attachment write masks cannot be expressed at ' +
+    'all. This library will not silently apply one target\'s state to every attachment. Give every ' +
+    'non-null fragment target the same blend and writeMask, or move the differing attachment into a ' +
+    'second render pass on the WebGL2 backend.'
+  );
+}
+
+/**
+ * 两份 blend 描述是否**等价**（逐字段，含 `undefined` → `'add'` 的缺省）。
+ *
+ * 判定是结构比较：`GL_BLEND_FACTORS` / `GL_BLEND_OPERATIONS` 把枚举名一对一映射到 GL 数值，
+ * 所以「结构相同」等价于「解析出的 GL 状态相同」。
+ */
+function sameBlendState(a: BlendState | undefined, b: BlendState | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.color.srcFactor === b.color.srcFactor &&
+    a.color.dstFactor === b.color.dstFactor &&
+    (a.color.operation ?? 'add') === (b.color.operation ?? 'add') &&
+    a.alpha.srcFactor === b.alpha.srcFactor &&
+    a.alpha.dstFactor === b.alpha.dstFactor &&
+    (a.alpha.operation ?? 'add') === (b.alpha.operation ?? 'add')
+  );
 }
 
 /** 把 core 的单面模板描述解析成 GL 枚举；缺省值取 {@link STENCIL_FACE_DEFAULT}。 */

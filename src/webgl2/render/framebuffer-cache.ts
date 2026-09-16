@@ -27,6 +27,27 @@
  * 帧缓冲（WebGL2 里默认帧缓冲用 `null` 表示），所以不会留下「绑着一个已删除对象」的状态；
  * 而且本层每次 `beginRenderPass()` 与 `pass.end()` 都会重设 framebuffer 绑定
  * （见 `WebGL2RenderPassEncoder`），不会出现「以为还绑着旧对象」的情形。
+ *
+ * ## 下标语义：**数组下标就是片元 output location**（`#11`）
+ *
+ * `RenderPassDescriptor.colorAttachments` 允许出现 `null`，而 `null` **占位置**：它表示
+ * 「这个 location 的片元输出被丢弃」，与 WebGPU 的
+ * `GPURenderPassDescriptor.colorAttachments` 完全同形。所以这里的三件事必须一一对应：
+ *
+ * 1. 附件挂到 `COLOR_ATTACHMENT0 + 原始下标`（**不压缩**）；
+ * 2. `drawBuffers[i]` 给出 `location i` 落到哪个附着点，空位给 `NONE`；
+ * 3. 清屏用原始下标（见 `WebGL2RenderPassEncoder.clearRawAttachments`）。
+ *
+ * 改前第 1、2 项用的是「非空附件的压缩序号」而第 3 项用的是原始下标，于是
+ * `[null, view]` 会把 `view` 挂在 attachment 0、却去清 attachment 1，
+ * 而 `location 0` 的片元输出又写进 `view` —— 三处互相矛盾且**没有任何报错**。
+ *
+ * ## 为什么「建立时下发一次 drawBuffers」在复用（LRU 命中）时也是安全的
+ *
+ * `drawBuffers` 是 **framebuffer 对象自身的状态**（不像 `BLEND` 那样是上下文状态），
+ * 而缓存里的每个 framebuffer 由本类独占、键里含**完整的位置信息**（空位记 `-`），
+ * 所以同一组附件组合只会有一个 framebuffer、它的 `drawBuffers` 建立后不会被别人改写
+ * （`WebGL2RenderTarget` 只对自己的 FBO 调 `drawBuffers`）。命中缓存时不重复下发不会跑偏。
  */
 
 import { ValidationError } from '../../core/errors/ValidationError.js';
@@ -89,6 +110,14 @@ export class FramebufferCache {
   private readonly framebuffers: PipelineCache<WebGLFramebuffer>;
   /** 每个条目引用了哪些纹理，用于 `releaseTexture()` 的精准淘汰。 */
   private readonly references = new Map<string, readonly WebGL2Texture[]>();
+  /**
+   * `MAX_DRAW_BUFFERS` 的惰性查询结果。
+   *
+   * `drawBuffers` 的参数个数不能超过它（GLES 3.0 的下限是 4），而本层现在按**逐位置**下发，
+   * 所以附件槽数一旦超限就是「必然无效」的组合 —— 明确报错好过让 GL 报 `INVALID_VALUE`。
+   * 查询一次就记住（与 `GlStateCache.uniformBufferOffsetAlignment()` 同样的做法）。
+   */
+  private maxDrawBuffersValue: number | null = null;
 
   constructor(gl: WebGL2RenderingContext, options: FramebufferCacheOptions = {}) {
     this.gl = gl;
@@ -103,11 +132,38 @@ export class FramebufferCache {
     return this.framebuffers.size;
   }
 
+  /**
+   * `MAX_DRAW_BUFFERS`：查询失败时退回 GLES 3.0 的下限 4。
+   *
+   * 退回而不是「放行」：一个实现没有暴露这个常量时，4 是**规范保证**的最小可用值，
+   * 用 4 做上限不会误拒合法输入（超过 4 的组合在那种实现上本来就不保证成立）。
+   */
+  private maxDrawBuffers(): number {
+    const cached = this.maxDrawBuffersValue;
+    if (cached !== null) return cached;
+    const queried = Number(this.gl.getParameter(this.gl.MAX_DRAW_BUFFERS));
+    const limit = Number.isFinite(queried) && queried > 0 ? queried : 4;
+    this.maxDrawBuffersValue = limit;
+    return limit;
+  }
+
   /** 取得（必要时创建）与这组附件匹配的 framebuffer。 */
   acquire(descriptor: RenderPassDescriptor): WebGLFramebuffer {
     const key = signatureOf(descriptor);
     const cached = this.framebuffers.get(key);
     if (cached) return cached;
+
+    // 槽位数（含空位）必须在 `MAX_DRAW_BUFFERS` 之内：`drawBuffers` 的**下标即 location**，
+    // 空位也要占一项，所以不能只数非空附件。
+    const slots = descriptor.colorAttachments.length;
+    const limit = this.maxDrawBuffers();
+    if (slots > limit) {
+      throw new ValidationError(
+        `[gpu-device-api] 这次渲染通道有 ${slots} 个颜色附件槽位（含 null 空位），超过了本设备的 ` +
+          `MAX_DRAW_BUFFERS（${limit}）。WebGL2 的 drawBuffers 下标就是片元 output location，` +
+          '空位也必须占一项，所以超限的组合无法表达。请减少颜色附件数量。',
+      );
+    }
 
     const gl = this.gl;
     const framebuffer = gl.createFramebuffer();
@@ -119,9 +175,18 @@ export class FramebufferCache {
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
 
     const referenced: WebGL2Texture[] = [];
-    let colorIndex = 0;
-    for (const attachment of descriptor.colorAttachments) {
-      if (!attachment) continue;
+    /**
+     * 逐位置的 draw buffer 列表：`drawBuffers[i]` 就是片元 output `location = i` 的去处，
+     * 空位是 `NONE`（丢弃输出）。长度恒等于 `descriptor.colorAttachments.length`。
+     */
+    const drawBuffers: number[] = [];
+    for (let index = 0; index < slots; index += 1) {
+      const attachment = descriptor.colorAttachments[index];
+      if (!attachment) {
+        // 空位**占一项**（`NONE`）：跳过它会让后面所有附件整体前移一位。
+        drawBuffers.push(gl.NONE);
+        continue;
+      }
       const view = attachment.view as WebGL2TextureView;
       const target = view.target;
       referenced.push(view.texture);
@@ -130,7 +195,7 @@ export class FramebufferCache {
         // 这里如果不跟着挂，指定了别的 mip 的 view 会悄悄读到错误的 mip 层。
         gl.framebufferTexture2D(
           gl.FRAMEBUFFER,
-          gl.COLOR_ATTACHMENT0 + colorIndex,
+          gl.COLOR_ATTACHMENT0 + index,
           target,
           view.glTexture,
           view.descriptor.baseMipLevel,
@@ -138,19 +203,17 @@ export class FramebufferCache {
       } else {
         gl.framebufferTextureLayer(
           gl.FRAMEBUFFER,
-          gl.COLOR_ATTACHMENT0 + colorIndex,
+          gl.COLOR_ATTACHMENT0 + index,
           view.glTexture,
           view.descriptor.baseMipLevel,
           view.descriptor.baseArrayLayer,
         );
       }
-      colorIndex += 1;
+      drawBuffers.push(gl.COLOR_ATTACHMENT0 + index);
     }
-    if (colorIndex > 0) {
-      gl.drawBuffers(
-        Array.from({ length: colorIndex }, (_unused, index) => gl.COLOR_ATTACHMENT0 + index),
-      );
-    }
+    // 空数组（纯深度通道）时不下发：新建的 framebuffer 的 DRAW_BUFFER0 初值就是
+    // `COLOR_ATTACHMENT0`，而它没有附件，效果与 `NONE` 相同。
+    if (drawBuffers.length > 0) gl.drawBuffers(drawBuffers);
 
     const depthAttachment = descriptor.depthStencilAttachment;
     if (depthAttachment) {

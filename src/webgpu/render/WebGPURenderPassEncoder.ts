@@ -81,12 +81,27 @@ export function toGPURenderPassDescriptor(
   const formats: TextureFormat[] = [];
   const nativeColors: (GPURenderPassColorAttachment | null)[] = [];
   const sampleCounts: number[] = [];
+  /**
+   * 第一个「后面还有非空附件」的空位下标（`#11.3`）。
+   *
+   * 原生数组保留空位、位置是对的；但 `layout.colorFormats` 是**非空附件的密集列表**，
+   * 而它是 `RenderPipelineVariant.colorFormats` 的唯一来源（变体键 + `fragment.targets`）。
+   * 于是空位后面的 `targets` 会整体前移一位，而且 `[view, null]` 与 `[null, view]` 会撞成
+   * 同一个变体键、共用同一条原生管线（实测 `createRenderPipeline` 只调用 1 次）。
+   * 这种组合本层无法正确表达，因此明确报错而不是静默错配（见下面的说明）。
+   */
+  let holeIndex = -1;
+  /** 已看到、但还不能确定「是空位还是尾部空位」的下标。 */
+  let pendingNull = -1;
 
-  for (const attachment of colorAttachments) {
+  for (let index = 0; index < colorAttachments.length; index += 1) {
+    const attachment = colorAttachments[index];
     if (!attachment) {
       nativeColors.push(null);
+      if (pendingNull < 0) pendingNull = index;
       continue;
     }
+    if (pendingNull >= 0 && holeIndex < 0) holeIndex = pendingNull;
     const view = asGPUTextureView(attachment.view, `${label}.colorAttachments`);
     const texture = attachment.view.texture;
     formats.push(attachment.view.descriptor.format ?? texture.format);
@@ -112,6 +127,36 @@ export function toGPURenderPassDescriptor(
       native.clearValue = resolveClearColor(attachment.clearValue);
     }
     nativeColors.push(native);
+  }
+
+  /*
+   * 空位后面还有非空附件 → 明确报错（`#11.3`）。
+   *
+   * 为什么不能像原生 WebGPU 那样直接放行：本后端的 `layout.colorFormats` 是**非空附件的密集
+   * 列表**（`formats.push` 只在非空时执行），而它是 `RenderPipelineVariant.colorFormats` 的唯一
+   * 来源 —— 变体键与 `GPUFragmentState.targets` 都从它推导。于是：
+   *
+   * - `fragment.targets[i]` 会被应用到**第 i 个非空**附件，而不是第 i 个位置，空位后面的 target
+   *   整体前移一位；
+   * - `[view, null]` 与 `[null, view]`（同格式）推导出同一个变体键 `rgba8unorm|1|none`，
+   *   `WebGPURenderPipeline.resolve()` 会返回**同一条**原生管线（实测 `createRenderPipeline`
+   *   只调用 1 次）—— 也就是「变体错配」。
+   *
+   * 完整的修法是让 `RenderPipelineVariant.colorFormats` 变成逐位置（空位用 `null` 占位），
+   * 那要动公开类型与别的模块；在那之前这里**明确失败**，绝不静默错配。
+   * 尾部的空位不受影响（`[view, null]`）：有输出的 location 与密集列表一一对应，继续放行。
+   */
+  if (holeIndex >= 0) {
+    throw new ValidationError(
+      `[gpu-device-api] ${label}: colorAttachments[${holeIndex}] is null, but a later entry is not null. ` +
+        'The WebGPU backend builds pipeline variants from the dense list of non-null color formats ' +
+        '(RenderPipelineVariant.colorFormats), so where a null slot sits cannot be expressed: the ' +
+        'fragment targets of the following attachments would shift by one location, and e.g. ' +
+        '[view, null] and [null, view] would resolve to the same GPURenderPipeline variant. Move the ' +
+        'null slots to the end of colorAttachments (a trailing null maps correctly for every location ' +
+        'that has an output), or give every slot a real attachment — for an unused location, render ' +
+        'to a small throwaway texture instead.',
+    );
   }
 
   const native: GPURenderPassDescriptor = { label, colorAttachments: nativeColors };

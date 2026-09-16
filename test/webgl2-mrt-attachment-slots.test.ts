@@ -44,6 +44,7 @@ import { FramebufferCache } from '../src/webgl2/render/framebuffer-cache.js';
 import { WebGL2RenderPassEncoder } from '../src/webgl2/render/WebGL2RenderPassEncoder.js';
 import { TextureUsage } from '../src/core/enums/TextureUsage.js';
 import type { WebGL2RenderPassOptions } from '../src/webgl2/render/WebGL2RenderPassEncoder.js';
+import type { WebGL2RenderTarget } from '../src/webgl2/render/WebGL2RenderTarget.js';
 import type { WebGL2TextureView } from '../src/webgl2/resources/WebGL2TextureView.js';
 import type { RenderPassDescriptor } from '../src/core/render/RenderPassEncoder.js';
 import type { FakeWebGL2 } from './webgl2-fake-gl.js';
@@ -320,6 +321,93 @@ describe('#11 空位 null 的四个组合：清屏位置与 draw 落点', () => 
   });
 });
 
+describe('#11 多重采样目标：只能整组、按原顺序使用（空位会被静默忽略，因此明确报错）', () => {
+  /** 一个 2 颜色附件的多重采样目标（draw FBO 的 drawBuffers 固定为 [0, 1]）。 */
+  function createMsaaTarget(setup: ReturnType<typeof createSetup>): WebGL2RenderTarget {
+    return setup.device.createRenderTarget({
+      label: 'msaa',
+      width: 8,
+      height: 8,
+      color: ['rgba8unorm', 'rgba8unorm'],
+      sampleCount: 4,
+    }) as unknown as WebGL2RenderTarget;
+  }
+
+  it('整组、按原顺序（createPassDescriptor 的形状）继续放行', () => {
+    const setup = createSetup();
+    const target = createMsaaTarget(setup);
+    const built = target.createPassDescriptor({ clearValue: [0, 0, 0, 1] });
+    expect(() => new WebGL2RenderPassEncoder({
+      label: 'msaa-ok',
+      colorAttachments: built.colorAttachments,
+      depthStencilAttachment: built.depthStencilAttachment,
+    }, setup.options)).not.toThrow();
+    setup.device.dispose();
+  });
+
+  it('前缀子集 [view0] 继续放行（location 0 落在目标的第 0 个附件上，映射是对的）', () => {
+    const setup = createSetup();
+    const target = createMsaaTarget(setup);
+    expect(() => new WebGL2RenderPassEncoder({
+      label: 'msaa-prefix',
+      colorAttachments: [{ view: target.colorView(0), clearValue: [0, 0, 0, 1] }],
+    }, setup.options)).not.toThrow();
+    setup.device.dispose();
+  });
+
+  it('[null, view1] 报错：空位在这条路径里不会被忽略，draw 会按位置写进目标的第 0 个附件', () => {
+    const setup = createSetup();
+    const target = createMsaaTarget(setup);
+    expect(() => new WebGL2RenderPassEncoder({
+      label: 'msaa-hole',
+      colorAttachments: [null, { view: target.colorView(1), clearValue: [0, 0, 0, 1] }],
+    }, setup.options)).toThrowError(/空位无法表达/);
+    setup.device.dispose();
+  });
+
+  it('[view1]（跳过了第 0 个附件）报错：location 0 会写进 attachment 0 而不是 view1', () => {
+    const setup = createSetup();
+    const target = createMsaaTarget(setup);
+    expect(() => new WebGL2RenderPassEncoder({
+      label: 'msaa-subset',
+      colorAttachments: [{ view: target.colorView(1), clearValue: [0, 0, 0, 1] }],
+    }, setup.options)).toThrowError(/不是多重采样目标.*的第 0 个颜色附件/);
+    setup.device.dispose();
+  });
+
+  it('换序 [view1, view0] 报错（顺序就是 location 的对应关系）', () => {
+    const setup = createSetup();
+    const target = createMsaaTarget(setup);
+    expect(() => new WebGL2RenderPassEncoder({
+      label: 'msaa-swap',
+      colorAttachments: [
+        { view: target.colorView(1), clearValue: [0, 0, 0, 1] },
+        { view: target.colorView(0), clearValue: [0, 0, 0, 1] },
+      ],
+    }, setup.options)).toThrowError(/第 0 个颜色附件不是多重采样目标/);
+    setup.device.dispose();
+  });
+
+  it('同一组附件但目标是单采样时不受影响（走原始附件路径，空位按位置表达）', () => {
+    const setup = createSetup();
+    const target = setup.device.createRenderTarget({
+      label: 'single',
+      width: 8,
+      height: 8,
+      color: ['rgba8unorm', 'rgba8unorm'],
+      sampleCount: 1,
+    }) as unknown as WebGL2RenderTarget;
+    const { probe } = runPass({
+      label: 'single-hole',
+      colorAttachments: [null, { view: target.colorView(1), clearValue: [0, 0, 0, 1] }],
+    }, setup);
+
+    expect(probe.attachments).toEqual([GL.COLOR_ATTACHMENT0 + 1]);
+    expect(probe.colorClearIndices).toEqual([1]);
+    setup.device.dispose();
+  });
+});
+
 describe('#11 空位的位置是 framebuffer 缓存键的一部分（不会被复用串味）', () => {
   it('[view, null] 与 [null, view] 是两个不同的 framebuffer', () => {
     const setup = createSetup();
@@ -345,6 +433,53 @@ describe('#11 空位的位置是 framebuffer 缓存键的一部分（不会被�
     expect(countCalls(again.calls, 'createFramebuffer:')).toBe(0);
     expect(countCalls(again.calls, 'drawBuffers:')).toBe(0);
     expect(again.probe.colorClearIndices).toEqual([1]);
+    setup.device.dispose();
+  });
+});
+
+describe('#11 槽位数超过 MAX_DRAW_BUFFERS 时明确报错（drawBuffers 的下标即 location，空位也占一项）', () => {
+  /**
+   * 假 GL 的枚举表里没有 `MAX_DRAW_BUFFERS`（`getParameter` 对未知 pname 返回 0），
+   * 于是 `FramebufferCache` 走的是「查询失败 → 退回 GLES 3.0 下限 4」的兜底分支 ——
+   * 这里同时把「兜底值」与「超限报错」两条都钉住。
+   * 真机实测该值是 8（见批 05 汇报里的浏览器探针）。
+   */
+  it('5 个颜色槽位（设备报告不出来 → 按下限 4）→ 报错，且不创建 framebuffer', () => {
+    const setup = createSetup();
+    const views = [0, 1, 2, 3, 4].map((index) => ({
+      view: colorView(setup.device, `slots-${index}`),
+      clearValue: [0, 0, 0, 1] as const,
+    }));
+
+    expect(() => runPass({ label: 'too-many', colorAttachments: views }, setup)).toThrowError(
+      /MAX_DRAW_BUFFERS（4）/,
+    );
+    // 在创建任何 GL 对象之前就拦下了：不会留下一个没人引用的 framebuffer。
+    expect(countCalls(setup.fake.calls, 'createFramebuffer:')).toBe(0);
+    setup.device.dispose();
+  });
+
+  it('正好 4 个槽位（含一个空位）→ 放行', () => {
+    const setup = createSetup();
+    const { probe } = runPass(
+      {
+        label: 'four-slots',
+        colorAttachments: [
+          null,
+          { view: colorView(setup.device, 's1'), clearValue: [0, 0, 0, 1] },
+          null,
+          { view: colorView(setup.device, 's3'), clearValue: [0, 0, 0, 1] },
+        ],
+      },
+      setup,
+    );
+
+    expect(probe.drawBuffers[probe.drawBuffers.length - 1]).toEqual([
+      GL.NONE,
+      GL.COLOR_ATTACHMENT0 + 1,
+      GL.NONE,
+      GL.COLOR_ATTACHMENT0 + 3,
+    ]);
     setup.device.dispose();
   });
 });

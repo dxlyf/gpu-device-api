@@ -541,6 +541,42 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
         );
       }
     }
+
+    /*
+     * 多重采样路径的下标也必须对得上（`#11` 的同类隐患）。
+     *
+     * 这条路径绑定的是目标**自己的** draw FBO：它的 `drawBuffers` 在创建时就固定成目标的附件顺序
+     * （`createMultisampleAttachments`），`resolve()` 的 `blitFramebuffer` 也只认目标自己的附件。
+     * 本层无法按 pass 描述里的空位/顺序重新映射，所以要求「每个非空槽位 i 的 view 就是目标的第 i 个
+     * 颜色附件」，并且空位后面不能再有非空附件 —— 空位在这条路径里会被静默忽略
+     *（draw 的 `location i` 照样写进目标的第 i 个附件），而不是像原始附件路径那样丢弃输出。
+     * 违反时明确报错，绝不把片元输出画到另一个附件上。
+     */
+    const targetViews = target.colorAttachments.map((attachment) => attachment.view);
+    let pendingNull = -1;
+    for (let index = 0; index < descriptor.colorAttachments.length; index += 1) {
+      const attachment = descriptor.colorAttachments[index];
+      if (!attachment) {
+        if (pendingNull < 0) pendingNull = index;
+        continue;
+      }
+      if (attachment.view !== targetViews[index]) {
+        throw new ValidationError(
+          `[gpu-device-api] 渲染通道「${this.label}」的第 ${index} 个颜色附件不是多重采样目标` +
+            `「${target.label}」的第 ${index} 个颜色附件。多重采样目标只能整组、按原顺序使用` +
+            '（draw FBO 的 drawBuffers 与 resolve 的 blitFramebuffer 都固定在目标自己的附件顺序上）。' +
+            '请传 `target`，或完整使用 `target.createPassDescriptor()` 的结果。',
+        );
+      }
+      if (pendingNull >= 0) {
+        throw new ValidationError(
+          `[gpu-device-api] 渲染通道「${this.label}」的 colorAttachments[${pendingNull}] 是 null，` +
+            '但后面还有非空附件。多重采样目标只能整组使用，空位无法表达' +
+            '（draw 的 location 会按位置写进目标的第 i 个附件，而不是丢弃输出）。' +
+            '请传 `target`，或完整使用 `target.createPassDescriptor()` 的结果。',
+        );
+      }
+    }
     return target;
   }
 
@@ -830,7 +866,25 @@ export class WebGL2RenderPassEncoder implements RenderPassEncoder {
     }
   }
 
-  /** 原始附件（不走 RenderTarget）路径下的清屏。 */
+  /**
+   * 原始附件（不走 RenderTarget）路径下的清屏。
+   *
+   * ## 下标语义（`#11`）：`clearBufferfv(COLOR, i)` 的 `i` 是 **location 下标**，不是附着点枚举
+   *
+   * `clearBuffer*` 的 `drawbuffer` 参数是「第几个 draw buffer」，清的是 `drawBuffers[i]` 指向的
+   * 附着点。`FramebufferCache` 现在按**逐位置**挂附件（`drawBuffers[i] = COLOR_ATTACHMENT0 + i`，
+   * 空位为 `NONE`），所以这里用**原始数组下标**清屏才是对的，三处必须一致：
+   *
+   * | 处 | 语义 |
+   * | --- | --- |
+   * | `FramebufferCache.acquire` 挂附件 | `COLOR_ATTACHMENT0 + 原始下标` |
+   * | `FramebufferCache.acquire` 的 `drawBuffers` | 逐位置，空位 `NONE` |
+   * | 这里 | `clearBufferfv(COLOR, 原始下标)` |
+   *
+   * 任何一处改用「非空附件的压缩序号」，`colorAttachments: [null, view]` 这类组合就会
+   * 静默地画错（改前正是如此：附件挂在 0、清屏清 1、draw 的 location 0 又写进 view）。
+   * `null` 空位**不清屏**：那个 location 没有片元输出，清它没有意义。
+   */
   private clearRawAttachments(descriptor: RenderPassDescriptor, framebuffer: WebGLFramebuffer): void {
     const gl = this.gl;
     void framebuffer;
